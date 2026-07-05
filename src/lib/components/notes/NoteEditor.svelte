@@ -11,7 +11,8 @@
   import NoteTagsInput from './NoteTagsInput.svelte';
   import NoteHistoryPanel from './NoteHistoryPanel.svelte';
   import NoteHistoryMerge from './NoteHistoryMerge.svelte';
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
+  import { relTime } from '$lib/utils';
   import { tick } from 'svelte';
 
   interface Props {
@@ -128,17 +129,7 @@
     return chips;
   });
 
-  function formatUpdatedAt(iso: string): string {
-    const d = new Date(iso);
-    const now = new Date();
-    const diff = now.getTime() - d.getTime();
-    const m = Math.floor(diff / 60000);
-    if (m < 1) return $t('notes_time_just_now');
-    if (m < 60) return $t('notes_time_m_ago', { m: String(m) });
-    const h = Math.floor(m / 60);
-    if (h < 24) return $t('notes_time_h_ago', { h: String(h) });
-    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
-  }
+  const formatUpdatedAt = (iso: string): string => relTime(iso, $locale);
 
   async function confirmDelete() {
     if (!note) return;

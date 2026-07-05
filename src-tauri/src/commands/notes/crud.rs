@@ -1,0 +1,616 @@
+// SPDX-FileCopyrightText: 2026 Veydan Project
+// SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
+
+use crate::error::{AppError, CmdResult};
+use crate::AppState;
+use std::collections::HashMap;
+use super::files::*;
+use super::models::*;
+use super::tags::*;
+use super::index::*;
+use super::history::*;
+use chrono::Utc;
+use uuid::Uuid;
+
+// ── Tauri commands ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn note_list(
+    filter: NoteFilter,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<NoteListItem>> {
+    let include_deleted = filter.include_deleted.unwrap_or(false);
+    let include_archived = filter.archived.unwrap_or(false);
+
+    let rows = sqlx::query_as::<_, NoteRow>(
+        "SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::db)?;
+
+    let tags_map = fetch_all_note_tags_map(&state.db).await?;
+    let folder_ids_map = fetch_all_note_folder_ids_map(&state.db).await?;
+    let drafts_dir = drafts_dir(&state.app_data_dir);
+
+    let items: Vec<NoteListItem> = rows
+        .into_iter()
+        .filter(|r| {
+            if !include_deleted && r.deleted != 0 { return false; }
+            if !include_archived && r.archived != 0 { return false; }
+            if let Some(ref binding) = filter.binding {
+                let bindings: Vec<String> = serde_json::from_str(&r.bindings).unwrap_or_default();
+                if !bindings.contains(binding) { return false; }
+            }
+            if let Some(pinned) = filter.pinned {
+                if (r.pinned != 0) != pinned { return false; }
+            }
+            true
+        })
+        .filter(|r| {
+            if let Some(ref tag_name) = filter.tag_name {
+                let tags = tags_map.get(&r.id);
+                return tags.map(|v| v.iter().any(|t| &t.name == tag_name)).unwrap_or(false);
+            }
+            true
+        })
+        .map(|r| {
+            let tags = tags_map.get(&r.id).cloned().unwrap_or_default();
+            let folder_ids = folder_ids_map.get(&r.id).cloned().unwrap_or_default();
+            let has_draft = drafts_dir.join(format!("{}.draft", r.id)).exists();
+            row_to_list_item(r, tags, folder_ids, has_draft)
+        })
+        .collect();
+
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn note_get(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Note> {
+    let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found(format!("Note {id}")))?;
+
+    let tags = fetch_note_tags(&id, &state.db).await?;
+    let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
+
+    let content = if file_path.exists() {
+        let (_, _, body) = read_note_file(&file_path)?;
+        Some(body)
+    } else {
+        None
+    };
+
+    let has_draft = draft_file_path(&state.app_data_dir, &id).exists();
+
+    let bindings: Vec<String> = serde_json::from_str(&row.bindings).unwrap_or_default();
+
+    Ok(Note {
+        id: row.id,
+        title: row.title,
+        file_path: row.file_path,
+        format: row.format,
+        bindings,
+        tags,
+        pinned: row.pinned != 0,
+        archived: row.archived != 0,
+        doc_status: row.doc_status,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        content_hash: row.content_hash,
+        content,
+        has_draft,
+    })
+}
+
+#[tauri::command]
+pub async fn note_create(
+    input: NoteCreateInput,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Note> {
+    let now = Utc::now().to_rfc3339();
+    let id = Uuid::new_v4().to_string();
+    let format = input.format.as_deref().unwrap_or("md").to_string();
+    let content = input.content.as_deref().unwrap_or("").to_string();
+    let bindings_vec = input.bindings.clone().unwrap_or_default();
+    let bindings_json = serde_json::to_string(&bindings_vec).map_err(AppError::other)?;
+
+    let custom_dir = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
+    let docs_dir = effective_docs_dir(&state.app_data_dir, custom_dir.as_ref());
+    let abs_path = docs_dir.join(format!("{}.txt", id));
+    let stored_path = abs_path.to_string_lossy().to_string();
+
+    let row = NoteRow {
+        id: id.clone(),
+        title: input.title.clone(),
+        file_path: stored_path.clone(),
+        format: format.clone(),
+        scope: "global".to_string(),
+        workspace_id: None,
+        profile_id: None,
+        pinned: 0,
+        archived: 0,
+        deleted: 0,
+        doc_status: "active".to_string(),
+        version_base: None,
+        fts_rowid: None,
+        created_at: now.clone(),
+        updated_at: now.clone(),
+        file_mtime: None,
+        content_hash: None,
+        preview: String::new(),
+        bindings: bindings_json.clone(),
+        folder_id: None,
+    };
+
+    let tag_names = input.tag_names.clone().unwrap_or_default();
+    write_note_file(&abs_path, &row, &tag_names, &content)?;
+
+    let content_hash = compute_hash(&content);
+    let preview = make_preview(&content);
+
+    sqlx::query(
+        "INSERT INTO notes (id, title, file_path, format, bindings, pinned, archived, deleted, doc_status, created_at, updated_at, content_hash, preview)
+         VALUES (?, ?, ?, ?, ?, 0, 0, 0, 'active', ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&input.title)
+    .bind(&stored_path)
+    .bind(&format)
+    .bind(&bindings_json)
+    .bind(&now)
+    .bind(&now)
+    .bind(&content_hash)
+    .bind(&preview)
+    .execute(&state.db)
+    .await
+    .map_err(AppError::db)?;
+
+    set_note_tag_links(&id, &tag_names, &state.db).await?;
+
+    // FTS
+    let tags_str = tag_names.join(" ");
+    let fts_rowid = fts_upsert(&id, &input.title, &content, &tag_names, None, &state.db).await?;
+    sqlx::query("UPDATE notes SET fts_rowid=? WHERE id=?")
+        .bind(fts_rowid)
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    let _ = tags_str;
+
+    let tags = fetch_note_tags(&id, &state.db).await?;
+
+    rebuild_manifest(&state.db, &state.app_data_dir).await?;
+
+    Ok(Note {
+        id,
+        title: input.title,
+        file_path: stored_path,
+        format,
+        bindings: bindings_vec,
+        tags,
+        pinned: false,
+        archived: false,
+        doc_status: "active".to_string(),
+        created_at: now.clone(),
+        updated_at: now,
+        content_hash: Some(content_hash),
+        content: Some(content),
+        has_draft: false,
+    })
+}
+
+#[tauri::command]
+pub async fn note_update(
+    id: String,
+    input: NoteUpdateInput,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Note> {
+    let now = Utc::now().to_rfc3339();
+
+    let mut row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found(format!("Note {id}")))?;
+
+    if let Some(title) = input.title {
+        row.title = title;
+    }
+    if let Some(pinned) = input.pinned {
+        row.pinned = if pinned { 1 } else { 0 };
+    }
+    row.updated_at = now.clone();
+
+    let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
+    let (_, old_tags_list, old_body) = if file_path.exists() {
+        read_note_file(&file_path)?
+    } else {
+        (HashMap::new(), vec![], String::new())
+    };
+
+    let old_content = old_body.clone();
+    let content = input.content.unwrap_or(old_body);
+    let content_hash = compute_hash(&content);
+    let preview = make_preview(&content);
+
+    let tag_names = fetch_note_tags(&id, &state.db)
+        .await?
+        .into_iter()
+        .map(|t| t.name)
+        .collect::<Vec<_>>();
+
+    let _ = old_tags_list;
+
+    // Snapshot the previous content before overwriting (if content actually changed)
+    if content != old_content {
+        let _ = maybe_snapshot(&id, &row.title, &old_content, "save", &state.db).await;
+    }
+
+    write_note_file(&file_path, &row, &tag_names, &content)?;
+
+    let fts_rowid = fts_upsert(&id, &row.title, &content, &tag_names, row.fts_rowid, &state.db).await?;
+
+    sqlx::query(
+        "UPDATE notes SET title=?, pinned=?, updated_at=?, content_hash=?, preview=?, fts_rowid=? WHERE id=?",
+    )
+    .bind(&row.title)
+    .bind(row.pinned)
+    .bind(&now)
+    .bind(&content_hash)
+    .bind(&preview)
+    .bind(fts_rowid)
+    .bind(&id)
+    .execute(&state.db)
+    .await
+    .map_err(AppError::db)?;
+
+    // Delete draft after successful save
+    let draft = draft_file_path(&state.app_data_dir, &id);
+    if draft.exists() {
+        let _ = std::fs::remove_file(&draft);
+    }
+
+    rebuild_manifest(&state.db, &state.app_data_dir).await?;
+
+    let tags = fetch_note_tags(&id, &state.db).await?;
+
+    let bindings: Vec<String> = serde_json::from_str(&row.bindings).unwrap_or_default();
+
+    Ok(Note {
+        id: row.id,
+        title: row.title,
+        file_path: row.file_path,
+        format: row.format,
+        bindings,
+        tags,
+        pinned: row.pinned != 0,
+        archived: row.archived != 0,
+        doc_status: row.doc_status,
+        created_at: row.created_at,
+        updated_at: now,
+        content_hash: Some(content_hash),
+        content: Some(content),
+        has_draft: false,
+    })
+}
+
+#[tauri::command]
+pub async fn note_delete(
+    id: String,
+    hard: Option<bool>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    if hard.unwrap_or(false) {
+        // Hard delete: remove file + DB row
+        let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::db)?;
+
+        if let Some(r) = row {
+            fts_delete(r.fts_rowid, &state.db).await?;
+            let file_path = resolve_note_abs_path(&state.app_data_dir, &r.file_path);
+            if file_path.exists() {
+                let _ = std::fs::remove_file(&file_path);
+            }
+        }
+
+        sqlx::query("DELETE FROM note_tag_links WHERE note_id = ?")
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+
+        sqlx::query("DELETE FROM notes WHERE id = ?")
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+    } else {
+        // Soft delete
+        sqlx::query("UPDATE notes SET deleted=1, updated_at=? WHERE id=?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+
+        let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::db)?;
+        if let Some(r) = row {
+            fts_delete(r.fts_rowid, &state.db).await?;
+        }
+    }
+
+    rebuild_manifest(&state.db, &state.app_data_dir).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn note_archive(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    sqlx::query("UPDATE notes SET archived=1, updated_at=? WHERE id=?")
+        .bind(Utc::now().to_rfc3339())
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn note_restore(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    sqlx::query("UPDATE notes SET archived=0, deleted=0, doc_status='active', updated_at=? WHERE id=?")
+        .bind(Utc::now().to_rfc3339())
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn note_set_tags(
+    id: String,
+    tag_names: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    let now = Utc::now().to_rfc3339();
+    set_note_tag_links(&id, &tag_names, &state.db).await?;
+
+    sqlx::query("UPDATE notes SET updated_at=? WHERE id=?")
+        .bind(&now)
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    // Rewrite file frontmatter with new tags
+    let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found(format!("Note {id}")))?;
+
+    let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
+    if file_path.exists() {
+        let (_, _, body) = read_note_file(&file_path)?;
+        let mut updated_row = row.clone();
+        updated_row.updated_at = now.clone();
+        write_note_file(&file_path, &updated_row, &tag_names, &body)?;
+
+        let fts_rowid = fts_upsert(
+            &id,
+            &row.title,
+            &body,
+            &tag_names,
+            row.fts_rowid,
+            &state.db,
+        )
+        .await?;
+
+        sqlx::query("UPDATE notes SET fts_rowid=? WHERE id=?")
+            .bind(fts_rowid)
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+    }
+
+    rebuild_manifest(&state.db, &state.app_data_dir).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn note_search(
+    query: String,
+    filter: NoteFilter,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<NoteListItem>> {
+    let fts_query = format!("{}*", query.trim());
+
+    let matched: Vec<(String, String)> =
+        sqlx::query_as("SELECT note_id, snippet(notes_fts, 2, '<mark>', '</mark>', '…', 12) FROM notes_fts WHERE notes_fts MATCH ? ORDER BY rank LIMIT 100")
+            .bind(&fts_query)
+            .fetch_all(&state.db)
+            .await
+            .map_err(AppError::db)?;
+
+    if matched.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let snippets_map: std::collections::HashMap<String, String> =
+        matched.iter().map(|(id, snip)| (id.clone(), snip.clone())).collect();
+    let ids: Vec<String> = matched.into_iter().map(|(id, _)| id).collect();
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT * FROM notes WHERE id IN ({}) AND deleted = 0 ORDER BY pinned DESC, updated_at DESC",
+        placeholders
+    );
+
+    // Safe: only `?` placeholders are interpolated; ids are bound below.
+    let mut q = sqlx::query_as::<_, NoteRow>(sqlx::AssertSqlSafe(sql));
+    for id in &ids {
+        q = q.bind(id);
+    }
+
+    let rows = q.fetch_all(&state.db).await.map_err(AppError::db)?;
+    let tags_map = fetch_all_note_tags_map(&state.db).await?;
+    let folder_ids_map = fetch_all_note_folder_ids_map(&state.db).await?;
+    let drafts_dir = drafts_dir(&state.app_data_dir);
+
+    let items = rows
+        .into_iter()
+        .filter(|r| {
+            if let Some(ref binding) = filter.binding {
+                let bindings: Vec<String> = serde_json::from_str(&r.bindings).unwrap_or_default();
+                if !bindings.contains(binding) { return false; }
+            }
+            true
+        })
+        .map(|r| {
+            let tags = tags_map.get(&r.id).cloned().unwrap_or_default();
+            let folder_ids = folder_ids_map.get(&r.id).cloned().unwrap_or_default();
+            let has_draft = drafts_dir.join(format!("{}.draft", r.id)).exists();
+            let mut item = row_to_list_item(r, tags, folder_ids, has_draft);
+            item.snippet = snippets_map.get(&item.id).cloned();
+            item
+        })
+        .collect();
+
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn note_sync(state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    let custom_dir = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
+    sync_notes_index(&state.db, &state.app_data_dir, custom_dir.as_ref()).await
+}
+
+#[tauri::command]
+pub async fn note_reindex(state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    // Full FTS rebuild
+    sqlx::query("DELETE FROM notes_fts")
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    let rows = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE deleted = 0")
+        .fetch_all(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    for row in rows {
+        let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
+        let (_, tags_list, body) = read_note_file(&file_path).unwrap_or_default();
+        let tags_str = tags_list.join(" ");
+
+        let mut conn = state.db.acquire().await.map_err(AppError::db)?;
+        sqlx::query(
+            "INSERT INTO notes_fts(note_id, title, content, tags) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&row.id)
+        .bind(&row.title)
+        .bind(&body)
+        .bind(&tags_str)
+        .execute(&mut *conn)
+        .await
+        .map_err(AppError::db)?;
+
+        let (rowid,): (i64,) = sqlx::query_as("SELECT last_insert_rowid()")
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(AppError::db)?;
+
+        sqlx::query("UPDATE notes SET fts_rowid=? WHERE id=?")
+            .bind(rowid)
+            .bind(&row.id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn note_open_folder(state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    let custom_dir = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
+    let dir = effective_docs_dir(&state.app_data_dir, custom_dir.as_ref());
+    open_path(&dir)
+}
+
+#[tauri::command]
+pub async fn note_open_external(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found(format!("Note {id}")))?;
+
+    let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
+    open_path(&file_path)
+}
+
+#[tauri::command]
+pub async fn note_draft_save(
+    id: String,
+    content: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    let draft_path = draft_file_path(&state.app_data_dir, &id);
+    std::fs::write(&draft_path, &content).map_err(AppError::io)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn note_draft_get(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let draft_path = draft_file_path(&state.app_data_dir, &id);
+    if draft_path.exists() {
+        let content = std::fs::read_to_string(&draft_path).map_err(AppError::io)?;
+        Ok(Some(content))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub async fn note_draft_discard(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    let draft_path = draft_file_path(&state.app_data_dir, &id);
+    if draft_path.exists() {
+        std::fs::remove_file(&draft_path).map_err(AppError::io)?;
+    }
+    Ok(())
+}
+

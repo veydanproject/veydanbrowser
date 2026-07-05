@@ -3,7 +3,8 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
+  import { formatDate, formatTime } from '$lib/utils';
   import type { SshConnection, Proxy } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import Modal from '$lib/Modal.svelte';
@@ -113,11 +114,7 @@
 
   function formatDateParts(iso: string | null): { date: string; time: string } {
     if (!iso) return { date: '—', time: '' };
-    const d = new Date(iso);
-    return {
-      date: d.toLocaleDateString(),
-      time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
+    return { date: formatDate(iso, $locale), time: formatTime(iso, $locale) };
   }
 
   function proxyName(id: string | null): string {

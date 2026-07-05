@@ -39,6 +39,12 @@ export function formatDateTime(iso: string | null | undefined, locale: string): 
   return d ? d.toLocaleString(tag(locale)) : '';
 }
 
+/** Time only, e.g. "14:30". Empty string for null/invalid. */
+export function formatTime(iso: string | null | undefined, locale: string): string {
+  const d = toDate(iso);
+  return d ? d.toLocaleTimeString(tag(locale), { hour: '2-digit', minute: '2-digit' }) : '';
+}
+
 /** UNIX-epoch (seconds) → localized date. Empty string for null/invalid. */
 export function formatEpochDate(seconds: number | null | undefined, locale: string): string {
   if (seconds == null) return '';
