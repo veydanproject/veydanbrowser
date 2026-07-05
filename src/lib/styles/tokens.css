@@ -1,0 +1,187 @@
+/* SPDX-FileCopyrightText: 2026 Veydan Project */
+/* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
+
+/* ============================================================================
+ * Veydan Browser — design tokens (single source of truth)
+ * Imported once from src/routes/+layout.svelte.
+ *
+ * Layers:
+ *   :root              — theme-independent scales (spacing, type, radius, z, size, motion)
+ *   [data-theme=…]     — themed colour tokens (dark / light)
+ *   [data-theme=…] {aliases} — compatibility aliases mapping legacy/leaked names
+ *                        onto canonical tokens, so stray var() refs stop
+ *                        silently collapsing to transparent / inherited.
+ *
+ * Naming canon: --bg / --bg-2 / --surface / --surface-2 / --border / --border-2
+ *               --text / --text-2 / --text-3 / --accent / --success / --danger / --warn-*
+ * Do NOT introduce new ad-hoc names in components — extend this file instead.
+ * ========================================================================== */
+
+:root {
+  /* ── Spacing scale — 4px grid ── */
+  --sp-0:   0;
+  --sp-1:   4px;
+  --sp-2:   8px;
+  --sp-3:   12px;
+  --sp-4:   16px;
+  --sp-5:   20px;
+  --sp-6:   24px;
+  --sp-8:   32px;
+  --sp-10:  40px;
+  --sp-12:  48px;
+
+  /* ── Type scale ── (snap raw sizes to the nearest step; see STYLEGUIDE) */
+  --fs-2xs:  0.7rem;    /* micro: counts, tiny labels, dot text */
+  --fs-xs:   0.75rem;   /* captions, chips, table meta */
+  --fs-sm:   0.8rem;    /* secondary text, hints */
+  --fs-base: 0.875rem;  /* 14px — body / controls (matches global input/button) */
+  --fs-md:   1rem;      /* emphasis / dialog titles */
+  --fs-lg:   1.15rem;   /* section titles */
+  --fs-xl:   1.4rem;    /* page h1 */
+  --fs-2xl:  1.75rem;   /* hero */
+
+  --fw-normal: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  --lh-tight: 1.2;
+  --lh-base:  1.5;
+
+  /* ── Radius ── (theme-independent) */
+  --radius-xs:   4px;
+  --radius-sm:   6px;
+  --radius:      10px;
+  --radius-pill: 999px;
+
+  /* ── Layout heights (were hard-coded as 44 / 36 in 6+ files) ── */
+  --topbar-h: 44px;
+  --dock-h:   36px;
+  --bar-h:    36px;   /* ssh session bar / inspector bar / inspector rulers offset */
+  --control-h: 32px;  /* высота контролов в панелях фильтров (поиск / select / кнопки) */
+
+  /* ── Content rail (app width — shared by all routes + topbar) ── */
+  --page-max:        1280px;  /* standard content rail — every route + topbar inner */
+  --page-max-narrow: 640px;   /* reading/forms column (settings) */
+  --rail-pad-x:      1.75rem; /* shared horizontal inset for topbar + content, so rails align */
+
+  /* ── Panel / dialog widths (were 380–520 ad-hoc) ── */
+  --drawer-w:    380px;
+  --drawer-w-lg: 520px;
+  --dialog-w:    440px;
+
+  /* ── Z-index scale (was 20 → 9999 ad-hoc) ── */
+  --z-base:      0;
+  --z-sticky:    10;   /* topbar */
+  --z-dock:      20;
+  --z-panel:     50;   /* slot / floating panels */
+  --z-drawer:    100;  /* right-side drawers */
+  --z-modal:     200;  /* centered dialogs */
+  --z-popover:   500;  /* dropdowns / menus */
+  --z-toast:     900;
+  --z-inspector: 8000; /* inspector overlay family */
+  --z-max:       9999;
+
+  /* ── Motion ── */
+  --dur-fast: 0.15s;
+  --dur-base: 0.2s;
+  --ease:     cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Colours: DARK ── */
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg:          #0d1117;
+  --bg-2:        #161b27;
+  --surface:     #1c2333;
+  --surface-2:   #232d3f;
+  --border:      #2a3549;
+  --border-2:    #334155;
+  --text:        #e2e8f0;
+  --text-2:      #94a3b8;
+  --text-3:      #4a5568;
+  --accent:      #4f8ef7;
+  --accent-hover:#3b7de0;
+  --accent-bg:   rgba(79,142,247,0.12);
+  --success:     #38a169;
+  --success-bg:  rgba(56,161,105,0.15);
+  --success-text:#68d391;
+  --danger:      #e53e3e;
+  --danger-bg:   rgba(229,62,62,0.12);
+  --danger-text: #fc8181;
+  --warn-bg:     rgba(236,153,75,0.15);
+  --warn-text:   #f6ad55;
+  --shadow:      0 2px 8px rgba(0,0,0,0.4);
+  --shadow-lg:   0 8px 24px rgba(0,0,0,0.5);
+
+  /* ── Compatibility aliases → canonical tokens ──
+     These names leaked in from a second naming scheme and were referenced
+     WITHOUT fallbacks, so they rendered as transparent/inherited. Mapping
+     them here fixes the current render; components should migrate to the
+     canonical names over time (Phase 1). */
+  --text-1:            var(--text);
+  --text-4:            var(--text-3);
+  --text-muted:        var(--text-2);
+  --bg-1:              var(--surface);
+  --bg-3:              var(--surface-2);
+  --bg2:               var(--surface-2);
+  --bg3:               var(--surface-2);
+  --bg-dark:           var(--bg);
+  --border-strong:     var(--border-2);
+  --error:             var(--danger);
+  --warn:              var(--warn-text);
+  --warning:           var(--warn-text);
+  --color-warning:     var(--warn-text);
+  --color-bg-soft:     var(--surface);
+  --color-border-soft: var(--border);
+  --color-brand-500:   var(--accent);
+  --color-text-main:   var(--text);
+  --color-text-muted:  var(--text-2);
+}
+
+/* ── Colours: LIGHT ── */
+[data-theme='light'] {
+  color-scheme: light;
+  --bg:          #f0f4f8;
+  --bg-2:        #ffffff;
+  --surface:     #ffffff;
+  --surface-2:   #f8fafc;
+  --border:      #e2e8f0;
+  --border-2:    #cbd5e1;
+  --text:        #1a202c;
+  --text-2:      #4a5568;
+  --text-3:      #a0aec0;
+  --accent:      #2563eb;
+  --accent-hover:#1d4ed8;
+  --accent-bg:   rgba(37,99,235,0.08);
+  --success:     #16a34a;
+  --success-bg:  rgba(22,163,74,0.1);
+  --success-text:#15803d;
+  --danger:      #dc2626;
+  --danger-bg:   rgba(220,38,38,0.08);
+  --danger-text: #b91c1c;
+  --warn-bg:     rgba(217,119,6,0.1);
+  --warn-text:   #b45309;
+  --shadow:      0 2px 8px rgba(0,0,0,0.08);
+  --shadow-lg:   0 8px 24px rgba(0,0,0,0.12);
+
+  /* aliases (resolve to this theme's canonical values) */
+  --text-1:            var(--text);
+  --text-4:            var(--text-3);
+  --text-muted:        var(--text-2);
+  --bg-1:              var(--surface);
+  --bg-3:              var(--surface-2);
+  --bg2:               var(--surface-2);
+  --bg3:               var(--surface-2);
+  --bg-dark:           var(--bg);
+  --border-strong:     var(--border-2);
+  --error:             var(--danger);
+  --warn:              var(--warn-text);
+  --warning:           var(--warn-text);
+  --color-warning:     var(--warn-text);
+  --color-bg-soft:     var(--surface);
+  --color-border-soft: var(--border);
+  --color-brand-500:   var(--accent);
+  --color-text-main:   var(--text);
+  --color-text-muted:  var(--text-2);
+}

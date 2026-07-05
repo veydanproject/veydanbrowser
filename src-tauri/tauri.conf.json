@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Veydan Browser",
+  "version": "1.0.8",
+  "identifier": "net.veydan.browser",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Veydan Browser — Browser Fingerprint Manager",
+        "width": 1200,
+        "height": 760,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/veydanbrowser.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "linux/veydanbrowser.desktop"
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

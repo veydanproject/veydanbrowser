@@ -1,0 +1,350 @@
+<!-- SPDX-FileCopyrightText: 2026 Veydan Project -->
+<!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
+
+<script lang="ts">
+  import type { Profile, Proxy, WorkspaceColumn } from '$lib/types';
+  import { t } from '$lib/i18n';
+  import { api } from '$lib/api';
+  import Icon from '$lib/Icon.svelte';
+
+  interface Props {
+    profiles: Profile[];
+    proxies: Proxy[];
+    columns: WorkspaceColumn[];
+    runningProfiles: Set<string>;
+    onSelect: (profile: Profile) => void;
+    onEdit: (profile: Profile) => void;
+    onRefresh: () => void;
+  }
+
+  let { profiles, proxies, columns, runningProfiles, onSelect, onEdit, onRefresh }: Props = $props();
+
+  let search = $state('');
+  let filterTag = $state('');
+  let filterStatus = $state('');
+  let loadingId = $state<string | null>(null);
+
+  const proxyMap = $derived(new Map(proxies.map((p) => [p.id, p])));
+
+  const allTags = $derived(() => {
+    const set = new Set<string>();
+    for (const p of profiles) {
+      for (const tg of (p.tags ?? [])) set.add(tg);
+    }
+    return [...set].sort();
+  });
+
+  const filtered = $derived(() => {
+    let res = profiles;
+    if (search) {
+      const q = search.toLowerCase();
+      res = res.filter((p) => p.name.toLowerCase().includes(q));
+    }
+    if (filterTag) {
+      res = res.filter((p) => (p.tags ?? []).includes(filterTag));
+    }
+    if (filterStatus === 'running') res = res.filter((p) => runningProfiles.has(p.id));
+    if (filterStatus === 'stopped') res = res.filter((p) => !runningProfiles.has(p.id));
+    return res;
+  });
+
+  function getColumnForProfile(profile: Profile): string {
+    const tags: string[] = profile.tags ?? [];
+    for (const col of columns) {
+      if (tags.includes(col.tag_name)) return col.name;
+    }
+    return '—';
+  }
+
+  const tagColorMap = $derived(
+    new Map(columns.map((col) => [col.tag_name, col.color]))
+  );
+
+  function getOsIcon(preset: string): string {
+    if (preset.startsWith('win')) return '🪟';
+    if (preset === 'macos') return '🍎';
+    if (preset === 'linux') return '🐧';
+    return '💻';
+  }
+
+  function getOsLabel(preset: string): string {
+    const map: Record<string, string> = {
+      win10: 'Win 10', win11: 'Win 11', macos: 'macOS', linux: 'Linux',
+    };
+    return map[preset] ?? preset;
+  }
+
+  async function launch(e: MouseEvent, profile: Profile) {
+    e.stopPropagation();
+    loadingId = profile.id;
+    try { await api.profiles.launch(profile.id); onRefresh(); }
+    catch {}
+    finally { loadingId = null; }
+  }
+
+  async function stop(e: MouseEvent, profile: Profile) {
+    e.stopPropagation();
+    loadingId = profile.id;
+    try { await api.profiles.stop(profile.id); onRefresh(); }
+    catch {}
+    finally { loadingId = null; }
+  }
+
+  async function clone(e: MouseEvent, profile: Profile) {
+    e.stopPropagation();
+    loadingId = profile.id;
+    try { await api.profiles.clone(profile.id); onRefresh(); }
+    catch (err) { console.error('clone failed', err); }
+    finally { loadingId = null; }
+  }
+
+  function clearFilters() { search = ''; filterTag = ''; filterStatus = ''; }
+  const hasFilter = $derived(!!search || !!filterTag || !!filterStatus);
+</script>
+
+<div class="table-view">
+  <!-- Toolbar -->
+  <div class="filter-bar">
+    <div class="search-field">
+      <Icon name="search" size={13} />
+      <input type="text" placeholder={$t('kanban_filter_search')} bind:value={search} />
+      {#if search}
+        <button class="search-clear" onclick={() => (search = '')}><Icon name="x" size={11} /></button>
+      {/if}
+    </div>
+    <select class="filter-select" bind:value={filterStatus}>
+      <option value="">{$t('kanban_filter_runtime')}</option>
+      <option value="running">{$t('kanban_filter_running')}</option>
+      <option value="stopped">{$t('kanban_filter_stopped')}</option>
+    </select>
+    <select class="filter-select" bind:value={filterTag}>
+      <option value="">{$t('filter_all_tags')}</option>
+      {#each allTags() as tag}
+        <option value={tag}>{tag}</option>
+      {/each}
+    </select>
+    {#if hasFilter}
+      <button class="filter-clear" onclick={clearFilters} title="Clear filters">
+        <Icon name="x" size={12} />
+      </button>
+    {/if}
+    <span class="count-badge">{filtered().length} / {profiles.length}</span>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="th-num">#</th>
+          <th>{$t('table_col_name')}</th>
+          <th>OS / Browser</th>
+          <th>{$t('table_col_proxy')}</th>
+          <th>{$t('table_col_tags')}</th>
+          <th>{$t('table_col_last')}</th>
+          <th class="th-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each filtered() as profile, i (profile.id)}
+          {@const isRunning = runningProfiles.has(profile.id)}
+          {@const isLoading = loadingId === profile.id}
+          {@const proxy = proxyMap.get(profile.proxy_id ?? '')}
+          <tr class:running={isRunning} onclick={() => onSelect(profile)}>
+
+            <!-- # -->
+            <td class="td-num">
+              <span class="row-num">{i + 1}</span>
+              <span class="status-dot" class:active={isRunning}></span>
+            </td>
+
+            <!-- Name -->
+            <td class="td-name">
+              <span class="profile-name">{profile.name}</span>
+              {#if isRunning}
+                <span class="running-pill">● live</span>
+              {/if}
+            </td>
+
+            <!-- OS / Browser -->
+            <td class="td-os">
+              <span class="os-icon">{getOsIcon(profile.fingerprint_preset)}</span>
+              <span class="os-label">{getOsLabel(profile.fingerprint_preset)}</span>
+              <span class="sep">·</span>
+              <span class="browser-label">{profile.browser_type}</span>
+            </td>
+
+            <!-- Proxy -->
+            <td class="td-proxy">
+              {#if proxy}
+                <div class="proxy-info">
+                  {#if proxy.country}
+                    <span class="country-chip">{proxy.country}</span>
+                  {/if}
+                  <span class="proxy-name">{proxy.name}</span>
+                  <span class="proxy-type">{proxy.proxy_type}</span>
+                </div>
+              {:else}
+                <span class="no-proxy">
+                  <Icon name="wifi-off" size={11} />
+                  {$t('table_no_proxy')}
+                </span>
+              {/if}
+            </td>
+
+            <!-- Tags -->
+            <td class="td-tags" onclick={(e) => e.stopPropagation()}>
+              {#each (profile.tags ?? []) as tag}
+                {@const color = tagColorMap.get(tag)}
+                <span
+                  class="tag-chip"
+                  style={color ? `background: color-mix(in srgb, ${color} 18%, transparent); border-color: color-mix(in srgb, ${color} 50%, transparent); color: ${color};` : ''}
+                >
+                  {tag}
+                </span>
+              {/each}
+            </td>
+
+            <!-- Last Launch -->
+            <td class="td-date">
+              {profile.last_launch_at
+                ? new Date(profile.last_launch_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                : '—'}
+            </td>
+
+            <!-- Actions -->
+            <td class="td-actions" onclick={(e) => e.stopPropagation()}>
+              {#if isRunning}
+                <button class="act-btn act-stop" onclick={(e) => stop(e, profile)} disabled={isLoading} title="Stop">
+                  <Icon name="square" size={12} />
+                </button>
+              {:else}
+                <button class="act-btn act-launch" onclick={(e) => launch(e, profile)} disabled={isLoading} title="Launch">
+                  <Icon name="play" size={12} />
+                </button>
+              {/if}
+              <button class="act-btn" onclick={(e) => { e.stopPropagation(); clone(e, profile); }} disabled={isLoading} title="Clone">
+                <Icon name="copy" size={12} />
+              </button>
+              <button class="act-btn" onclick={(e) => { e.stopPropagation(); onEdit(profile); }} title="Edit">
+                <Icon name="pencil" size={12} />
+              </button>
+            </td>
+          </tr>
+        {:else}
+          <tr><td colspan="7" class="td-empty">{$t('table_empty')}</td></tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>
+  .table-view { display: flex; flex-direction: column; gap: var(--sp-3); height: 100%; }
+
+  /* панель фильтров — единые примитивы .filter-bar/.search-field/.filter-select/.filter-clear/.count-badge из base.css */
+
+  /* ── Table ── */
+  .table-wrap {
+    overflow: auto; flex: 1;
+    border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--bg-2);
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+
+  thead {
+    background: var(--surface-2); position: sticky; top: 0; z-index: 1;
+    border-bottom: 1px solid var(--border);
+  }
+  thead th {
+    padding: var(--sp-2) var(--sp-3); text-align: left;
+    color: var(--text-2); font-weight: 700; font-size: var(--fs-2xs);
+    text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap;
+  }
+  .th-num { width: 52px; }
+  .th-actions { width: 104px; text-align: right; }
+
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    cursor: pointer; transition: background 0.1s;
+  }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-2); }
+  tbody tr.running { background: var(--success-bg); }
+
+  td { padding: var(--sp-2) var(--sp-3); vertical-align: middle; }
+
+  /* # column */
+  .td-num { width: 52px; display: flex; align-items: center; gap: 0.4rem; }
+  .row-num { font-size: var(--fs-2xs); color: var(--text-3); min-width: 18px; text-align: right; }
+  .status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--border-2); flex-shrink: 0; transition: background 0.2s;
+  }
+  .status-dot.active {
+    background: var(--success-text);
+    box-shadow: 0 0 0 2px var(--success-bg);
+  }
+
+  /* Name */
+  .td-name { white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+  .profile-name { font-weight: 600; color: var(--text); }
+  .running-pill {
+    display: inline-flex; align-items: center; gap: 0.2rem;
+    margin-left: 0.4rem; font-size: var(--fs-2xs);
+    color: var(--success-text); background: var(--success-bg);
+    padding: 0.1rem 0.4rem; border-radius: 999px;
+  }
+
+  /* OS */
+  .td-os { white-space: nowrap; display: flex; align-items: center; gap: 0.3rem; }
+  .os-icon { font-size: var(--fs-base); }
+  .os-label { color: var(--text); }
+  .sep { color: var(--border-2); }
+  .browser-label { color: var(--text-3); text-transform: capitalize; }
+
+  /* Proxy */
+  .td-proxy { white-space: nowrap; max-width: 200px; }
+  .proxy-info { display: flex; align-items: center; gap: 0.35rem; }
+  .country-chip {
+    font-size: var(--fs-2xs); font-weight: 700;
+    background: var(--surface-2); border: 1px solid var(--border);
+    padding: 0.1rem 0.35rem; border-radius: 4px; color: var(--text-2);
+    letter-spacing: 0.03em;
+  }
+  .proxy-name { color: var(--text); max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
+  .proxy-type {
+    font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.04em;
+    padding: 0.1rem 0.4rem; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text-3);
+  }
+  .no-proxy { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--text-3); font-size: var(--fs-sm); }
+
+  /* Tags */
+  .td-tags { max-width: 180px; display: flex; flex-wrap: wrap; gap: var(--sp-1); align-items: center; }
+  .tag-chip {
+    display: inline-flex; align-items: center;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.1rem 0.35rem;
+    font-size: var(--fs-2xs); color: var(--text-2); white-space: nowrap;
+  }
+
+  /* Date */
+  .td-date { color: var(--text-3); font-size: var(--fs-sm); white-space: nowrap; }
+
+  /* Actions */
+  .td-actions { text-align: right; white-space: nowrap; }
+  .act-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px;
+    background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
+    color: var(--text-2); cursor: pointer; padding: 0; transition: all 0.15s;
+  }
+  .act-btn:hover { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+  .act-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .act-launch:hover { background: var(--success-bg) !important; border-color: color-mix(in srgb, var(--success) 40%, var(--border)) !important; color: var(--success-text) !important; }
+  .act-stop:hover   { background: var(--danger-bg)  !important; border-color: color-mix(in srgb, var(--danger)  40%, var(--border)) !important; color: var(--danger-text)  !important; }
+
+  .td-empty { text-align: center; padding: var(--sp-12); color: var(--text-2); }
+</style>

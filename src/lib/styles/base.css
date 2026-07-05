@@ -1,0 +1,370 @@
+/* SPDX-FileCopyrightText: 2026 Veydan Project */
+/* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
+
+/* ============================================================================
+ * Veydan Browser — base layer + global primitives
+ * Imported once from src/routes/+layout.svelte, after tokens.css.
+ *
+ * Everything here is GLOBAL. Components should reuse these classes instead of
+ * re-declaring buttons / badges / tabs / empty-states / cards locally.
+ * Svelte-scoped rules in a component still win over these (higher specificity),
+ * so adding primitives here never breaks existing local styles — migration is
+ * simply deleting the local copy so the global one takes over.
+ * ========================================================================== */
+
+/* ── Reset / base elements ── */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100dvh;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: var(--lh-base);
+  transition: background var(--dur-base), color var(--dur-base);
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: var(--fs-base);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  width: 100%;
+  outline: none;
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  padding-right: 2rem;
+  cursor: pointer;
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+
+input::placeholder, textarea::placeholder { color: var(--text-3); }
+select option { background: var(--surface); color: var(--text); }
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--fs-base);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 1rem;
+  transition: all var(--dur-fast);
+}
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ── Buttons ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  text-decoration: none;
+  font-family: inherit;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-medium);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 1rem;
+  border: none;
+  cursor: pointer;
+  transition: all var(--dur-fast);
+  white-space: nowrap;
+}
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary { background: var(--accent); color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); transform: translateY(-1px); }
+.btn-ghost { background: transparent; color: var(--text-2); border: 1px solid var(--border); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); border-color: var(--border-2); }
+.btn-success { background: var(--success); color: #fff; }
+.btn-success:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+.btn-sm { padding: 0.3rem 0.65rem; font-size: 0.78rem; }
+
+/* ── Icon buttons ── */
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text-2); cursor: pointer; transition: all var(--dur-fast);
+  text-decoration: none;
+}
+.icon-btn:hover:not(:disabled) { background: var(--surface); border-color: var(--border-2); color: var(--text); }
+.icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.icon-btn.success { color: var(--success-text); background: var(--success-bg); border-color: color-mix(in srgb, var(--success) 25%, var(--border)); }
+.icon-btn.success:hover:not(:disabled) { filter: brightness(1.1); }
+.icon-btn.danger { color: var(--danger-text); background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 25%, var(--border)); }
+.icon-btn.danger:hover:not(:disabled) { filter: brightness(1.1); }
+.icon-btn.danger-soft:hover:not(:disabled) { background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); color: var(--danger-text); }
+
+/* ── Forms ── */
+.form-group { display: flex; flex-direction: column; gap: 0.35rem; }
+.form-group label { font-size: 0.75rem; font-weight: var(--fw-semibold); color: var(--text-2); text-transform: uppercase; letter-spacing: 0.05em; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.875rem; }
+
+.error-msg {
+  color: var(--danger-text);
+  font-size: var(--fs-sm);
+  padding: 0.5rem 0.75rem;
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+/* ── Page shell ── (unifies max-width / gap / header spacing across routes) */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: var(--page-max, 1280px);
+  width: 100%;
+  margin-inline: auto;   /* center the rail — even gutters on wide screens */
+}
+.page--fill { height: 100%; min-height: 0; }  /* full-height / internal-scroll pages */
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-shrink: 0;
+}
+.page-header h1 {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.01em;
+}
+.page-header .spacer { margin-left: auto; }
+
+/* ── Card / section ── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-4);
+}
+.card-title { font-size: var(--fs-md); font-weight: var(--fw-semibold); }
+
+.section { display: flex; flex-direction: column; gap: var(--sp-2); }
+.section-label,
+.section-title {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.muted { color: var(--text-2); }
+
+/* ── Badges (static status pills) ── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  line-height: 1.4;
+  white-space: nowrap;
+  background: var(--surface-2);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+}
+.badge-accent  { background: var(--accent-bg);  color: var(--accent);       border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.badge-ok      { background: var(--success-bg); color: var(--success-text); border-color: color-mix(in srgb, var(--success) 30%, transparent); }
+.badge-danger  { background: var(--danger-bg);  color: var(--danger-text);  border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+.badge-warn    { background: var(--warn-bg);    color: var(--warn-text);    border-color: color-mix(in srgb, var(--warn-text) 30%, transparent); }
+
+/* ── Chip (interactive / toggleable pill) ── */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  background: transparent;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all var(--dur-fast);
+  white-space: nowrap;
+}
+.chip:hover { border-color: var(--border-2); color: var(--text); }
+.chip.active { background: var(--accent-bg); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* ── Filter bar ── (единый паттерн панелей фильтров: поиск + select-ы + счётчик.
+   Раньше .toolbar / .search-wrap / .filter-select дублировались в 5+ местах с
+   расходящимися размерами — из-за чего фильтры «прыгали» при смене вида.) */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+/* Поле поиска: иконка слева, опциональная кнопка очистки справа */
+.search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 240px;
+  flex-shrink: 0;
+}
+.search-field > svg {
+  position: absolute;
+  left: 0.6rem;
+  color: var(--text-3);
+  pointer-events: none;
+}
+.search-field input {
+  height: var(--control-h);
+  width: 100%;
+  padding: 0 1.9rem 0 2rem;
+  font-size: var(--fs-sm);
+}
+.search-clear {
+  position: absolute;
+  right: 0.4rem;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  background: none;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color var(--dur-fast);
+}
+.search-clear:hover { color: var(--text); }
+
+/* Компактный select для панели фильтров (фон/граница/стрелка — из глобального select) */
+.filter-select {
+  width: auto;
+  height: var(--control-h);
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: var(--fs-sm);
+  flex-shrink: 0;
+}
+
+/* Квадратная кнопка сброса всех фильтров */
+.filter-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  flex-shrink: 0;
+  padding: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all var(--dur-fast);
+}
+.filter-clear:hover {
+  background: var(--danger-bg);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  color: var(--danger-text);
+}
+
+/* Счётчик результатов (прижат к правому краю панели) */
+.count-badge {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+/* ── Empty state ── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  padding: var(--sp-12) var(--sp-4);
+  color: var(--text-2);
+  text-align: center;
+}
+.empty-state svg { opacity: 0.5; }
+.empty-state p { color: var(--text-2); }
+.empty-state span { font-size: var(--fs-sm); color: var(--text-3); }
+
+/* ── Tabs ── */
+.tab-bar {
+  display: flex;
+  gap: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  padding: 0 var(--sp-2);
+  flex-shrink: 0;
+}
+.tab {
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+  transition: all var(--dur-fast);
+}
+.tab:hover { background: var(--surface); color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); background: var(--accent-bg); }
+.tab-count {
+  font-size: 0.65rem;
+  background: var(--surface-2);
+  border-radius: var(--radius-pill);
+  padding: 0.05rem 0.4rem;
+  color: var(--text-2);
+}
+
+/* ── Loading / spinner ── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 0.7s linear infinite; }
+.spinner {
+  width: 1.1em;
+  height: 1.1em;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-6);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  text-align: center;
+}

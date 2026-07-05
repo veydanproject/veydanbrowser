@@ -1,0 +1,267 @@
+<!-- SPDX-FileCopyrightText: 2026 Veydan Project -->
+<!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
+
+<script lang="ts">
+  import type { NoteListItem } from '$lib/types';
+  import Icon from '$lib/Icon.svelte';
+  import { t } from '$lib/i18n';
+
+  interface Props {
+    notes: NoteListItem[];
+    activeId: string | null;
+    onselect: (id: string) => void;
+    oncreate: () => void;
+    workspaceName?: (id: string) => string;
+    profileName?: (id: string) => string;
+    folderName?: (id: string) => string;
+    folderColor?: (id: string) => string;
+  }
+
+  let { notes, activeId, onselect, oncreate, workspaceName, profileName, folderName, folderColor }: Props = $props();
+
+  function scopeLabel(n: NoteListItem): string {
+    // Folders first — original context
+    if (n.folder_ids.length > 0 && folderName) {
+      return n.folder_ids.length === 1
+        ? folderName(n.folder_ids[0])
+        : `${folderName(n.folder_ids[0])} +${n.folder_ids.length - 1}`;
+    }
+    const wsTag = n.bindings.find(b => b.startsWith('workspace:'));
+    if (wsTag && workspaceName) return workspaceName(wsTag.slice('workspace:'.length));
+    const profileTag = n.bindings.find(b => b.startsWith('profile:'));
+    if (profileTag && profileName) return profileName(profileTag.slice('profile:'.length));
+    return $t('notes_scope_global');
+  }
+
+  function cardChips(n: NoteListItem) {
+    const chips: { label: string; color: string }[] = [];
+    for (const fid of n.folder_ids) {
+      const label = folderName?.(fid) ?? fid;
+      const color = folderColor?.(fid) ?? 'var(--text-2)';
+      chips.push({ label, color });
+    }
+    for (const b of n.bindings) {
+      if (b.startsWith('workspace:')) {
+        const name = workspaceName?.(b.slice('workspace:'.length));
+        if (name) chips.push({ label: name, color: 'var(--success)' });
+      } else if (b.startsWith('profile:')) {
+        const name = profileName?.(b.slice('profile:'.length));
+        if (name) chips.push({ label: name, color: 'var(--accent)' });
+      }
+    }
+    for (const t of n.tags) chips.push({ label: t.name, color: t.color });
+    return chips;
+  }
+
+  function scopeColor(n: NoteListItem): string {
+    if (n.folder_ids.length > 0 && folderColor) return folderColor(n.folder_ids[0]);
+    if (n.bindings.some(b => b.startsWith('workspace:'))) return 'var(--success)';
+    if (n.bindings.some(b => b.startsWith('profile:'))) return 'var(--accent)';
+    return 'var(--text-2)';
+  }
+
+  function relativeTime(iso: string): string {
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return $t('notes_time_just_now');
+    if (m < 60) return $t('notes_time_m_ago', { m: String(m) });
+    const h = Math.floor(m / 60);
+    if (h < 24) return $t('notes_time_h_ago', { h: String(h) });
+    return $t('notes_time_d_ago', { d: String(Math.floor(h / 24)) });
+  }
+</script>
+
+<div class="notes-list">
+  {#if notes.length === 0}
+    <div class="empty-state">
+      <p>{$t('notes_list_empty')}</p>
+      <button class="btn btn-primary btn-sm" onclick={oncreate}>
+        <Icon name="plus" size={13} /> {$t('notes_list_new')}
+      </button>
+    </div>
+  {:else}
+    {#each notes as note (note.id)}
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
+      <div
+        class="note-card"
+        class:active={note.id === activeId}
+        onclick={() => onselect(note.id)}
+        role="button"
+        tabindex="0"
+        onkeydown={(e) => e.key === 'Enter' && onselect(note.id)}
+      >
+        <div class="card-top">
+          <span class="note-title">
+            {#if note.pinned}
+              <Icon name="pin" size={11} />
+            {/if}
+            {note.title || $t('notes_untitled')}
+          </span>
+          <span class="note-meta">
+            {#if note.has_draft}
+              <span class="draft-dot" title={$t('notes_unsaved_draft')}></span>
+            {/if}
+            <span class="note-format">{note.format}</span>
+          </span>
+        </div>
+
+        <div class="card-mid">
+          <span class="scope-badge" style="color: {scopeColor(note)}">
+            {scopeLabel(note)}
+          </span>
+          <span class="note-time">{relativeTime(note.updated_at)}</span>
+        </div>
+
+        {#if note.snippet}
+          <p class="note-preview note-snippet">{@html note.snippet}</p>
+        {:else if note.preview}
+          <p class="note-preview">{note.preview}</p>
+        {/if}
+
+        {#if cardChips(note).length > 0}
+          <div class="card-tags">
+            {#each cardChips(note).slice(-3) as chip, i (i)}
+              <span class="tag-chip" style="border-color:{chip.color}; color:{chip.color}; background:{chip.color}18">
+                {chip.label}
+              </span>
+            {/each}
+            {#if cardChips(note).length > 3}
+              <span class="tag-more">+{cardChips(note).length - 3}</span>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/each}
+  {/if}
+</div>
+
+<style>
+  .notes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .note-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.55rem var(--sp-3);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .note-card:hover { border-color: var(--border-2); }
+  .note-card.active { border-color: var(--accent); background: var(--accent-bg); }
+
+  .card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+  }
+
+  .note-title {
+    font-size: var(--fs-sm);
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .note-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-shrink: 0;
+  }
+
+  .note-format {
+    font-size: var(--fs-2xs);
+    color: var(--text-3);
+    text-transform: uppercase;
+    font-family: monospace;
+    background: var(--surface-2);
+    padding: 0.05rem 0.3rem;
+    border-radius: 3px;
+  }
+
+  .draft-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warn-text);
+    flex-shrink: 0;
+  }
+
+  .card-mid {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+  }
+
+  .scope-badge {
+    font-size: var(--fs-2xs);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+  }
+
+  .note-time {
+    font-size: var(--fs-2xs);
+    color: var(--text-3);
+    flex-shrink: 0;
+  }
+
+  .note-preview {
+    margin: 0;
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 1.4;
+  }
+
+  .note-snippet :global(mark) {
+    background: color-mix(in srgb, var(--accent) 25%, transparent);
+    color: var(--text-1);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+
+  .card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-1);
+  }
+
+  .tag-chip {
+    font-size: var(--fs-2xs);
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .tag-more {
+    font-size: var(--fs-2xs);
+    color: var(--text-2);
+    padding: 0.1rem 0.2rem;
+  }
+</style>

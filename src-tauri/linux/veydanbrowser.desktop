@@ -1,0 +1,10 @@
+[Desktop Entry]
+Categories=Network;WebBrowser;Security;
+Comment=Browser Fingerprint Manager
+Exec={{exec}} %U
+Icon={{icon}}
+Name={{name}}
+StartupNotify=true
+StartupWMClass={{exec}}
+Terminal=false
+Type=Application

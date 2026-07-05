@@ -1,0 +1,247 @@
+// SPDX-FileCopyrightText: 2026 Veydan Project
+// SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
+
+use crate::models::{Profile, Proxy};
+
+pub fn generate(profile: &Profile, proxy: Option<&Proxy>) -> String {
+    let mut prefs: Vec<String> = vec![
+        // Basic privacy
+        pref_bool("privacy.resistFingerprinting", false),
+        pref_bool("privacy.trackingprotection.enabled", true),
+        pref_bool("geo.enabled", profile.geolocation_enabled),
+        // Disable cursor activity indicator (camoufox red dot under cursor)
+        pref_bool("ui.use_activity_cursor", false),
+        // Disable telemetry
+        pref_bool("toolkit.telemetry.enabled", false),
+        pref_bool("datareporting.healthreport.uploadEnabled", false),
+        pref_bool("browser.send_additional_telemetry_data", false),
+        // Disable auto-update
+        pref_bool("app.update.auto", false),
+        pref_bool("app.update.enabled", false),
+        // Disable crash reporter
+        pref_bool("breakpad.reportURL", false),
+        // First run
+        pref_bool("browser.firstrun.show.localepicker", false),
+        pref_bool("browser.firstrun.show.uidiscovery", false),
+        // Session restore
+        pref_bool("browser.sessionstore.resume_from_crash", false),
+        // History: places (sidebar) + session (back/forward buttons)
+        pref_bool("places.history.enabled", profile.history_enabled),
+        pref_bool("browser.privatebrowsing.autostart", !profile.history_enabled),
+        pref_int("browser.sessionhistory.max_entries", if profile.history_enabled { 50 } else { 0 }),
+    ];
+
+    // Startup page
+    prefs.push(pref_string("browser.startup.homepage", "about:blank"));
+    prefs.push(pref_int("browser.startup.page", 0));
+
+    // User-Agent override
+    let ua = profile
+        .user_agent
+        .as_deref()
+        .or_else(|| {
+            crate::fingerprint::get_preset(&profile.fingerprint_preset).map(|p| p.user_agent)
+        })
+        .unwrap_or("Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0");
+
+    prefs.push(pref_string("general.useragent.override", ua));
+
+    // Platform
+    let platform = profile
+        .platform
+        .as_deref()
+        .or_else(|| crate::fingerprint::get_preset(&profile.fingerprint_preset).map(|p| p.platform))
+        .unwrap_or("Linux x86_64");
+
+    prefs.push(pref_string("general.platform.override", platform));
+
+    // Languages
+    prefs.push(pref_string("intl.accept_languages", &profile.languages));
+
+    // Locale
+    prefs.push(pref_string("intl.locale.requested", &profile.locale));
+
+    // WebRTC
+    match profile.webrtc_mode.as_str() {
+        "disable" => {
+            prefs.push(pref_bool("media.peerconnection.enabled", false));
+        }
+        "proxy_only" => {
+            prefs.push(pref_bool("media.peerconnection.enabled", true));
+            prefs.push(pref_bool("media.peerconnection.ice.no_host", true));
+            prefs.push(pref_bool(
+                "media.peerconnection.ice.default_address_only",
+                true,
+            ));
+        }
+        "real_ip" => {
+            prefs.push(pref_bool("media.peerconnection.enabled", true));
+            prefs.push(pref_bool("media.peerconnection.ice.no_host", false));
+            prefs.push(pref_bool(
+                "media.peerconnection.ice.default_address_only",
+                false,
+            ));
+        }
+        _ => {}
+    }
+
+    // Geolocation coordinates
+    if profile.geolocation_enabled {
+        if let (Some(lat), Some(lng)) = (profile.latitude, profile.longitude) {
+            let geo_url = format!(
+                "data:application/json,{{\"location\":{{\"lat\":{lat},\"lng\":{lng},\"accuracy\":100}}}}"
+            );
+            prefs.push(pref_string("geo.provider.network.url", &geo_url));
+        }
+    }
+
+    // Force WebGL: Camoufox on Linux с Win32-профилем блокирует WebGL через
+    // внутренний флаг WebglAllowWindowsNativeGl:false. Принудительно включаем.
+    prefs.push(pref_bool("webgl.force-enabled", true));
+    prefs.push(pref_bool("webgl.disabled", false));
+
+    // Camoufox-specific UI fixes
+    if profile.browser_type == "camoufox" {
+        // CSD mode: Firefox draws its own window controls in the tab bar (no separate OS title bar)
+        prefs.push(pref_int("browser.tabs.inTitlebar", 1));
+        prefs.push(pref_bool(
+            "toolkit.legacyUserProfileCustomizations.stylesheets",
+            true,
+        ));
+        // Show bookmarks toolbar always
+        prefs.push(pref_string(
+            "browser.toolbars.bookmarks.visibility",
+            "always",
+        ));
+    }
+
+    // Search engine display name: set in user.js so it overrides any stale
+    // value in prefs.js. The SearchService uses search.json.mozlz4 for actual
+    // engine selection; this pref controls what the browser UI displays.
+    if profile.browser_type == "camoufox" {
+        let engine_name = search_engine_display_name(&profile.default_search_engine);
+        prefs.push(pref_string("browser.search.defaultenginename", engine_name));
+        prefs.push(pref_string("browser.search.defaultenginename.private", engine_name));
+        // Address bar placeholder text — set here so it matches the engine immediately
+        // on first launch (SearchService updates it async, causing stale display otherwise)
+        prefs.push(pref_string("browser.urlbar.placeholderName", engine_name));
+        prefs.push(pref_string("browser.urlbar.placeholderName.private", engine_name));
+    }
+
+    // Proxy
+    if let Some(proxy) = proxy {
+        apply_proxy_prefs(&mut prefs, proxy);
+    } else {
+        prefs.push(pref_int("network.proxy.type", 0));
+        prefs.push(pref_string("network.proxy.http", ""));
+        prefs.push(pref_int("network.proxy.http_port", 0));
+        prefs.push(pref_string("network.proxy.ssl", ""));
+        prefs.push(pref_int("network.proxy.ssl_port", 0));
+        prefs.push(pref_string("network.proxy.socks", ""));
+        prefs.push(pref_int("network.proxy.socks_port", 0));
+    }
+
+    prefs.join("\n")
+}
+
+fn apply_proxy_prefs(prefs: &mut Vec<String>, proxy: &Proxy) {
+    match proxy.proxy_type.as_str() {
+        "http" | "https" => {
+            prefs.push(pref_int("network.proxy.type", 1));
+            prefs.push(pref_string("network.proxy.http", &proxy.host));
+            prefs.push(pref_int("network.proxy.http_port", proxy.port as i64));
+            prefs.push(pref_string("network.proxy.ssl", &proxy.host));
+            prefs.push(pref_int("network.proxy.ssl_port", proxy.port as i64));
+            prefs.push(pref_bool("network.proxy.share_proxy_settings", true));
+            // Явно сбрасываем SOCKS чтобы стареющий prefs.js не перехватывал трафик
+            prefs.push(pref_string("network.proxy.socks", ""));
+            prefs.push(pref_int("network.proxy.socks_port", 0));
+        }
+        "socks5" => {
+            prefs.push(pref_int("network.proxy.type", 1));
+            prefs.push(pref_string("network.proxy.socks", &proxy.host));
+            prefs.push(pref_int("network.proxy.socks_port", proxy.port as i64));
+            prefs.push(pref_int("network.proxy.socks_version", 5));
+            // remote DNS: hostname уходит в прокси, прокси сам резолвит (избегает IPv6-проблем и DNS-утечек)
+            prefs.push(pref_bool("network.proxy.socks_remote_dns", true));
+            // Явно сбрасываем HTTP/SSL чтобы стареющий prefs.js не перехватывал трафик
+            prefs.push(pref_string("network.proxy.http", ""));
+            prefs.push(pref_int("network.proxy.http_port", 0));
+            prefs.push(pref_string("network.proxy.ssl", ""));
+            prefs.push(pref_int("network.proxy.ssl_port", 0));
+            prefs.push(pref_bool("network.proxy.share_proxy_settings", false));
+            if let Some(u) = &proxy.username {
+                if !u.is_empty() {
+                    prefs.push(pref_string("network.proxy.socks_username", u));
+                }
+            }
+            if let Some(p) = &proxy.password {
+                if !p.is_empty() {
+                    prefs.push(pref_string("network.proxy.socks_password", p));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Generates per-profile userChrome.css.
+/// Contains only the profile-specific color stripe indicator for #TabsToolbar.
+/// All structural UI overrides live in the shared chrome.css (patch_chrome_css).
+/// userChrome.css is loaded after chrome.css so !important here wins over chrome.css.
+pub fn camoufox_user_chrome(color_left: &str, color_right: &str, label: &str) -> String {
+    let stripe_bg = build_stripe_bg(color_left, color_right, label);
+    format!(
+        r#"/* Veydan Browser: per-profile color indicator — overrides chrome.css #TabsToolbar */
+#TabsToolbar {{
+  background-image: {stripe_bg} !important;
+  background-size: 100% 10px !important;
+  background-position: top !important;
+  background-repeat: no-repeat !important;
+}}
+"#
+    )
+}
+
+fn build_stripe_bg(color_left: &str, color_right: &str, label: &str) -> String {
+    let gradient = format!("linear-gradient(to right, {color_left}, {color_right})");
+    if label.is_empty() {
+        return gradient;
+    }
+    let safe = label
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 10'>\
+         <text x='50' y='8' text-anchor='middle' fill='white' fill-opacity='0.8' \
+         font-size='7' font-family='system-ui,sans-serif'>{safe}</text></svg>"
+    );
+    let encoded = svg
+        .replace('<', "%3C")
+        .replace('>', "%3E")
+        .replace('#', "%23");
+    format!("url(\"data:image/svg+xml,{encoded}\"), {gradient}")
+}
+
+fn pref_string(key: &str, value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("user_pref(\"{key}\", \"{escaped}\");")
+}
+
+fn pref_bool(key: &str, value: bool) -> String {
+    format!("user_pref(\"{key}\", {value});")
+}
+
+fn pref_int(key: &str, value: i64) -> String {
+    format!("user_pref(\"{key}\", {value});")
+}
+
+pub fn search_engine_display_name(identifier: &str) -> &'static str {
+    match identifier {
+        "google" => "Google",
+        "brave" => "Brave Search",
+        "startpage" => "Startpage",
+        _ => "DuckDuckGo",
+    }
+}

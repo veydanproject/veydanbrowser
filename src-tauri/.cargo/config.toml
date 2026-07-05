@@ -1,0 +1,2 @@
+# Build-time environment is set by dev.sh — do not add env vars here.
+# This keeps the project self-contained (no /tmp or system-level config needed).
