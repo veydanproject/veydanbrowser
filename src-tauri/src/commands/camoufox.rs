@@ -236,19 +236,39 @@ fn patch_toolkit_omni(install_dir: &Path) -> Result<(), String> {
         entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&buf).into_owned();
 
-        // Replace the LOAD_DUMPS return expression: `return [...].includes(server)` → `return true`
-        // The marker is unique enough to identify the right location
-        if let Some(pos) = text.find("].includes(server)") {
-            // Walk backwards from pos to find `return [`
-            if let Some(ret_pos) = text[..pos].rfind("return [") {
-                let before = &text[..ret_pos];
-                let after = &text[pos + "].includes(server)".len()..];
-                format!("{}return true{}", before, after)
+        // Force the LOAD_DUMPS getter to always `return true`. Camoufox has shipped two
+        // shapes over time:
+        //   legacy:  return [ <urls> ].includes(server)
+        //   v150+:   return ( AppConstants.REMOTE_SETTINGS_SERVER_URLS.includes(this.SERVER_URL) || ... )
+        // Rather than match either expression, replace the whole getter body by brace matching.
+        if let Some(getter) = text.find("get LOAD_DUMPS()") {
+            if let Some(open) = text[getter..].find('{') {
+                let body_start = getter + open;
+                let mut depth = 0usize;
+                let mut body_end = body_start;
+                for (i, ch) in text[body_start..].char_indices() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                body_end = body_start + i + 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                format!(
+                    "{}{{\n    return true;\n  }}{}",
+                    &text[..body_start],
+                    &text[body_end..]
+                )
             } else {
                 text
             }
         } else {
-            text // already patched or different structure
+            text // getter not found — structure changed, leave untouched
         }
     };
 
@@ -287,6 +307,40 @@ pub fn patch_omni_ja(install_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Strips Camoufox's `SearchEngines` enterprise policy from distribution/policies.json.
+///
+/// Camoufox ships a policy that Removes every real engine, Adds a dummy "None" engine
+/// (POST to http://127.0.0.1) and forces it as the locked Default. Enterprise policies
+/// have the highest priority in Firefox and cannot be changed by the user, so this block
+/// overrides EVERYTHING we inject via omni.ja and search.json.mozlz4:
+///   - the address bar "searches" by POSTing to 127.0.0.1 → nothing happens;
+///   - the engine picker is locked ("managed by your organization") → looks empty;
+///   - when our per-profile `defaultEngineId` disagrees with the policy default, Firefox
+///     flags search settings corrupt (browser.search.lastSettingsCorruptTime) and reverts
+///     to `policy-None`.
+///
+/// Removing the `SearchEngines` key lets our config engines (DDG/Google/Brave/Startpage)
+/// and the per-profile default take effect. Returns true if the file was modified.
+pub fn patch_policies_json(install_dir: &Path) -> bool {
+    let path = install_dir.join("distribution").join("policies.json");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let Ok(mut doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    let Some(policies) = doc.get_mut("policies").and_then(|v| v.as_object_mut()) else {
+        return false;
+    };
+    if policies.remove("SearchEngines").is_none() {
+        return false; // already stripped — nothing to do
+    }
+    match serde_json::to_string_pretty(&doc) {
+        Ok(out) => std::fs::write(&path, out).is_ok(),
+        Err(_) => false,
+    }
+}
+
 /// Deletes startupCache and Remote Settings IndexedDB for all profiles.
 /// Called after patching omni.ja so Firefox rebuilds JS caches and settings from scratch.
 pub fn clear_all_startup_caches(app_data_dir: &Path) {
@@ -317,8 +371,17 @@ pub fn clear_all_startup_caches(app_data_dir: &Path) {
 /// Checks whether omni.ja has changed since the last patch (by mtime).
 /// If so, re-patches and clears caches. Idempotent.
 pub fn ensure_omni_patched(install_dir: &Path, app_data_dir: &Path) {
+    // Always neutralize the SearchEngines enterprise policy first — it overrides every
+    // engine we inject, and Camoufox re-ships it on each update. Idempotent (no-op once
+    // stripped). If it changed here, profile caches must be cleared so the forced
+    // `policy-None` default is recomputed from our config.
+    let policies_changed = patch_policies_json(install_dir);
+
     let omni_path = install_dir.join("omni.ja");
     if !omni_path.exists() {
+        if policies_changed {
+            clear_all_startup_caches(app_data_dir);
+        }
         return;
     }
 
@@ -330,11 +393,17 @@ pub fn ensure_omni_patched(install_dir: &Path, app_data_dir: &Path) {
         .unwrap_or(0);
 
     if current_mtime == stored_mtime {
-        return; // omni.ja unchanged since last patch — skip
+        if policies_changed {
+            clear_all_startup_caches(app_data_dir);
+        }
+        return; // omni.ja unchanged since last patch — skip re-patching it
     }
 
     if let Err(e) = patch_omni_ja(install_dir) {
         eprintln!("[Veydan Browser] omni.ja patch failed: {e}");
+        if policies_changed {
+            clear_all_startup_caches(app_data_dir);
+        }
         return;
     }
 
@@ -832,6 +901,7 @@ async fn run_download(
 
     patch_chrome_css(&dest_dir, "#6366f1", "#6366f1", "");
     patch_omni_ja(&dest_dir).ok();
+    patch_policies_json(&dest_dir);
 
     // Store mtime after initial patch so ensure_omni_patched skips on first launch
     let omni_path = dest_dir.join("omni.ja");
@@ -864,11 +934,72 @@ fn write_mozlz4(path: &Path, data: &[u8]) -> Result<(), String> {
     std::fs::write(path, out).map_err(|e| e.to_string())
 }
 
-/// Sets `defaultEngineId` in `search.json.mozlz4` for the given Firefox profile directory.
-/// For app-provided (config) engines no hash verification is required by Firefox.
+/// The disclaimer text Firefox mixes into the search-settings verification hash.
+/// `$appName` is substituted with the running app's name (e.g. "Camoufox").
+/// Must match SearchUtils.getVerificationHash in toolkit/omni.ja byte-for-byte.
+const SEARCH_HASH_DISCLAIMER: &str = "By modifying this file, I agree that I am doing so \
+only within $appName itself, using official, user-driven search \
+engine selection processes, and in a way which does not circumvent \
+user consent. I acknowledge that any attempt to change this file \
+from outside of $appName is a malicious act, and will be responded \
+to accordingly.";
+
+/// Reads the application display name from `application.ini` (e.g. "Camoufox").
+/// This is what `Services.appinfo.name` returns and what the search verification
+/// hash is salted with. Falls back to "Camoufox" if the file can't be read.
+pub fn read_app_name(install_dir: &Path) -> String {
+    std::fs::read_to_string(install_dir.join("application.ini"))
+        .ok()
+        .and_then(|ini| {
+            ini.lines()
+                .find_map(|l| l.strip_prefix("Name=").map(|v| v.trim().to_string()))
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Camoufox".to_string())
+}
+
+/// Computes Firefox's search-settings verification hash for `name`:
+/// `base64( SHA256( <profileDirName> + name + disclaimer.replace("$appName", app_name) ) )`.
+/// Firefox rejects a `defaultEngineId` whose hash doesn't match this and reverts to the
+/// config default — so we must write the exact hash, not omit it.
+fn search_verification_hash(firefox_profile_dir: &Path, name: &str, app_name: &str) -> String {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+
+    let profile_filename = firefox_profile_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let disclaimer = SEARCH_HASH_DISCLAIMER.replace("$appName", app_name);
+    let salt = format!("{profile_filename}{name}{disclaimer}");
+    let digest = Sha256::digest(salt.as_bytes());
+    base64::engine::general_purpose::STANDARD.encode(digest)
+}
+
+/// The config engines we inject via omni.ja (id, display name), in `search.json.mozlz4`
+/// shape. Must stay in sync with `SEARCH_ENGINE_BLOCK` and `search_engine_display_name`.
+fn config_engines_json() -> serde_json::Value {
+    serde_json::json!([
+        {"id": "ddg",       "_name": "DuckDuckGo",   "_isConfigEngine": true, "_metaData": {}},
+        {"id": "google",    "_name": "Google",       "_isConfigEngine": true, "_metaData": {}},
+        {"id": "brave",     "_name": "Brave Search", "_isConfigEngine": true, "_metaData": {}},
+        {"id": "startpage", "_name": "Startpage",    "_isConfigEngine": true, "_metaData": {}}
+    ])
+}
+
+/// Sets `defaultEngineId` (+ private) in `search.json.mozlz4` for the given Firefox profile,
+/// together with the matching verification hash. Without a valid hash Firefox treats the
+/// default as external tampering, discards it, and falls back to the config default — which
+/// is why an app-selected engine never applied and in-browser choices reset on relaunch.
+///
+/// The `engines` array must be non-empty: Firefox's `SearchSettings.get()` throws
+/// "no engine in the file" on an empty list, declares the whole file corrupt, backs it up
+/// to `.bak`, and resets — silently dropping our default. So a freshly created file is
+/// seeded with the injected config engines.
 pub fn write_search_engine_to_profile(
     firefox_profile_dir: &Path,
     engine_id: &str,
+    app_name: &str,
 ) -> Result<(), String> {
     let search_json = firefox_profile_dir.join("search.json.mozlz4");
 
@@ -887,9 +1018,22 @@ pub fn write_search_engine_to_profile(
                 "appDefaultEngineId": "ddg",
                 "useSavedOrder": false
             },
-            "engines": []
+            "engines": config_engines_json()
         })
     };
+
+    // Never leave `engines` empty — Firefox would treat the file as corrupt and discard
+    // our default. Seed the config engines if the loaded file has none.
+    let engines_empty = doc
+        .get("engines")
+        .and_then(|v| v.as_array())
+        .map(|a| a.is_empty())
+        .unwrap_or(true);
+    if engines_empty {
+        doc["engines"] = config_engines_json();
+    }
+
+    let hash = search_verification_hash(firefox_profile_dir, engine_id, app_name);
 
     let meta = doc
         .get_mut("metaData")
@@ -898,8 +1042,8 @@ pub fn write_search_engine_to_profile(
 
     meta.insert("defaultEngineId".into(), serde_json::Value::String(engine_id.into()));
     meta.insert("privateDefaultEngineId".into(), serde_json::Value::String(engine_id.into()));
-    meta.remove("defaultEngineIdHash");
-    meta.remove("privateDefaultEngineIdHash");
+    meta.insert("defaultEngineIdHash".into(), serde_json::Value::String(hash.clone()));
+    meta.insert("privateDefaultEngineIdHash".into(), serde_json::Value::String(hash));
 
     let json_bytes = serde_json::to_vec(&doc).map_err(|e| e.to_string())?;
     write_mozlz4(&search_json, &json_bytes)

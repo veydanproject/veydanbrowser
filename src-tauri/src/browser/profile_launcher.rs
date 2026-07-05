@@ -44,9 +44,13 @@ pub async fn launch_profile(
     std::fs::write(firefox_profile_dir.join("user.js"), user_js_content).map_err(err)?;
 
     if profile.browser_type == "camoufox" {
+        let app_name = crate::commands::camoufox::resolve_binary(&state.app_data_dir)
+            .and_then(|bin| bin.parent().map(crate::commands::camoufox::read_app_name))
+            .unwrap_or_else(|| "Camoufox".to_string());
         crate::commands::camoufox::write_search_engine_to_profile(
             &firefox_profile_dir,
             &profile.default_search_engine,
+            &app_name,
         )
         .unwrap_or_else(|e| {
             eprintln!("write_search_engine_to_profile failed: {e}");

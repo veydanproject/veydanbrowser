@@ -223,7 +223,7 @@ const translations = {
     settings_section_about: 'About',
     settings_about_app: 'Veydan Browser',
     settings_about_version: 'Version',
-    settings_about_tagline: 'Anti-detect browser & fingerprint profile manager.',
+    settings_about_tagline: 'A workspace for multi-accounting.',
     settings_about_copyright: 'Copyright © 2026 Veydan Project',
     settings_about_license: 'License',
     settings_about_license_note:
@@ -764,7 +764,7 @@ const translations = {
     settings_section_about: 'О программе',
     settings_about_app: 'Veydan Browser',
     settings_about_version: 'Версия',
-    settings_about_tagline: 'Антидетект-браузер и менеджер профилей отпечатков.',
+    settings_about_tagline: 'Рабочее пространство для мультиаккаунтинга.',
     settings_about_copyright: 'Copyright © 2026 Veydan Project',
     settings_about_license: 'Лицензия',
     settings_about_license_note:
