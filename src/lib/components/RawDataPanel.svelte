@@ -6,7 +6,8 @@
   import type { Profile, ProfileRawData, CookieEntry } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import Drawer from '$lib/components/ui/Drawer.svelte';
-  import { formatError } from '$lib/utils';
+  import { formatError, formatEpochDate } from '$lib/utils';
+  import { locale } from '$lib/i18n';
 
   interface Props {
     profile: Profile;
@@ -34,7 +35,7 @@
 
   function formatExpiry(ts: number | null): string {
     if (ts === null || ts === 0) return 'Session';
-    return new Date(ts * 1000).toLocaleDateString();
+    return formatEpochDate(ts, $locale);
   }
 
   function copyToClipboard(text: string) {

@@ -4,6 +4,7 @@
 <script lang="ts">
   import type { NoteListItem, NoteTag, NoteFolder } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
+  import Dialog from '$lib/components/ui/Dialog.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { notesStore } from '$lib/store/notes.svelte';
@@ -580,147 +581,120 @@
 </div>
 
 <!-- Модалка тега -->
-{#if popupOpen}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <div class="modal-overlay" onclick={closePopup} role="presentation" tabindex="-1">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-    <div class="modal-box" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
-      <div class="modal-header">
-        <span class="modal-title">{popupPrefix ? `Тег в «${popupPrefix.replace('/', '')}»` : 'Новый тег'}</span>
-        <button class="btn-icon-xs btn-cancel" aria-label="Закрыть" onclick={closePopup}><Icon name="x" size={13} /></button>
+<Dialog open={popupOpen} width="300px" title={popupPrefix ? `Тег в «${popupPrefix.replace('/', '')}»` : 'Новый тег'} onclose={closePopup}>
+  <div class="nf-modal-body">
+    {#if !popupPrefix}
+      <p class="popup-hint">Используй «/» для подгрупп: <code>Группа/тег</code></p>
+    {/if}
+
+    <input
+      bind:this={popupInputEl}
+      bind:value={popupInput}
+      type="text"
+      class="popup-input"
+      placeholder={popupPrefix ? `${popupPrefix}название` : 'название тега'}
+      onkeydown={onPopupKeydown}
+    />
+
+    {#if popupSuggestions.length > 0}
+      <div class="suggestions">
+        {#each popupSuggestions as s (s.id)}
+          <button class="sug-item" onmousedown={(e) => { e.preventDefault(); onfilter({ type: 'tag', id: s.name }); closePopup(); }}>
+            <span class="dot" style="background:{s.color}"></span>
+            {s.name}
+          </button>
+        {/each}
       </div>
+    {/if}
 
-      {#if !popupPrefix}
-        <p class="popup-hint">Используй «/» для подгрупп: <code>Группа/тег</code></p>
-      {/if}
-
-      <input
-        bind:this={popupInputEl}
-        bind:value={popupInput}
-        type="text"
-        class="popup-input"
-        placeholder={popupPrefix ? `${popupPrefix}название` : 'название тега'}
-        onkeydown={onPopupKeydown}
-      />
-
-      {#if popupSuggestions.length > 0}
-        <div class="suggestions">
-          {#each popupSuggestions as s (s.id)}
-            <button class="sug-item" onmousedown={(e) => { e.preventDefault(); onfilter({ type: 'tag', id: s.name }); closePopup(); }}>
-              <span class="dot" style="background:{s.color}"></span>
-              {s.name}
-            </button>
-          {/each}
-        </div>
-      {/if}
-
-      {#if popupIsNew}
-        <div class="color-row">
-          {#each TAG_COLORS as c}
-            <button class="color-swatch" class:active={popupColor === c} style="background:{c}" aria-label="Цвет {c}" onclick={() => popupColor = c}></button>
-          {/each}
-          <label class="color-swatch color-swatch-custom" class:active={!TAG_COLORS.includes(popupColor)} title="Свой цвет">
-            <input type="color" bind:value={popupColor} />
-            {#if !TAG_COLORS.includes(popupColor)}
-              <span class="custom-dot" style="background:{popupColor}"></span>
-            {/if}
-          </label>
-        </div>
-        <button class="btn btn-primary btn-sm create-btn" onclick={createTag} disabled={creating}>
-          {creating ? '…' : `Создать «${popupInput.trim()}»`}
-        </button>
-      {/if}
-    </div>
+    {#if popupIsNew}
+      <div class="color-row">
+        {#each TAG_COLORS as c}
+          <button class="color-swatch" class:active={popupColor === c} style="background:{c}" aria-label="Цвет {c}" onclick={() => popupColor = c}></button>
+        {/each}
+        <label class="color-swatch color-swatch-custom" class:active={!TAG_COLORS.includes(popupColor)} title="Свой цвет">
+          <input type="color" bind:value={popupColor} />
+          {#if !TAG_COLORS.includes(popupColor)}
+            <span class="custom-dot" style="background:{popupColor}"></span>
+          {/if}
+        </label>
+      </div>
+      <button class="btn btn-primary btn-sm create-btn" onclick={createTag} disabled={creating}>
+        {creating ? '…' : `Создать «${popupInput.trim()}»`}
+      </button>
+    {/if}
   </div>
-{/if}
+</Dialog>
 
 <!-- Модалка папки -->
-{#if folderModalOpen}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <div class="modal-overlay" onclick={closeFolderModal} role="presentation" tabindex="-1">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-    <div class="modal-box" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
-      <div class="modal-header">
-        <span class="modal-title">Новая папка</span>
-        <button class="btn-icon-xs btn-cancel" aria-label="Закрыть" onclick={closeFolderModal}><Icon name="x" size={13} /></button>
-      </div>
+<Dialog open={folderModalOpen} width="300px" title="Новая папка" onclose={closeFolderModal}>
+  <div class="nf-modal-body">
+    <input
+      bind:this={folderInputEl}
+      bind:value={folderInput}
+      type="text"
+      class="popup-input"
+      placeholder="название папки"
+      onkeydown={onFolderModalKeydown}
+    />
 
-      <input
-        bind:this={folderInputEl}
-        bind:value={folderInput}
-        type="text"
-        class="popup-input"
-        placeholder="название папки"
-        onkeydown={onFolderModalKeydown}
-      />
-
-      <div class="parent-select-row">
-        <span class="parent-select-label">Вложить в:</span>
-        <select class="parent-select" bind:value={folderModalParentId}>
-          <option value="">— корневая —</option>
-          {#each folders as f (f.id)}
-            <option value={f.id}>{f.name}</option>
-          {/each}
-        </select>
-      </div>
-
-      <div class="color-row">
-        {#each TAG_COLORS as c}
-          <button class="color-swatch" class:active={folderColor === c} style="background:{c}" aria-label="Цвет {c}" onclick={() => folderColor = c}></button>
+    <div class="parent-select-row">
+      <span class="parent-select-label">Вложить в:</span>
+      <select class="parent-select" bind:value={folderModalParentId}>
+        <option value="">— корневая —</option>
+        {#each folders as f (f.id)}
+          <option value={f.id}>{f.name}</option>
         {/each}
-        <label class="color-swatch color-swatch-custom" class:active={!TAG_COLORS.includes(folderColor)} title="Свой цвет">
-          <input type="color" bind:value={folderColor} />
-          {#if !TAG_COLORS.includes(folderColor)}
-            <span class="custom-dot" style="background:{folderColor}"></span>
-          {/if}
-        </label>
-      </div>
-
-      <button class="btn btn-primary btn-sm create-btn" onclick={createFolder} disabled={!folderInput.trim() || creatingFolder}>
-        {creatingFolder ? '…' : `Создать «${folderInput.trim() || 'папку'}»`}
-      </button>
+      </select>
     </div>
+
+    <div class="color-row">
+      {#each TAG_COLORS as c}
+        <button class="color-swatch" class:active={folderColor === c} style="background:{c}" aria-label="Цвет {c}" onclick={() => folderColor = c}></button>
+      {/each}
+      <label class="color-swatch color-swatch-custom" class:active={!TAG_COLORS.includes(folderColor)} title="Свой цвет">
+        <input type="color" bind:value={folderColor} />
+        {#if !TAG_COLORS.includes(folderColor)}
+          <span class="custom-dot" style="background:{folderColor}"></span>
+        {/if}
+      </label>
+    </div>
+
+    <button class="btn btn-primary btn-sm create-btn" onclick={createFolder} disabled={!folderInput.trim() || creatingFolder}>
+      {creatingFolder ? '…' : `Создать «${folderInput.trim() || 'папку'}»`}
+    </button>
   </div>
-{/if}
+</Dialog>
 
 <!-- Модалка редактирования тега -->
-{#if tagEditModalOpen}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <div class="modal-overlay" onclick={closeTagEditModal} role="presentation" tabindex="-1">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-    <div class="modal-box" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
-      <div class="modal-header">
-        <span class="modal-title">Редактировать тег</span>
-        <button class="btn-icon-xs btn-cancel" aria-label="Закрыть" onclick={closeTagEditModal}><Icon name="x" size={13} /></button>
-      </div>
+<Dialog open={tagEditModalOpen} width="300px" title="Редактировать тег" onclose={closeTagEditModal}>
+  <div class="nf-modal-body">
+    <input
+      bind:this={tagEditInputEl}
+      bind:value={tagEditName}
+      type="text"
+      class="popup-input"
+      placeholder="название тега"
+      onkeydown={onTagEditKeydown}
+    />
 
-      <input
-        bind:this={tagEditInputEl}
-        bind:value={tagEditName}
-        type="text"
-        class="popup-input"
-        placeholder="название тега"
-        onkeydown={onTagEditKeydown}
-      />
-
-      <div class="color-row">
-        {#each TAG_COLORS as c}
-          <button class="color-swatch" class:active={tagEditColor === c} style="background:{c}" aria-label="Цвет {c}" onclick={() => tagEditColor = c}></button>
-        {/each}
-        <label class="color-swatch color-swatch-custom" class:active={!TAG_COLORS.includes(tagEditColor)} title="Свой цвет">
-          <input type="color" bind:value={tagEditColor} />
-          {#if !TAG_COLORS.includes(tagEditColor)}
-            <span class="custom-dot" style="background:{tagEditColor}"></span>
-          {/if}
-        </label>
-      </div>
-
-      <button class="btn btn-primary btn-sm create-btn" onclick={saveTagEdit} disabled={!tagEditName.trim() || tagEditSaving}>
-        {tagEditSaving ? '…' : 'Сохранить'}
-      </button>
+    <div class="color-row">
+      {#each TAG_COLORS as c}
+        <button class="color-swatch" class:active={tagEditColor === c} style="background:{c}" aria-label="Цвет {c}" onclick={() => tagEditColor = c}></button>
+      {/each}
+      <label class="color-swatch color-swatch-custom" class:active={!TAG_COLORS.includes(tagEditColor)} title="Свой цвет">
+        <input type="color" bind:value={tagEditColor} />
+        {#if !TAG_COLORS.includes(tagEditColor)}
+          <span class="custom-dot" style="background:{tagEditColor}"></span>
+        {/if}
+      </label>
     </div>
+
+    <button class="btn btn-primary btn-sm create-btn" onclick={saveTagEdit} disabled={!tagEditName.trim() || tagEditSaving}>
+      {tagEditSaving ? '…' : 'Сохранить'}
+    </button>
   </div>
-{/if}
+</Dialog>
 
 <style>
   .filters {
@@ -1034,39 +1008,10 @@
   }
 
   /* Модальные окна */
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 200;
-    backdrop-filter: blur(2px);
-  }
-
-  .modal-box {
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: var(--sp-5);
-    box-shadow: var(--shadow-lg);
-    width: 300px;
+  .nf-modal-body {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
-  }
-
-  .modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .modal-title {
-    font-size: var(--fs-base);
-    font-weight: 600;
-    color: var(--text);
   }
 
   .popup-hint {

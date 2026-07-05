@@ -7,12 +7,12 @@
   import type { SshConnection, Proxy } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import Modal from '$lib/Modal.svelte';
+  import Drawer from '$lib/components/ui/Drawer.svelte';
   import SSHConnectionForm from '$lib/components/ssh/SSHConnectionForm.svelte';
   import ProxyPanel from '$lib/components/ProxyPanel.svelte';
   import { sshStore } from '$lib/store/ssh.svelte';
   import { proxiesStore } from '$lib/store/proxies.svelte';
   import { api } from '$lib/api';
-  import { portal } from '$lib/portal';
   import { formatError } from '$lib/utils';
 
   const PAGE_SIZE = 20;
@@ -305,25 +305,18 @@
   {/if}
 </div>
 
-{#if panelConn !== undefined}
-  <div use:portal class="panel-backdrop" role="presentation" onclick={() => (panelConn = undefined)}>
-    <div class="panel" role="presentation" onclick={(e) => e.stopPropagation()}>
-      <div class="panel-header">
-        <span class="panel-title">{panelConn ? $t('ssh_form_edit') : $t('ssh_form_new')}</span>
-        <button class="icon-btn" onclick={() => (panelConn = undefined)}>
-          <Icon name="x" size={14} />
-        </button>
-      </div>
-      <div class="panel-body">
-        <SSHConnectionForm
-          connection={panelConn}
-          onSave={onFormSaved}
-          onCancel={() => (panelConn = undefined)}
-        />
-      </div>
-    </div>
-  </div>
-{/if}
+<Drawer
+  open={panelConn !== undefined}
+  width="440px"
+  title={panelConn ? $t('ssh_form_edit') : $t('ssh_form_new')}
+  onclose={() => (panelConn = undefined)}
+>
+  <SSHConnectionForm
+    connection={panelConn}
+    onSave={onFormSaved}
+    onCancel={() => (panelConn = undefined)}
+  />
+</Drawer>
 
 {#if editProxy !== undefined}
   <ProxyPanel
@@ -454,33 +447,4 @@
   /* uses global .empty-state */
   .empty-icon { opacity: 0.4; }
 
-  /* Side panel */
-  .panel-backdrop {
-    position: fixed; inset: 0; z-index: 200;
-    background: rgba(0, 0, 0, 0.35);
-  }
-
-  .panel {
-    position: absolute; top: 0; right: 0; bottom: 0;
-    width: 440px; background: var(--bg-2);
-    border-left: 1px solid var(--border);
-    display: flex; flex-direction: column;
-    box-shadow: var(--shadow-lg);
-  }
-
-  .panel-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0.875rem var(--sp-4);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-
-  .panel-title {
-    font-size: var(--fs-base); font-weight: 600; color: var(--text);
-  }
-
-  .panel-body {
-    flex: 1; overflow-y: auto;
-    padding: var(--sp-4);
-  }
 </style>

@@ -6,7 +6,8 @@
   import { sshStore } from '$lib/store/ssh.svelte';
   import Icon from '$lib/Icon.svelte';
   import Modal from '$lib/Modal.svelte';
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
+  import { formatDate } from '$lib/utils';
 
   interface Props {
     connections: SshConnection[];
@@ -111,7 +112,7 @@
                 <span class="badge">2FA</span>
               {/if}
               {#if conn.last_connected_at}
-                <span class="last">{new Date(conn.last_connected_at).toLocaleDateString()}</span>
+                <span class="last">{formatDate(conn.last_connected_at, $locale)}</span>
               {/if}
             </div>
           </div>

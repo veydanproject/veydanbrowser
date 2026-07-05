@@ -1360,6 +1360,20 @@ pub async fn note_draft_save(
 }
 
 #[tauri::command]
+pub async fn note_draft_get(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let draft_path = draft_file_path(&state.app_data_dir, &id);
+    if draft_path.exists() {
+        let content = std::fs::read_to_string(&draft_path).map_err(AppError::io)?;
+        Ok(Some(content))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
 pub async fn note_draft_discard(
     id: String,
     state: tauri::State<'_, AppState>,

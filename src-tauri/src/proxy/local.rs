@@ -457,3 +457,76 @@ async fn handle_ssh_upstream(
 fn find_header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_connect_target_basic() {
+        assert_eq!(
+            parse_connect_target("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com\r\n\r\n"),
+            Some(("example.com".to_string(), 443))
+        );
+    }
+
+    #[test]
+    fn parse_connect_target_rejects_non_connect() {
+        assert!(parse_connect_target("GET / HTTP/1.1").is_none());
+        assert!(parse_connect_target("CONNECT example.com HTTP/1.1").is_none());
+    }
+
+    #[test]
+    fn parse_http_target_absolute_http_and_https() {
+        assert_eq!(
+            parse_http_target("GET http://x.com/path HTTP/1.1\r\n\r\n"),
+            Some(("x.com".to_string(), 80))
+        );
+        assert_eq!(
+            parse_http_target("GET https://x.com/path HTTP/1.1\r\n\r\n"),
+            Some(("x.com".to_string(), 443))
+        );
+    }
+
+    #[test]
+    fn parse_http_target_explicit_port() {
+        assert_eq!(
+            parse_http_target("GET http://x.com:8080/ HTTP/1.1\r\n\r\n"),
+            Some(("x.com".to_string(), 8080))
+        );
+    }
+
+    #[test]
+    fn parse_http_target_relative_falls_back_to_host_header() {
+        assert_eq!(
+            parse_http_target("GET /path HTTP/1.1\r\nHost: fallback.com:1234\r\n\r\n"),
+            Some(("fallback.com".to_string(), 1234))
+        );
+    }
+
+    #[test]
+    fn rewrite_to_relative_strips_scheme_and_authority() {
+        let out = rewrite_to_relative("GET http://x.com/a/b?q=1 HTTP/1.1\r\nHost: x.com\r\n\r\n");
+        assert!(out.starts_with("GET /a/b?q=1 HTTP/1.1"));
+        // Preserves the remaining headers verbatim
+        assert!(out.contains("Host: x.com"));
+    }
+
+    #[test]
+    fn rewrite_to_relative_leaves_relative_urls_untouched() {
+        let out = rewrite_to_relative("GET /already/relative HTTP/1.1\r\n\r\n");
+        assert!(out.starts_with("GET /already/relative HTTP/1.1"));
+    }
+
+    #[test]
+    fn inject_after_first_line_inserts_between_request_line_and_headers() {
+        let out = inject_after_first_line("GET / HTTP/1.1\r\nHost: x\r\n\r\n", "X-Added: 1");
+        assert_eq!(out, "GET / HTTP/1.1\r\nX-Added: 1\r\nHost: x\r\n\r\n");
+    }
+
+    #[test]
+    fn find_header_end_locates_blank_line() {
+        assert_eq!(find_header_end(b"GET / HTTP/1.1\r\n\r\nbody"), Some(14));
+        assert!(find_header_end(b"incomplete\r\n").is_none());
+    }
+}

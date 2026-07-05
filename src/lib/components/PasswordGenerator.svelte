@@ -3,7 +3,8 @@
 
 <script lang="ts">
   import Icon from '$lib/Icon.svelte';
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
+  import { formatDateTime } from '$lib/utils';
   import { theme, toggleTheme } from '$lib/theme';
   import { api } from '$lib/api';
   import { pwSettings, generatePassword, type PwEntry } from '$lib/password-gen';
@@ -79,12 +80,7 @@
     revealedIds = next;
   }
 
-  function formatDate(iso: string) {
-    return new Date(iso).toLocaleString('ru-RU', {
-      day: '2-digit', month: '2-digit',
-      hour: '2-digit', minute: '2-digit',
-    });
-  }
+  const formatDate = (iso: string) => formatDateTime(iso, $locale);
 </script>
 
 <Drawer bind:open title={$t('pwgen_title')}>

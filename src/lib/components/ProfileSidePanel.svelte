@@ -3,18 +3,19 @@
 
 <script lang="ts">
   import { tick } from 'svelte';
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
   import { api } from '$lib/api';
   import type { Profile, Proxy, WorkspaceColumn } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import Drawer from '$lib/components/ui/Drawer.svelte';
   import Modal from '$lib/Modal.svelte';
+  import Dialog from '$lib/components/ui/Dialog.svelte';
   import ExportProfileModal from '$lib/components/ExportProfileModal.svelte';
   import TotpPanel from '$lib/components/TotpPanel.svelte';
   import NotesPanel from '$lib/components/notes/NotesPanel.svelte';
   import { notesStore } from '$lib/store/notes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
-  import { formatError } from '$lib/utils';
+  import { formatError, relTime as fmtRelTime, formatDateTime } from '$lib/utils';
   import SshProfileTab from '$lib/components/ssh/SshProfileTab.svelte';
 
   interface Props {
@@ -46,17 +47,7 @@
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
   );
 
-  function relTime(iso: string): string {
-    const diff = Date.now() - new Date(iso).getTime();
-    const m = Math.floor(diff / 60000);
-    if (m < 1) return $t('notes_time_just_now');
-    if (m < 60) return $t('notes_time_m_ago', { m: String(m) });
-    const h = Math.floor(m / 60);
-    if (h < 24) return $t('notes_time_h_ago', { h: String(h) });
-    const d = Math.floor(h / 24);
-    if (d < 7) return $t('notes_time_d_ago', { d: String(d) });
-    return new Date(iso).toLocaleDateString();
-  }
+  const relTime = (iso: string): string => fmtRelTime(iso, $locale);
   let actionLoading = $state(false);
   let deleteModal = $state(false);
   let exportModal = $state(false);
@@ -90,10 +81,7 @@
     finally { tagsLoading = false; }
   }
 
-  function formatDate(d: string | null) {
-    if (!d) return $t('panel_never');
-    return new Date(d).toLocaleString();
-  }
+  const formatDate = (d: string | null) => (d ? formatDateTime(d, $locale) : $t('panel_never'));
 
   function getOsLabel(preset: string) {
     const map: Record<string, string> = {
@@ -407,28 +395,22 @@
   onclose={() => (exportModal = false)}
 />
 
-{#if cookieImportResult}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <div class="cookie-result-backdrop" onclick={(e) => { if (e.target === e.currentTarget) cookieImportResult = null; }} role="presentation" tabindex="-1">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions a11y_interactive_supports_focus -->
-    <div class="cookie-result-modal" role="dialog" tabindex="-1">
-      <div class="crm-header">
-        <Icon name="check-circle" size={16} />
-        <span>Cookies imported</span>
+<Dialog open={!!cookieImportResult} title="Cookies imported" width="340px" onclose={() => (cookieImportResult = null)}>
+  {#if cookieImportResult}
+    <div class="crm-count">{cookieImportResult.count} cookies</div>
+    {#if cookieImportResult.domains.length > 0}
+      <div class="crm-domains-label">Domains ({cookieImportResult.domains.length}{cookieImportResult.domains.length === 20 ? '+' : ''}):</div>
+      <div class="crm-domains">
+        {#each cookieImportResult.domains as d}
+          <span class="crm-domain">{d}</span>
+        {/each}
       </div>
-      <div class="crm-count">{cookieImportResult.count} cookies</div>
-      {#if cookieImportResult.domains.length > 0}
-        <div class="crm-domains-label">Domains ({cookieImportResult.domains.length}{cookieImportResult.domains.length === 20 ? '+' : ''}):</div>
-        <div class="crm-domains">
-          {#each cookieImportResult.domains as d}
-            <span class="crm-domain">{d}</span>
-          {/each}
-        </div>
-      {/if}
-      <button class="btn btn-ghost crm-ok" onclick={() => (cookieImportResult = null)}>OK</button>
-    </div>
-  </div>
-{/if}
+    {/if}
+  {/if}
+  {#snippet footer()}
+    <button class="btn btn-ghost" onclick={() => (cookieImportResult = null)}>OK</button>
+  {/snippet}
+</Dialog>
 
 <NotesPanel
   bind:open={notesOpen}
@@ -637,43 +619,12 @@
   .btn-delete { color: var(--danger-text) !important; }
   .btn-delete:hover:not(:disabled) { background: var(--danger-bg) !important; border-color: color-mix(in srgb, var(--danger) 35%, var(--border)) !important; }
 
-  .cookie-result-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.45);
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .cookie-result-modal {
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow-lg);
-    padding: var(--sp-5) var(--sp-6);
-    min-width: 260px;
-    max-width: 340px;
-    display: flex;
-    flex-direction: column;
-    gap: 0.65rem;
-  }
-
-  .crm-header {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    font-weight: 700;
-    font-size: var(--fs-md);
-    color: var(--success-text);
-  }
-
   .crm-count {
     font-size: var(--fs-xl);
     font-weight: 800;
     color: var(--text);
     line-height: 1;
+    margin-bottom: 0.65rem;
   }
 
   .crm-domains-label {
@@ -682,6 +633,7 @@
     color: var(--text-3);
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    margin-bottom: var(--sp-1);
   }
 
   .crm-domains {
@@ -700,11 +652,6 @@
     padding: 0.1rem 0.4rem;
     color: var(--text-2);
     font-family: monospace;
-  }
-
-  .crm-ok {
-    align-self: flex-end;
-    margin-top: var(--sp-1);
   }
 
   /* Tags */

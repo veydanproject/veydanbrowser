@@ -245,3 +245,70 @@ pub fn search_engine_display_name(identifier: &str) -> &'static str {
         _ => "DuckDuckGo",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Profile, Proxy};
+
+    #[test]
+    fn webrtc_disable_turns_off_peerconnection() {
+        let mut p = Profile::test_default();
+        p.webrtc_mode = "disable".into();
+        let js = generate(&p, None);
+        assert!(js.contains("user_pref(\"media.peerconnection.enabled\", false);"));
+    }
+
+    #[test]
+    fn webrtc_proxy_only_masks_host_candidates() {
+        let mut p = Profile::test_default();
+        p.webrtc_mode = "proxy_only".into();
+        let js = generate(&p, None);
+        assert!(js.contains("user_pref(\"media.peerconnection.enabled\", true);"));
+        assert!(js.contains("user_pref(\"media.peerconnection.ice.no_host\", true);"));
+        assert!(js
+            .contains("user_pref(\"media.peerconnection.ice.default_address_only\", true);"));
+    }
+
+    #[test]
+    fn socks5_proxy_enables_remote_dns() {
+        let p = Profile::test_default();
+        let mut proxy = Proxy::test_default();
+        proxy.proxy_type = "socks5".into();
+        proxy.host = "10.0.0.1".into();
+        proxy.port = 9050;
+        let js = generate(&p, Some(&proxy));
+        assert!(js.contains("user_pref(\"network.proxy.socks\", \"10.0.0.1\");"));
+        assert!(js.contains("user_pref(\"network.proxy.socks_port\", 9050);"));
+        assert!(js.contains("user_pref(\"network.proxy.socks_remote_dns\", true);"));
+    }
+
+    #[test]
+    fn no_proxy_resets_proxy_type() {
+        let js = generate(&Profile::test_default(), None);
+        assert!(js.contains("user_pref(\"network.proxy.type\", 0);"));
+    }
+
+    #[test]
+    fn search_engine_display_name_maps() {
+        assert_eq!(search_engine_display_name("brave"), "Brave Search");
+        assert_eq!(search_engine_display_name("google"), "Google");
+        assert_eq!(search_engine_display_name("anything-else"), "DuckDuckGo");
+    }
+
+    #[test]
+    fn pref_string_escapes_quotes_and_backslashes() {
+        let out = pref_string("some.key", r#"a"b\c"#);
+        assert_eq!(out, r#"user_pref("some.key", "a\"b\\c");"#);
+    }
+
+    #[test]
+    fn user_chrome_escapes_label_and_omits_svg_when_empty() {
+        let with_label = camoufox_user_chrome("#000", "#fff", "a&b");
+        assert!(with_label.contains("a&amp;b"));
+        assert!(with_label.contains("url("));
+
+        let empty = camoufox_user_chrome("#000", "#fff", "");
+        assert!(!empty.contains("url("));
+    }
+}

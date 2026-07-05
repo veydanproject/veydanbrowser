@@ -5,6 +5,8 @@
   import { api } from '$lib/api';
   import type { NoteHistoryEntry, DiffLine, HistoryFilter, VersionType } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
+  import { locale } from '$lib/i18n';
+  import { relTime } from '$lib/utils';
 
   interface Props {
     noteId: string;
@@ -148,24 +150,7 @@
     onmerge(selectedA.id);
   }
 
-  function formatDate(iso: string): string {
-    const d = new Date(iso);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return 'только что';
-    if (diffMin < 60) return `${diffMin} мин назад`;
-    const diffH = Math.floor(diffMin / 60);
-    if (diffH < 24) return `${diffH} ч назад`;
-    const sameYear = d.getFullYear() === now.getFullYear();
-    return d.toLocaleDateString('ru', {
-      day: 'numeric',
-      month: 'short',
-      year: sameYear ? undefined : 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  }
+  const formatDate = (iso: string): string => relTime(iso, $locale);
 
   function dateGroupLabel(iso: string): string {
     const d = new Date(iso);

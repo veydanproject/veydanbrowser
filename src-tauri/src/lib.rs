@@ -15,7 +15,7 @@ use commands::camoufox::{
     camoufox_status, DownloadManager,
 };
 use commands::notes::{
-    note_archive, note_create, note_delete, note_draft_discard, note_draft_save, note_get,
+    note_archive, note_create, note_delete, note_draft_discard, note_draft_get, note_draft_save, note_get,
     note_list, note_open_external, note_open_folder, note_reindex, note_restore, note_search,
     note_set_tags, note_sync, note_tag_list, note_tag_create, note_tag_delete, note_tag_update,
     note_folder_list, note_folder_create, note_folder_update, note_folder_delete,
@@ -216,6 +216,7 @@ pub fn run() {
             note_open_folder,
             note_open_external,
             note_draft_save,
+            note_draft_get,
             note_draft_discard,
             note_tag_list,
             note_tag_create,

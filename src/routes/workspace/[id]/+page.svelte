@@ -160,7 +160,7 @@
   async function checkProxy(id: string) {
     proxyCheckResults = { ...proxyCheckResults, [id]: { ip: '', country: null, city: null, ok: false, checking: true } };
     try {
-      const result = await api.proxies.check(id);
+      const result = await proxiesStore.check(id);
       proxyCheckResults = { ...proxyCheckResults, [id]: { ...result, checking: false } };
 
       if (result.ssh_fingerprint_is_new && result.ssh_fingerprint) {
@@ -168,14 +168,10 @@
         return;
       }
 
-      proxiesStore.list = proxiesStore.list.map((p) => p.id === id
-        ? { ...p, status: 'active', last_ip: result.ip, country: p.country || result.country, city: p.city || result.city }
-        : p
-      );
       proxies = proxiesStore.byWorkspace(workspaceId);
     } catch (e) {
       proxyCheckResults = { ...proxyCheckResults, [id]: { ip: '', country: null, city: null, ok: false, checking: false, err: formatError(e) } };
-      proxiesStore.list = proxiesStore.list.map((p) => p.id === id ? { ...p, status: 'failed' } : p);
+      proxiesStore.markFailed(id);
       proxies = proxiesStore.byWorkspace(workspaceId);
     }
   }
@@ -184,11 +180,7 @@
     if (!fingerprintPrompt) return;
     const { id, fingerprint, ip, country, city } = fingerprintPrompt;
     try {
-      await api.proxies.trustFingerprint(id, fingerprint, ip, country, city);
-      proxiesStore.list = proxiesStore.list.map((p) => p.id === id
-        ? { ...p, status: 'active', last_ip: ip, server_fingerprint: fingerprint, country: p.country || country, city: p.city || city }
-        : p
-      );
+      await proxiesStore.trustFingerprint(id, fingerprint, ip, country, city);
       proxies = proxiesStore.byWorkspace(workspaceId);
     } catch (e) { console.error('trustFingerprint error:', e); }
     finally { fingerprintPrompt = null; }
@@ -196,18 +188,14 @@
 
   async function confirmDeleteProxy() {
     try {
-      await api.proxies.delete(proxyDeleteModal.id);
-      proxiesStore.list = proxiesStore.list.filter((p) => p.id !== proxyDeleteModal.id);
+      await proxiesStore.remove(proxyDeleteModal.id);
       proxies = proxiesStore.byWorkspace(workspaceId);
     } catch {}
     finally { proxyDeleteModal = { open: false, id: '', name: '' }; }
   }
 
   function onProxyPanelSaved(proxy: Proxy) {
-    const exists = proxiesStore.list.find((p) => p.id === proxy.id);
-    proxiesStore.list = exists
-      ? proxiesStore.list.map((p) => p.id === proxy.id ? proxy : p)
-      : [proxy, ...proxiesStore.list];
+    proxiesStore.upsert(proxy);
     proxies = proxiesStore.byWorkspace(workspaceId);
     proxyPanelProxy = undefined;
   }

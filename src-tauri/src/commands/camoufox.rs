@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
+use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -62,7 +63,7 @@ struct GhAsset {
 
 // ── Binary resolution ───────────────────────────────────────────────────────
 
-pub fn local_binary_path(app_data_dir: &PathBuf) -> PathBuf {
+pub fn local_binary_path(app_data_dir: &Path) -> PathBuf {
     let dir = app_data_dir.join("camoufox");
     if cfg!(target_os = "windows") {
         dir.join("camoufox.exe")
@@ -71,7 +72,7 @@ pub fn local_binary_path(app_data_dir: &PathBuf) -> PathBuf {
     }
 }
 
-pub fn resolve_binary(app_data_dir: &PathBuf) -> Option<PathBuf> {
+pub fn resolve_binary(app_data_dir: &Path) -> Option<PathBuf> {
     let local = local_binary_path(app_data_dir);
     if local.exists() {
         return Some(local);
@@ -607,8 +608,10 @@ pub struct CamoufoxStatus {
 }
 
 #[tauri::command]
-pub async fn camoufox_status(state: tauri::State<'_, AppState>) -> Result<CamoufoxStatus, String> {
-    match resolve_binary(&state.app_data_dir) {
+pub async fn camoufox_status(state: tauri::State<'_, AppState>) -> CmdResult<CamoufoxStatus> {
+    let app_data_dir = state.app_data_dir.clone();
+    // Blocking: spawns `camoufox --version` and reads version.txt
+    tokio::task::spawn_blocking(move || match resolve_binary(&app_data_dir) {
         Some(path) => {
             let version = std::process::Command::new(&path)
                 .arg("--version")
@@ -619,42 +622,43 @@ pub async fn camoufox_status(state: tauri::State<'_, AppState>) -> Result<Camouf
                 .filter(|s| !s.is_empty());
 
             let camoufox_tag =
-                std::fs::read_to_string(state.app_data_dir.join("camoufox").join("version.txt"))
+                std::fs::read_to_string(app_data_dir.join("camoufox").join("version.txt"))
                     .ok()
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
 
-            Ok(CamoufoxStatus {
+            CamoufoxStatus {
                 installed: true,
                 version,
                 camoufox_tag,
                 path: Some(path.to_string_lossy().to_string()),
-            })
+            }
         }
-        None => Ok(CamoufoxStatus {
+        None => CamoufoxStatus {
             installed: false,
             version: None,
             camoufox_tag: None,
             path: None,
-        }),
-    }
+        },
+    })
+    .await
+    .map_err(AppError::other)
 }
 
 #[tauri::command]
-pub async fn camoufox_latest_version() -> Result<String, String> {
+pub async fn camoufox_latest_version() -> CmdResult<String> {
     let client = reqwest::Client::builder()
         .user_agent("VeydanBrowser/1.0")
-        .build()
-        .map_err(|e| e.to_string())?;
+        .build()?;
 
     let release: GhRelease = client
         .get("https://api.github.com/repos/daijro/camoufox/releases/latest")
         .send()
         .await
-        .map_err(|e| format!("Network error: {e}"))?
+        .map_err(|e| AppError::other(format!("Network error: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("Parse error: {e}"))?;
+        .map_err(|e| AppError::other(format!("Parse error: {e}")))?;
 
     Ok(release.tag_name)
 }
@@ -662,12 +666,12 @@ pub async fn camoufox_latest_version() -> Result<String, String> {
 #[tauri::command]
 pub async fn camoufox_download_state(
     state: tauri::State<'_, AppState>,
-) -> Result<DownloadState, String> {
+) -> CmdResult<DownloadState> {
     Ok(state.download.state.lock().await.clone())
 }
 
 #[tauri::command]
-pub async fn camoufox_download_cancel(state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn camoufox_download_cancel(state: tauri::State<'_, AppState>) -> CmdResult<()> {
     let mut tx = state.download.cancel_tx.lock().await;
     if let Some(sender) = tx.take() {
         sender.send(()).ok();
@@ -680,12 +684,12 @@ pub async fn camoufox_download_cancel(state: tauri::State<'_, AppState>) -> Resu
 pub async fn camoufox_download(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+) -> CmdResult<()> {
     // Don't start if already downloading
     {
         let current = state.download.state.lock().await;
         if matches!(*current, DownloadState::Downloading { .. }) {
-            return Err("Download already in progress".into());
+            return Err(AppError::other("Download already in progress"));
         }
     }
 
@@ -830,13 +834,33 @@ async fn run_download(
 
     drop(file);
 
-    // Extract zip
+    // Extract zip + patch — heavy synchronous IO, moved off the async worker
     app.emit("camoufox://extracting", ()).ok();
 
+    {
+        let tmp_path = tmp_path.clone();
+        let app_data_dir = app_data_dir.clone();
+        let version = version.clone();
+        tokio::task::spawn_blocking(move || extract_and_install(&tmp_path, &app_data_dir, &version))
+            .await
+            .map_err(|e| format!("Extraction task failed: {e}"))??;
+    }
+
+    Ok(version)
+}
+
+/// Synchronous tail of the download: zip validation + extraction, permissions,
+/// omni.ja/chrome.css/policies patching and marker files. Runs inside
+/// `spawn_blocking` — everything here is blocking `std::fs`/zip IO.
+fn extract_and_install(
+    tmp_path: &Path,
+    app_data_dir: &Path,
+    version: &str,
+) -> Result<(), String> {
     let dest_dir = app_data_dir.join("camoufox");
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
 
-    let zip_file = std::fs::File::open(&tmp_path).map_err(|e| format!("Cannot open zip: {e}"))?;
+    let zip_file = std::fs::File::open(tmp_path).map_err(|e| format!("Cannot open zip: {e}"))?;
     let mut archive = zip::ZipArchive::new(zip_file).map_err(|e| format!("Bad zip: {e}"))?;
 
     // Security: validate all paths before extracting (prevent Zip Slip)
@@ -876,12 +900,12 @@ async fn run_download(
         }
     }
 
-    std::fs::remove_file(&tmp_path).ok();
+    std::fs::remove_file(tmp_path).ok();
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let binary = local_binary_path(&app_data_dir);
+        let binary = local_binary_path(app_data_dir);
         if binary.exists() {
             let mut perms = std::fs::metadata(&binary)
                 .map_err(|e| e.to_string())?
@@ -891,7 +915,7 @@ async fn run_download(
         }
     }
 
-    let binary = local_binary_path(&app_data_dir);
+    let binary = local_binary_path(app_data_dir);
     if !binary.exists() {
         return Err(format!(
             "Binary not found after extraction at {}",
@@ -908,9 +932,9 @@ async fn run_download(
     let mtime = file_mtime_secs(&omni_path);
     std::fs::write(patch_marker_path(&dest_dir), mtime.to_string()).ok();
 
-    std::fs::write(dest_dir.join("version.txt"), &version).ok();
+    std::fs::write(dest_dir.join("version.txt"), version).ok();
 
-    Ok(version)
+    Ok(())
 }
 
 /// Reads a mozlz4 file and returns the decompressed bytes.

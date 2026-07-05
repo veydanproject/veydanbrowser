@@ -8,7 +8,7 @@
   import { t } from '$lib/i18n';
   import type { Workspace, WorkspaceStats, CreateWorkspaceRequest } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
-  import Modal from '$lib/Modal.svelte';
+  import Dialog from '$lib/components/ui/Dialog.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { proxiesStore } from '$lib/store/proxies.svelte';
@@ -162,8 +162,7 @@
     if (!createForm.name.trim()) return;
     saving = true;
     try {
-      const w = await api.workspaces.create(createForm);
-      workspacesStore.list = [...workspacesStore.list, w];
+      const w = await workspacesStore.create(createForm);
       workspaces = applyOrder(workspacesStore.list);
       stats = { ...stats, [w.id]: { id: w.id, profile_count: 0, proxy_count: 0, active_count: 0 } };
       saveOrder();
@@ -183,12 +182,11 @@
   async function saveEdit() {
     saving = true;
     try {
-      const updated = await api.workspaces.update(editModal.id, {
+      const updated = await workspacesStore.update(editModal.id, {
         name: editModal.name,
         description: editModal.description || null,
         color: editModal.color,
       });
-      workspacesStore.list = workspacesStore.list.map((w) => (w.id === updated.id ? updated : w));
       workspaces = workspaces.map((w) => (w.id === updated.id ? updated : w));
       editModal = { open: false, id: '', name: '', description: '', color: '#6366f1' };
     } catch (e) {
@@ -204,8 +202,7 @@
 
   async function confirmDelete(mode: 'move_to_default' | 'delete_all') {
     try {
-      await api.workspaces.delete(deleteModal.id, mode);
-      workspacesStore.list = workspacesStore.list.filter((w) => w.id !== deleteModal.id);
+      await workspacesStore.remove(deleteModal.id, mode);
       workspaces = workspaces.filter((w) => w.id !== deleteModal.id);
       const { [deleteModal.id]: _, ...rest } = stats;
       stats = rest;
@@ -331,162 +328,130 @@
 {/if}
 
 <!-- Create Workspace Modal -->
-{#if createModal}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <div class="overlay" onclick={() => (createModal = false)} onkeydown={(e) => e.key === 'Escape' && (createModal = false)} role="presentation" tabindex="-1">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-    <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" tabindex="-1" aria-labelledby="create-modal-title">
-      <div class="modal-header">
-        <h3 id="create-modal-title">New Workspace</h3>
-        <button class="icon-btn" onclick={() => (createModal = false)} aria-label="Close"><Icon name="x" size={15} /></button>
-      </div>
-      <div class="modal-body">
-        <div class="form-group">
-          <label for="ws-name">{$t('workspaces_form_name')}</label>
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            id="ws-name"
-            type="text"
-            bind:value={createForm.name}
-            placeholder={$t('workspaces_form_name_placeholder')}
-            autofocus
-          />
-        </div>
-        <div class="form-group">
-          <label for="ws-desc">{$t('workspaces_form_desc')}</label>
-          <input id="ws-desc" type="text" bind:value={createForm.description} placeholder="…" />
-        </div>
-        <div class="form-group">
-          <label for="ws-color">{$t('workspaces_form_color')}</label>
-          <div id="ws-color" class="color-picker" role="group" aria-label={$t('workspaces_form_color')}>
-            {#each COLORS as c}
-              <button
-                class="color-swatch"
-                class:selected={createForm.color === c}
-                style="background: {c}"
-                aria-label="Color {c}"
-                aria-pressed={createForm.color === c}
-                onclick={() => (createForm.color = c)}
-              ></button>
-            {/each}
-            <label
-              class="color-swatch color-swatch-custom"
-              class:selected={!COLORS.includes(createForm.color ?? '')}
-              title="Custom color"
-              aria-label="Custom color"
-            >
-              <input type="color" bind:value={createForm.color} />
-              {#if !COLORS.includes(createForm.color ?? '')}
-                <span class="custom-dot" style="background:{createForm.color}"></span>
-              {/if}
-            </label>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" onclick={() => (createModal = false)}>{$t('workspaces_btn_cancel')}</button>
-        <button class="btn btn-primary" disabled={saving || !createForm.name.trim()} onclick={createWorkspace}>
-          {saving ? '…' : $t('workspaces_btn_create')}
-        </button>
-      </div>
+<Dialog bind:open={createModal} title={$t('workspaces_new')}>
+  <div class="ws-form">
+  <div class="form-group">
+    <label for="ws-name">{$t('workspaces_form_name')}</label>
+    <!-- svelte-ignore a11y_autofocus -->
+    <input
+      id="ws-name"
+      type="text"
+      bind:value={createForm.name}
+      placeholder={$t('workspaces_form_name_placeholder')}
+      autofocus
+    />
+  </div>
+  <div class="form-group">
+    <label for="ws-desc">{$t('workspaces_form_desc')}</label>
+    <input id="ws-desc" type="text" bind:value={createForm.description} placeholder="…" />
+  </div>
+  <div class="form-group">
+    <label for="ws-color">{$t('workspaces_form_color')}</label>
+    <div id="ws-color" class="color-picker" role="group" aria-label={$t('workspaces_form_color')}>
+      {#each COLORS as c}
+        <button
+          class="color-swatch"
+          class:selected={createForm.color === c}
+          style="background: {c}"
+          aria-label="Color {c}"
+          aria-pressed={createForm.color === c}
+          onclick={() => (createForm.color = c)}
+        ></button>
+      {/each}
+      <label
+        class="color-swatch color-swatch-custom"
+        class:selected={!COLORS.includes(createForm.color ?? '')}
+        title="Custom color"
+        aria-label="Custom color"
+      >
+        <input type="color" bind:value={createForm.color} />
+        {#if !COLORS.includes(createForm.color ?? '')}
+          <span class="custom-dot" style="background:{createForm.color}"></span>
+        {/if}
+      </label>
     </div>
   </div>
-{/if}
+  </div>
+  {#snippet footer()}
+    <button class="btn btn-ghost" onclick={() => (createModal = false)}>{$t('workspaces_btn_cancel')}</button>
+    <button class="btn btn-primary" disabled={saving || !createForm.name.trim()} onclick={createWorkspace}>
+      {saving ? '…' : $t('workspaces_btn_create')}
+    </button>
+  {/snippet}
+</Dialog>
 
 <!-- Edit Workspace Modal -->
-{#if editModal.open}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <div class="overlay" onclick={() => (editModal = { ...editModal, open: false })} onkeydown={(e) => e.key === 'Escape' && (editModal = { ...editModal, open: false })} role="presentation" tabindex="-1">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-    <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" tabindex="-1" aria-labelledby="edit-modal-title">
-      <div class="modal-header">
-        <h3 id="edit-modal-title">{$t('workspaces_btn_edit')}</h3>
-        <button class="icon-btn" onclick={() => (editModal = { ...editModal, open: false })} aria-label="Close"><Icon name="x" size={15} /></button>
-      </div>
-      <div class="modal-body">
-        <div class="form-group">
-          <label for="edit-name">{$t('workspaces_form_name')}</label>
-          <input id="edit-name" type="text" bind:value={editModal.name} />
-        </div>
-        <div class="form-group">
-          <label for="edit-desc">{$t('workspaces_form_desc')}</label>
-          <input id="edit-desc" type="text" bind:value={editModal.description} />
-        </div>
-        <div class="form-group">
-          <label for="edit-color">{$t('workspaces_form_color')}</label>
-          <div id="edit-color" class="color-picker" role="group" aria-label={$t('workspaces_form_color')}>
-            {#each COLORS as c}
-              <button
-                class="color-swatch"
-                class:selected={editModal.color === c}
-                style="background: {c}"
-                aria-label="Color {c}"
-                aria-pressed={editModal.color === c}
-                onclick={() => (editModal.color = c)}
-              ></button>
-            {/each}
-            <label
-              class="color-swatch color-swatch-custom"
-              class:selected={!COLORS.includes(editModal.color)}
-              title="Custom color"
-              aria-label="Custom color"
-            >
-              <input type="color" bind:value={editModal.color} />
-              {#if !COLORS.includes(editModal.color)}
-                <span class="custom-dot" style="background:{editModal.color}"></span>
-              {/if}
-            </label>
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" onclick={() => (editModal = { ...editModal, open: false })}>{$t('workspaces_btn_cancel')}</button>
-        <button class="btn btn-primary" disabled={saving} onclick={saveEdit}>
-          {saving ? '…' : $t('workspaces_btn_save')}
-        </button>
-      </div>
+<Dialog open={editModal.open} title={$t('workspaces_btn_edit')} onclose={() => (editModal = { ...editModal, open: false })}>
+  <div class="ws-form">
+  <div class="form-group">
+    <label for="edit-name">{$t('workspaces_form_name')}</label>
+    <input id="edit-name" type="text" bind:value={editModal.name} />
+  </div>
+  <div class="form-group">
+    <label for="edit-desc">{$t('workspaces_form_desc')}</label>
+    <input id="edit-desc" type="text" bind:value={editModal.description} />
+  </div>
+  <div class="form-group">
+    <label for="edit-color">{$t('workspaces_form_color')}</label>
+    <div id="edit-color" class="color-picker" role="group" aria-label={$t('workspaces_form_color')}>
+      {#each COLORS as c}
+        <button
+          class="color-swatch"
+          class:selected={editModal.color === c}
+          style="background: {c}"
+          aria-label="Color {c}"
+          aria-pressed={editModal.color === c}
+          onclick={() => (editModal.color = c)}
+        ></button>
+      {/each}
+      <label
+        class="color-swatch color-swatch-custom"
+        class:selected={!COLORS.includes(editModal.color)}
+        title="Custom color"
+        aria-label="Custom color"
+      >
+        <input type="color" bind:value={editModal.color} />
+        {#if !COLORS.includes(editModal.color)}
+          <span class="custom-dot" style="background:{editModal.color}"></span>
+        {/if}
+      </label>
     </div>
   </div>
-{/if}
+  </div>
+  {#snippet footer()}
+    <button class="btn btn-ghost" onclick={() => (editModal = { ...editModal, open: false })}>{$t('workspaces_btn_cancel')}</button>
+    <button class="btn btn-primary" disabled={saving} onclick={saveEdit}>
+      {saving ? '…' : $t('workspaces_btn_save')}
+    </button>
+  {/snippet}
+</Dialog>
 
 <!-- Delete Workspace Modal -->
-{#if deleteModal.open}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <div class="overlay" onclick={() => (deleteModal = { ...deleteModal, open: false })} onkeydown={(e) => e.key === 'Escape' && (deleteModal = { ...deleteModal, open: false })} role="presentation" tabindex="-1">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-    <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog" tabindex="-1" aria-labelledby="delete-modal-title">
-      <div class="modal-header">
-        <h3 id="delete-modal-title">{$t('workspaces_btn_delete')}</h3>
-        <button class="icon-btn" onclick={() => (deleteModal = { ...deleteModal, open: false })} aria-label="Close"><Icon name="x" size={15} /></button>
+<Dialog open={deleteModal.open} title={$t('workspaces_btn_delete')} onclose={() => (deleteModal = { ...deleteModal, open: false })}>
+  <p class="delete-warning">
+    <Icon name="alert-triangle" size={16} />
+    Delete <strong>{deleteModal.name}</strong>?
+  </p>
+  <div class="delete-options">
+    <button class="delete-option" onclick={() => confirmDelete('move_to_default')}>
+      <Icon name="arrow-left" size={14} />
+      <div>
+        <div class="option-title">{$t('workspaces_delete_move')}</div>
+        <div class="option-desc">Profiles and proxies will be moved to Default workspace</div>
       </div>
-      <div class="modal-body">
-        <p class="delete-warning">
-          <Icon name="alert-triangle" size={16} />
-          Delete <strong>{deleteModal.name}</strong>?
-        </p>
-        <div class="delete-options">
-          <button class="delete-option" onclick={() => confirmDelete('move_to_default')}>
-            <Icon name="arrow-left" size={14} />
-            <div>
-              <div class="option-title">{$t('workspaces_delete_move')}</div>
-              <div class="option-desc">Profiles and proxies will be moved to Default workspace</div>
-            </div>
-          </button>
-          <button class="delete-option danger" onclick={() => confirmDelete('delete_all')}>
-            <Icon name="trash-2" size={14} />
-            <div>
-              <div class="option-title">{$t('workspaces_delete_all')}</div>
-              <div class="option-desc">All profiles and proxies will be permanently deleted</div>
-            </div>
-          </button>
-        </div>
+    </button>
+    <button class="delete-option danger" onclick={() => confirmDelete('delete_all')}>
+      <Icon name="trash-2" size={14} />
+      <div>
+        <div class="option-title">{$t('workspaces_delete_all')}</div>
+        <div class="option-desc">All profiles and proxies will be permanently deleted</div>
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-ghost" onclick={() => (deleteModal = { ...deleteModal, open: false })}>{$t('workspaces_btn_cancel')}</button>
-      </div>
-    </div>
+    </button>
   </div>
-{/if}
+  {#snippet footer()}
+    <button class="btn btn-ghost" onclick={() => (deleteModal = { ...deleteModal, open: false })}>{$t('workspaces_btn_cancel')}</button>
+  {/snippet}
+</Dialog>
 
 <style>
   /* ── Grid ── */
@@ -631,30 +596,8 @@
   }
   .add-card:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
 
-  /* ── Modals ── */
-  .overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 100; backdrop-filter: blur(2px);
-  }
-
-  .modal {
-    background: var(--bg-2); border: 1px solid var(--border);
-    border-radius: var(--radius); box-shadow: var(--shadow-lg);
-    width: 400px; max-width: 95vw;
-    display: flex; flex-direction: column;
-    overflow: hidden;
-  }
-
-  .modal-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: var(--sp-4) var(--sp-5);
-    border-bottom: 1px solid var(--border);
-  }
-  .modal-header h3 { font-size: var(--fs-md); font-weight: 600; }
-
-  .modal-body { padding: var(--sp-5); display: flex; flex-direction: column; gap: 0.875rem; }
-  .modal-footer { padding: 0.875rem var(--sp-5); border-top: 1px solid var(--border); display: flex; gap: var(--sp-2); justify-content: flex-end; }
+  /* ── Modal form layout (dialog body) ── */
+  .ws-form { display: flex; flex-direction: column; gap: 0.875rem; }
 
   .color-picker { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
   .color-swatch {

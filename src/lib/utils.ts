@@ -9,3 +9,57 @@ export function formatError(e: unknown): string {
   }
   return String(e);
 }
+
+// ── Date/time formatting ─────────────────────────────────────────────────────
+// Helpers follow the app UI locale ('en' | 'ru' from i18n). Callers pass the
+// current `$locale`; we map it to a BCP-47 tag for Intl. Previously each screen
+// re-implemented these with divergent (and sometimes hardcoded 'ru') formats.
+
+const LOCALE_TAG: Record<string, string> = { en: 'en-US', ru: 'ru-RU' };
+
+function tag(locale: string | undefined): string {
+  return (locale && LOCALE_TAG[locale]) || locale || 'en-US';
+}
+
+function toDate(value: string | number | null | undefined): Date | null {
+  if (value == null || value === '') return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** Date only, e.g. "05.07.2026" / "7/5/2026". Empty string for null/invalid. */
+export function formatDate(iso: string | null | undefined, locale: string): string {
+  const d = toDate(iso);
+  return d ? d.toLocaleDateString(tag(locale)) : '';
+}
+
+/** Date + time, e.g. "05.07.2026, 14:30". Empty string for null/invalid. */
+export function formatDateTime(iso: string | null | undefined, locale: string): string {
+  const d = toDate(iso);
+  return d ? d.toLocaleString(tag(locale)) : '';
+}
+
+/** UNIX-epoch (seconds) → localized date. Empty string for null/invalid. */
+export function formatEpochDate(seconds: number | null | undefined, locale: string): string {
+  if (seconds == null) return '';
+  const d = toDate(seconds * 1000);
+  return d ? d.toLocaleDateString(tag(locale)) : '';
+}
+
+/**
+ * Relative time ("2 minutes ago", "just now"), localized via Intl. Falls back
+ * to an absolute date once older than 7 days. Empty string for null/invalid.
+ */
+export function relTime(iso: string | null | undefined, locale: string): string {
+  const d = toDate(iso);
+  if (!d) return '';
+  const diffMs = d.getTime() - Date.now();
+  const abs = Math.abs(diffMs);
+  const MIN = 60_000, HOUR = 3_600_000, DAY = 86_400_000;
+  const rtf = new Intl.RelativeTimeFormat(tag(locale), { numeric: 'auto' });
+  if (abs < MIN) return rtf.format(Math.round(diffMs / 1000), 'second');
+  if (abs < HOUR) return rtf.format(Math.round(diffMs / MIN), 'minute');
+  if (abs < DAY) return rtf.format(Math.round(diffMs / HOUR), 'hour');
+  if (abs < 7 * DAY) return rtf.format(Math.round(diffMs / DAY), 'day');
+  return d.toLocaleDateString(tag(locale));
+}

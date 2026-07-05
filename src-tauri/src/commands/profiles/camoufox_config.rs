@@ -110,3 +110,69 @@ pub fn build_camoufox_config(profile: &Profile, win_size: Option<(i64, i64)>) ->
 
     cfg
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seed_is_deterministic_and_derived_from_id() {
+        let p = Profile::test_default();
+        let a = build_camoufox_config(&p, None);
+        let b = build_camoufox_config(&p, None);
+        // Same profile id → identical fingerprint seeds across calls
+        assert_eq!(a["canvas:seed"], b["canvas:seed"]);
+
+        let seed = a["canvas:seed"].as_u64().unwrap();
+        assert_eq!(a["audio:seed"].as_u64().unwrap(), seed + 1);
+        assert_eq!(a["fonts:spacing_seed"].as_u64().unwrap(), seed + 2);
+    }
+
+    #[test]
+    fn different_ids_yield_different_seeds() {
+        let mut p1 = Profile::test_default();
+        p1.id = "profile-aaaa".into();
+        let mut p2 = Profile::test_default();
+        p2.id = "profile-bbbb".into();
+        assert_ne!(
+            build_camoufox_config(&p1, None)["canvas:seed"],
+            build_camoufox_config(&p2, None)["canvas:seed"]
+        );
+    }
+
+    #[test]
+    fn default_window_size_and_avail_height() {
+        let p = Profile::test_default();
+        let cfg = build_camoufox_config(&p, None);
+        assert_eq!(cfg["window.outerWidth"], 1280);
+        assert_eq!(cfg["window.outerHeight"], 760);
+        // availHeight is screen height minus a 48px taskbar allowance
+        assert_eq!(cfg["screen.availHeight"], p.screen_height - 48);
+    }
+
+    #[test]
+    fn explicit_window_size_overrides_default() {
+        let p = Profile::test_default();
+        let cfg = build_camoufox_config(&p, Some((1600, 900)));
+        assert_eq!(cfg["window.outerWidth"], 1600);
+        assert_eq!(cfg["window.outerHeight"], 900);
+    }
+
+    #[test]
+    fn language_matches_first_of_languages() {
+        let mut p = Profile::test_default();
+        p.languages = "fr-FR,fr,en".into();
+        let cfg = build_camoufox_config(&p, None);
+        assert_eq!(cfg["navigator.language"], "fr-FR");
+        assert_eq!(cfg["navigator.languages"][0], "fr-FR");
+        assert_eq!(cfg["navigator.languages"][2], "en");
+    }
+
+    #[test]
+    fn timezone_present_only_when_set() {
+        let mut p = Profile::test_default();
+        assert!(build_camoufox_config(&p, None).get("timezone").is_none());
+        p.timezone = Some("Europe/Paris".into());
+        assert_eq!(build_camoufox_config(&p, None)["timezone"], "Europe/Paris");
+    }
+}

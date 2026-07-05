@@ -182,6 +182,70 @@ pub struct Proxy {
     pub created_at: DateTime<Utc>,
 }
 
+#[cfg(test)]
+impl Profile {
+    /// Baseline profile for unit tests — clone and override fields as needed.
+    pub fn test_default() -> Self {
+        Self {
+            id: "test-profile-id".into(),
+            name: "Test".into(),
+            status: "stopped".into(),
+            profile_path: "/tmp/test-profile".into(),
+            browser_type: "camoufox".into(),
+            proxy_id: None,
+            fingerprint_preset: "linux".into(),
+            user_agent: None,
+            platform: None,
+            timezone: None,
+            locale: "en-US".into(),
+            languages: "en-US,en".into(),
+            screen_width: 1920,
+            screen_height: 1080,
+            webrtc_mode: "disable".into(),
+            geolocation_enabled: false,
+            latitude: None,
+            longitude: None,
+            webgl_vendor: None,
+            webgl_renderer: None,
+            notes: None,
+            workspace_id: None,
+            kanban_status: "new".into(),
+            kanban_order: 0,
+            tags: "[]".into(),
+            default_search_engine: "ddg".into(),
+            history_enabled: true,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            last_launch_at: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Proxy {
+    /// Baseline proxy for unit tests — clone and override fields as needed.
+    pub fn test_default() -> Self {
+        Self {
+            id: "test-proxy-id".into(),
+            name: "Test proxy".into(),
+            proxy_type: "socks5".into(),
+            host: "127.0.0.1".into(),
+            port: 1080,
+            username: None,
+            password: None,
+            country: None,
+            city: None,
+            status: "unknown".into(),
+            last_ip: None,
+            last_check_at: None,
+            private_key: None,
+            server_fingerprint: None,
+            tags: "[]".into(),
+            created_at: chrono::Utc::now(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateProxyRequest {
     pub name: String,

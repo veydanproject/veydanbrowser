@@ -212,18 +212,25 @@ class NotesStore {
     const content = this._pendingContent;
     const title = this._pendingTitle;
     if (content === null && title === null) return;
+    const noteId = this.activeNoteId;
     this.saveStatus = 'saving';
     this._ownSaveTs = Date.now();
+    // Clear pending + stop the draft ticker BEFORE awaiting. The backend save
+    // deletes the .draft file; if the 1s interval fired during the await it would
+    // re-create it afterwards, leaving a stale draft and a false "draft found" banner.
+    this._pendingContent = null;
+    this._pendingTitle = null;
+    this._stopDraftInterval();
     try {
       const input: Record<string, unknown> = {};
       if (content !== null) input.content = content;
       if (title !== null) input.title = title;
-      const updated = await api.notes.update(this.activeNoteId, input);
-      this.activeNote = updated;
-      this._pendingContent = null;
-      this._pendingTitle = null;
-      this.saveStatus = 'saved';
-      this._stopDraftInterval();
+      const updated = await api.notes.update(noteId, input);
+      // Another note may have been opened while awaiting — don't clobber it.
+      if (this.activeNoteId === noteId) {
+        this.activeNote = updated;
+        this.saveStatus = 'saved';
+      }
       // Patch list item in-place to keep NoteListItem-only fields (e.g. preview)
       const idx = this.list.findIndex((n) => n.id === updated.id);
       if (idx >= 0) {
@@ -239,7 +246,12 @@ class NotesStore {
         };
       }
     } catch {
-      this.saveStatus = 'failed';
+      // Restore pending edits so a later autosave retries (unless newer edits arrived).
+      if (this.activeNoteId === noteId) {
+        if (content !== null && this._pendingContent === null) this._pendingContent = content;
+        if (title !== null && this._pendingTitle === null) this._pendingTitle = title;
+        this.saveStatus = 'failed';
+      }
     }
   }
 
@@ -364,7 +376,20 @@ class NotesStore {
   }
 
   async recoverDraft(id: string) {
-    this.activeNote = await api.notes.get(id);
+    const draft = await api.notes.draftGet(id);
+    if (this.activeNoteId !== id || !this.activeNote) return;
+    if (draft === null) {
+      // Stale flag — the draft file is already gone. Just clear the banner.
+      this.activeNote = { ...this.activeNote, has_draft: false };
+      return;
+    }
+    // Load the recovered draft into the editor as unsaved content, then let
+    // autosave persist it to the note file (which also removes the .draft).
+    this.activeNote = { ...this.activeNote, content: draft, has_draft: false };
+    this._pendingContent = draft;
+    this.saveStatus = 'unsaved';
+    this._scheduleAutosave();
+    this._startDraftInterval();
   }
 
   async discardDraft(id: string) {

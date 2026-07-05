@@ -191,6 +191,7 @@ export const api = {
     openFolder: () => call<void>('note_open_folder'),
     openExternal: (id: string) => call<void>('note_open_external', { id }),
     draftSave: (id: string, content: string) => call<void>('note_draft_save', { id, content }),
+    draftGet: (id: string) => call<string | null>('note_draft_get', { id }),
     draftDiscard: (id: string) => call<void>('note_draft_discard', { id }),
     tagList: () => call<NoteTag[]>('note_tag_list'),
     tagCreate: (name: string, color?: string) => call<NoteTag>('note_tag_create', { name, color }),

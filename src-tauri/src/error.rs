@@ -23,6 +23,36 @@ pub enum AppError {
 /// Standard result type for all Tauri commands.
 pub type CmdResult<T> = Result<T, AppError>;
 
+impl From<std::io::Error> for AppError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e.to_string())
+    }
+}
+
+impl From<sqlx::Error> for AppError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Db(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for AppError {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Other(e.to_string())
+    }
+}
+
+impl From<zip::result::ZipError> for AppError {
+    fn from(e: zip::result::ZipError) -> Self {
+        Self::Io(e.to_string())
+    }
+}
+
+impl From<reqwest::Error> for AppError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Other(e.to_string())
+    }
+}
+
 impl AppError {
     pub fn db(e: impl std::fmt::Display) -> Self {
         Self::Db(e.to_string())

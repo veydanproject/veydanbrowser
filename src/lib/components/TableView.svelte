@@ -3,9 +3,10 @@
 
 <script lang="ts">
   import type { Profile, Proxy, WorkspaceColumn } from '$lib/types';
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
   import { api } from '$lib/api';
   import Icon from '$lib/Icon.svelte';
+  import { formatDateTime } from '$lib/utils';
 
   interface Props {
     profiles: Profile[];
@@ -207,9 +208,7 @@
 
             <!-- Last Launch -->
             <td class="td-date">
-              {profile.last_launch_at
-                ? new Date(profile.last_launch_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                : '—'}
+              {profile.last_launch_at ? formatDateTime(profile.last_launch_at, $locale) : '—'}
             </td>
 
             <!-- Actions -->
