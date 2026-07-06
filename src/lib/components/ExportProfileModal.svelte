@@ -191,11 +191,12 @@
 <style>
   .profile-name {
     font-size: var(--fs-base);
-    color: var(--text-2);
-    background: var(--surface-2);
+    font-weight: var(--fw-semibold);
+    color: var(--text);
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.35rem 0.6rem;
+    border-radius: var(--radius);
+    padding: 0.45rem 0.75rem;
   }
 
   .options {
@@ -218,6 +219,7 @@
   .option-row input[type="checkbox"] {
     flex-shrink: 0;
     width: auto;
+    accent-color: var(--accent);
   }
 
   .hint { font-size: var(--fs-sm); color: var(--text-3); }
@@ -225,10 +227,11 @@
 
   .badge-sensitive {
     font-size: var(--fs-2xs);
+    font-weight: var(--fw-semibold);
     background: var(--danger-bg);
     color: var(--danger-text);
-    border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
-    border-radius: 3px;
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-xs);
     padding: 1px 5px;
   }
 
@@ -239,10 +242,10 @@
     padding-left: 1.4rem;
   }
 
-  /* JSON preview */
+  /* JSON preview — mono block on --surface-3, nested-card radius */
   .json-preview {
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     overflow: hidden;
   }
 
@@ -256,11 +259,11 @@
   }
 
   .json-preview-label {
-    font-size: var(--fs-xs);
-    font-weight: 600;
+    font-size: var(--fs-2xs);
+    font-weight: var(--fw-bold);
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-3);
+    letter-spacing: 0.7px;
+    color: var(--text-dim);
   }
 
   .copy-btn {
@@ -270,21 +273,22 @@
     background: none;
     border: none;
     font-size: var(--fs-sm);
-    color: var(--accent);
+    color: var(--accent-text-3);
     cursor: pointer;
     padding: 0.15rem 0.4rem;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
+    transition: all var(--dur-fast);
   }
   .copy-btn:hover { background: var(--accent-bg); }
 
   .json-area {
     width: 100%;
     height: 180px;
-    background: var(--bg);
+    background: var(--surface-3);
     border: none;
     color: var(--text);
     font-size: var(--fs-xs);
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-family: var(--font-mono);
     padding: 0.6rem var(--sp-3);
     resize: none;
     box-sizing: border-box;
@@ -297,7 +301,7 @@
     font-size: var(--fs-base);
     color: var(--success-text);
     background: var(--success-bg);
-    border: 1px solid color-mix(in srgb, var(--success) 25%, transparent);
+    border: 1px solid var(--success-border);
     border-radius: var(--radius-sm);
     padding: 0.4rem 0.6rem;
     word-break: break-all;

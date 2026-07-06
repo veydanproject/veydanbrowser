@@ -147,13 +147,14 @@
 
 <style>
   .count-badge {
-    background: var(--accent-bg);
-    color: var(--accent);
-    border: 1px solid var(--accent);
-    border-radius: 999px;
+    background: var(--accent-tint);
+    color: var(--accent-text-2);
+    border: 1px solid var(--accent-tint-border);
+    border-radius: var(--radius-sm);
     font-size: var(--fs-2xs);
+    font-family: var(--font-mono);
     padding: 0.05rem 0.4rem;
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
   }
 
   .panel-search {
@@ -179,14 +180,18 @@
     width: 100%;
     box-sizing: border-box;
     padding: 0.45rem 0.6rem 0.45rem var(--sp-8);
-    background: var(--surface);
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius);
     color: var(--text);
     font-size: var(--fs-sm);
   }
 
-  .search-input:focus { outline: none; border-color: var(--accent); }
+  .search-input:focus {
+    outline: none;
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 3px var(--accent-bg);
+  }
 
   .ws-chips {
     display: flex;
@@ -204,19 +209,19 @@
     padding: var(--sp-1) 0.6rem;
     font-size: var(--fs-xs);
     border: 1px solid var(--border);
-    border-radius: 999px;
-    background: none;
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
     cursor: pointer;
     color: var(--text-2);
-    transition: all 0.15s;
+    transition: all var(--dur-fast);
   }
 
-  .chip-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .chip-btn:hover { border-color: var(--border-2); color: var(--text); }
 
   .chip-btn.active {
-    background: var(--accent-bg);
-    border-color: var(--accent);
-    color: var(--accent);
+    background: var(--accent-tint);
+    border-color: var(--accent-tint-border);
+    color: var(--accent-text);
   }
 
   .ws-dot {
@@ -238,17 +243,20 @@
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    background: var(--accent);
+    background: var(--accent-grad);
     color: #fff;
     border: none;
-    border-radius: var(--radius-sm);
-    padding: 0.45rem var(--sp-4);
-    font-size: var(--fs-sm);
+    border-radius: var(--radius-field);
+    height: 42px;
+    padding: 0 var(--sp-4);
+    font-size: 0.9rem;
+    font-weight: var(--fw-semibold);
+    box-shadow: var(--shadow-accent);
     cursor: pointer;
     width: 100%;
     justify-content: center;
-    transition: background 0.15s;
+    transition: filter var(--dur-fast);
   }
 
-  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:hover { filter: brightness(1.08); }
 </style>

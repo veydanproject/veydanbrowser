@@ -11,8 +11,8 @@
   import { t } from '$lib/i18n';
 
   const TAG_COLORS = [
-    '#6366f1', '#3b82f6', '#06b6d4', '#10b981',
-    '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6',
+    '#8b7bff', '#60a5fa', '#2dd4bf', '#f472b6',
+    '#f5c451', '#34d399', '#f26d6d', '#f97316',
   ];
 
   interface Props {
@@ -171,6 +171,15 @@
 
   // ── Folder context menu ───────────────────────────────────────────────────────
   let openMenuKey      = $state<string | null>(null); // 'folder:id' | 'tag:path'
+  // Меню рендерится fixed (иначе его обрезает overflow-y скролл-контейнера .filters)
+  let menuPos          = $state({ x: 0, y: 0 });
+  function openMenuAt(e: MouseEvent, key: string) {
+    e.stopPropagation();
+    if (openMenuKey === key) { openMenuKey = null; return; }
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menuPos = { x: r.right, y: r.bottom + 4 };
+    openMenuKey = key;
+  }
   let hoveredFolderId  = $state<string | null>(null);
   let hoveredTagPath   = $state<string | null>(null);
 
@@ -384,13 +393,13 @@
           {/if}
           <button
             class="dots-btn"
-            onclick={(e) => { e.stopPropagation(); openMenuKey = openMenuKey === `folder:${f.id}` ? null : `folder:${f.id}`; }}
+            onclick={(e) => openMenuAt(e, `folder:${f.id}`)}
             title="Действия"
           >
             <Icon name="more-vertical" size={11} />
           </button>
           {#if openFolderMenuId === f.id}
-            <div class="folder-menu">
+            <div class="folder-menu" style="left:{menuPos.x}px; top:{menuPos.y}px">
               <button onclick={() => { openFolderModal(f.id); openMenuKey = null; }}>
                 <Icon name="folder-plus" size={11} /><span>Подпапка</span>
               </button>
@@ -455,13 +464,13 @@
           {#if node.tag}
             <button
               class="dots-btn"
-              onclick={(e) => { e.stopPropagation(); openMenuKey = openMenuKey === `tag:${node.fullPath}` ? null : `tag:${node.fullPath}`; }}
+              onclick={(e) => openMenuAt(e, `tag:${node.fullPath}`)}
               title="Действия"
             >
               <Icon name="more-vertical" size={11} />
             </button>
             {#if openTagMenuPath === node.fullPath}
-              <div class="folder-menu">
+              <div class="folder-menu" style="left:{menuPos.x}px; top:{menuPos.y}px">
                 <button onclick={(e) => { startEdit(node.tag!, e); openMenuKey = null; }}>
                   <Icon name="pencil" size={11} /><span>Редактировать</span>
                 </button>
@@ -738,27 +747,29 @@
   .nav-item {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.35rem var(--sp-2);
+    gap: 11px;
+    padding: 0.55rem var(--sp-3);
     border: none;
     background: none;
     cursor: pointer;
-    color: var(--text-2);
-    font-size: var(--fs-sm);
-    border-radius: var(--radius-sm);
+    color: var(--text-body);
+    font-size: 0.85rem;
+    font-weight: var(--fw-semibold);
+    border-radius: 9px;
     text-align: left;
     transition: background 0.1s, color 0.1s;
     width: 100%;
     min-width: 0;
   }
 
-  .nav-item:hover  { background: var(--surface); color: var(--text); }
-  .nav-item.active { background: var(--accent-bg); color: var(--accent); }
+  .nav-item:hover  { background: var(--surface-2); color: var(--text); }
+  .nav-item.active { background: var(--accent-bg); color: var(--accent-text); }
 
   .count {
     margin-left: auto;
     font-size: var(--fs-2xs);
-    color: var(--text-3);
+    font-weight: var(--fw-semibold);
+    color: var(--text-faint);
     background: var(--surface-2);
     border-radius: 50%;
     flex-shrink: 0;
@@ -769,7 +780,7 @@
     justify-content: center;
     padding: 0 0.15rem;
   }
-  .nav-item.active .count { background: var(--accent-bg); color: var(--accent); }
+  .nav-item.active .count { background: var(--accent-bg); color: var(--accent-text); }
 
   /* count в tree-row — компенсируем отсутствие padding кнопки */
   .tree-row > .count { margin-right: var(--sp-2); }
@@ -850,7 +861,7 @@
     align-items: center;
   }
   .action-btn:hover     { color: var(--text); background: var(--surface-2); }
-  .action-del:hover     { color: var(--danger, #ef4444); }
+  .action-del:hover     { color: var(--danger-text); }
 
   /* Count-wrap: цифровой индикатор + дропдаун действий для папок */
   .count-wrap {
@@ -894,15 +905,14 @@
   .count-wrap.menu-open .dots-btn  { display: flex; }
 
   .folder-menu {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 4px);
-    z-index: 200;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.2rem;
-    min-width: 130px;
+    position: fixed;
+    transform: translateX(-100%);
+    z-index: var(--z-popover);
+    background: var(--surface-drawer);
+    border: 1px solid var(--border-2);
+    border-radius: var(--radius);
+    padding: 4px;
+    min-width: 150px;
     box-shadow: var(--shadow-lg);
   }
 
@@ -910,13 +920,14 @@
     width: 100%;
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0.45rem;
+    gap: 0.5rem;
+    padding: 0.45rem 0.6rem;
     font-size: var(--fs-sm);
+    font-weight: var(--fw-medium);
     background: none;
     border: none;
-    border-radius: 4px;
-    color: var(--text-2);
+    border-radius: var(--radius-sm);
+    color: var(--text-body);
     cursor: pointer;
     text-align: left;
   }
@@ -943,12 +954,12 @@
 
   .edit-input {
     flex: 1;
-    background: var(--bg-3);
+    background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: var(--sp-1) 0.4rem;
     font-size: var(--fs-sm);
-    color: var(--text-1);
+    color: var(--text);
     outline: none;
     min-width: 0;
   }
@@ -981,7 +992,7 @@
     display: flex;
     align-items: center;
   }
-  .btn-add-area:hover { color: var(--accent); background: var(--bg-3); }
+  .btn-add-area:hover { color: var(--accent); background: var(--surface-2); }
 
   /* Кнопка добавления подтега внутри группы */
   .group-add-row { padding-top: 0.05rem; padding-bottom: 0.1rem; }

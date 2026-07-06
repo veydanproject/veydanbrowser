@@ -220,11 +220,11 @@
     <div class="ws-header">
       <div class="breadcrumb">
         <a href="/" class="back-link">
-          <Icon name="arrow-left" size={13} />
+          <Icon name="arrow-left" size={15} />
           {$t('back_workspaces')}
         </a>
-        <Icon name="chevron-right" size={13} />
-        <span class="ws-name" style="color: {workspace.color}">{workspace.name}</span>
+        <span class="crumb-sep">/</span>
+        <span class="ws-name">{workspace.name}</span>
       </div>
 
       <div class="ws-meta">
@@ -295,37 +295,37 @@
       </div>
     {/if}
 
-    <!-- Tabs + View Switcher -->
+    <!-- Tabs + View Switcher (segment controls per redesign) -->
     <div class="tabs-row">
-      <div class="tab-bar">
-        <button class="tab" class:active={tab === 'board'} onclick={() => (tab = 'board')}>
-          <Icon name="kanban" size={14} />{$t('workspace_tab_board')}
+      <div class="seg">
+        <button class="seg-btn" class:active={tab === 'board'} onclick={() => (tab = 'board')}>
+          <Icon name="columns" size={15} />{$t('workspace_tab_board')}
         </button>
-        <button class="tab" class:active={tab === 'proxies'} onclick={() => (tab = 'proxies')}>
-          <Icon name="globe" size={14} />{$t('workspace_tab_proxies')}
+        <button class="seg-btn" class:active={tab === 'proxies'} onclick={() => (tab = 'proxies')}>
+          <Icon name="globe" size={15} />{$t('workspace_tab_proxies')}
           <span class="tab-count">{proxies.length}</span>
         </button>
-        <button class="tab" class:active={tab === 'topology'} onclick={() => (tab = 'topology')}>
-          <Icon name="git-fork" size={14} />{$t('workspace_tab_topology')}
+        <button class="seg-btn" class:active={tab === 'topology'} onclick={() => (tab = 'topology')}>
+          <Icon name="git-fork" size={15} />{$t('workspace_tab_topology')}
         </button>
       </div>
 
-      <div class="view-switcher" class:hidden={tab !== 'board'}>
+      <div class="seg view-switcher" class:hidden={tab !== 'board'}>
           <button
-            class="view-btn"
+            class="seg-btn"
             class:active={viewMode === 'kanban'}
             onclick={() => setViewMode('kanban')}
             title="Kanban view"
           >
-            <Icon name="kanban" size={14} />
+            <Icon name="kanban" size={15} />
           </button>
           <button
-            class="view-btn"
+            class="seg-btn"
             class:active={viewMode === 'table'}
             onclick={() => setViewMode('table')}
             title="Table view"
           >
-            <Icon name="list" size={14} />
+            <Icon name="list" size={15} />
           </button>
         </div>
     </div>
@@ -565,62 +565,46 @@
 <style>
   /* width / centering / height come from global .page + .page--fill */
   .ws-page {
-    gap: var(--sp-2);
+    gap: var(--sp-3);
+    animation: vfade 0.25s ease;
   }
 
   .centered { text-align: center; color: var(--text-2); padding: var(--sp-12); }
 
   .ws-header {
     display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3);
-    padding-bottom: 0.625rem; border-bottom: 1px solid var(--border);
+    padding-bottom: 0.625rem;
   }
 
   .breadcrumb {
-    display: flex; align-items: center; gap: 0.4rem; font-size: var(--fs-sm); color: var(--text-2);
+    display: flex; align-items: center; gap: 12px; font-size: var(--fs-base); color: var(--text-2);
   }
+  .crumb-sep { color: var(--text-3); }
 
   .back-link {
-    display: flex; align-items: center; gap: 0.3rem;
+    display: flex; align-items: center; gap: 7px;
     color: var(--text-2); text-decoration: none; transition: color 0.15s;
+    font-size: var(--fs-base);
   }
   .back-link:hover { color: var(--text); }
 
-  .ws-name { font-weight: 700; font-size: var(--fs-md); }
+  /* Workspace name in breadcrumb — accent per redesign */
+  .ws-name { font-weight: var(--fw-bold); font-size: 1.15rem; color: var(--accent-text); }
 
   .ws-meta { display: flex; align-items: center; gap: 0.4rem; flex: 1; }
 
   .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
 
-  .ws-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-left: auto; }
+  .ws-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-left: auto; }
   .action-hidden { visibility: hidden; pointer-events: none; }
 
-  /* Tabs row with view switcher */
+  /* Tabs row: segment control + view switcher (both .seg primitives) */
   .tabs-row {
-    display: flex; align-items: flex-end; justify-content: space-between;
-    border-bottom: 1px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
   }
 
-  /* .tab-bar (global) supplies its own border-bottom; .tabs-row already
-     underlines the full row, so drop the redundant one and keep original padding. */
-  .tab-bar { border-bottom: none; padding: 0.3rem var(--sp-2) 0; }
-
-  /* View switcher */
-  .view-switcher {
-    display: flex; gap: 2px;
-    background: var(--bg2); border: 1px solid var(--border);
-    border-radius: 6px; padding: 2px;
-    margin-bottom: 4px;
-  }
   .view-switcher.hidden { visibility: hidden; pointer-events: none; }
-
-  .view-btn {
-    background: none; border: none; cursor: pointer;
-    color: var(--text-muted); padding: 0.3rem var(--sp-2);
-    border-radius: 4px; display: flex; align-items: center;
-    transition: all 0.15s;
-  }
-  .view-btn.active { background: var(--accent); color: white; }
-  .view-btn:not(.active):hover { background: var(--bg3); color: var(--text); }
 
   /* Tab Content */
   .tab-content {
@@ -634,59 +618,68 @@
 
   .proxy-table-wrap {
     flex: 1; min-height: 0; overflow-y: auto;
-    border: 1px solid var(--border); border-radius: var(--radius);
-    background: var(--bg-2);
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: var(--surface);
   }
 
   .proxy-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
   .proxy-table thead {
     position: sticky; top: 0; z-index: 1;
-    background: var(--surface-2); border-bottom: 1px solid var(--border);
+    background: var(--surface); border-bottom: 1px solid var(--border);
   }
   .proxy-table th {
-    padding: var(--sp-2) var(--sp-3); text-align: left;
-    font-size: var(--fs-2xs); font-weight: 700; color: var(--text-2);
-    text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap;
+    padding: var(--sp-3) var(--sp-4); text-align: left;
+    font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--text-3);
+    text-transform: uppercase; letter-spacing: 0.7px; white-space: nowrap;
   }
-  .proxy-table td { padding: var(--sp-2) var(--sp-3); vertical-align: middle; }
-  .proxy-row { border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+  .proxy-table td { padding: var(--sp-3) var(--sp-4); vertical-align: middle; }
+  .proxy-row { border-bottom: 1px solid var(--surface-2); cursor: pointer; transition: background 0.12s; }
   .proxy-row:last-child { border-bottom: none; }
-  .proxy-row:hover { background: var(--surface-2); }
+  .proxy-row:hover { background: var(--surface-row-hover); }
 
-  .col-num { width: 40px; }
-  .col-type { width: 72px; }
-  .col-status { width: 90px; }
-  .col-actions { width: 96px; text-align: right; }
+  .col-num { width: 44px; }
+  .col-type { width: 90px; }
+  .col-status { width: 110px; }
+  .col-actions { width: 120px; text-align: right; }
 
-  .row-num { font-size: var(--fs-2xs); color: var(--text-3); }
-  .proxy-name { font-weight: 600; display: block; }
-  .host-code { font-family: monospace; font-size: var(--fs-xs); color: var(--text-2); background: var(--surface-2); padding: 0.1rem 0.3rem; border-radius: 4px; }
-
-  .type-badge {
-    font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.04em;
-    padding: 0.1rem 0.4rem; border-radius: 999px;
-    border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+  .row-num { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-3); }
+  .proxy-name { font-weight: var(--fw-semibold); display: block; }
+  .host-code {
+    font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-body);
+    background: var(--surface-2); padding: 5px 10px; border-radius: 7px;
   }
-  .type-socks5 { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); color: var(--accent); }
+
+  /* Proxy type badges: http → blue tint, socks5 → purple tint (design) */
+  .type-badge {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+    padding: 4px 12px; border-radius: var(--radius-sm);
+    border: none; background: var(--surface-2); color: var(--text-2);
+  }
+  .type-http, .type-https { background: color-mix(in srgb, var(--cat-blue) 14%, transparent); color: var(--cat-blue); }
+  .type-socks5 { background: var(--accent-tint); color: var(--accent-text-2); }
 
   .status-badge {
-    font-size: var(--fs-2xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
-    padding: 0.1rem 0.4rem; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 0.72rem; font-weight: var(--fw-bold); text-transform: uppercase; letter-spacing: 0.4px;
+    padding: 4px 11px; border-radius: var(--radius-sm);
   }
+  .status-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .status-active { background: var(--success-bg); color: var(--success-text); }
   .status-failed { background: var(--danger-bg); color: var(--danger-text); }
-  .status-unknown { background: var(--surface-2); color: var(--text-3); border: 1px solid var(--border); }
+  .status-unknown { background: var(--surface-2); color: var(--text-2); }
 
-  .row-acts { display: flex; gap: 0.2rem; justify-content: flex-end; }
+  .row-acts { display: flex; gap: 5px; justify-content: flex-end; }
   .act-btn {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 28px; height: 28px;
-    background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
-    color: var(--text-2); cursor: pointer; padding: 0; transition: all 0.15s;
+    width: 32px; height: 32px;
+    background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text-soft); cursor: pointer; padding: 0; transition: all 0.15s;
   }
-  .act-btn:hover { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+  .act-btn:hover { border-color: var(--border-2); color: var(--text); }
+  .act-btn:first-child:hover { border-color: var(--accent); color: var(--accent-text); } /* check/refresh → accent */
   .act-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-  .act-danger:hover { background: var(--danger-bg) !important; border-color: color-mix(in srgb, var(--danger) 40%, var(--border)) !important; color: var(--danger-text) !important; }
+  .act-danger:hover { background: var(--danger-bg) !important; border-color: var(--danger-border) !important; color: var(--danger-text) !important; }
 
   /* Notes Tab */
   .notes-tab { display: flex; flex-direction: column; gap: var(--sp-3); flex: 1; }
@@ -703,7 +696,7 @@
   .fingerprint-banner-body { flex: 1; display: flex; flex-direction: column; gap: var(--sp-1); }
   .fingerprint-banner-title { font-weight: 700; font-size: var(--fs-base); }
   .fingerprint-banner-fp {
-    font-family: monospace; font-size: var(--fs-sm); color: var(--text-2);
+    font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text-2);
     word-break: break-all;
   }
   .fingerprint-banner-hint { font-size: var(--fs-sm); color: var(--text-2); }

@@ -135,9 +135,12 @@
 
 <div class="page page--fill">
   <div class="page-header">
-    <h1>{$t('terminal_title')}</h1>
+    <div class="page-title-group">
+      <h1>{$t('terminal_title')}</h1>
+      <p class="page-sub">{$t('terminal_sub', { count: String(sshStore.connections.length) })}</p>
+    </div>
     <button class="btn btn-primary spacer" onclick={() => (panelConn = null)}>
-      <Icon name="plus" size={14} />{$t('terminal_add')}
+      <Icon name="plus" size={15} />{$t('terminal_add')}
     </button>
   </div>
 
@@ -337,10 +340,12 @@
 <style>
   /* панель фильтров — единые примитивы .filter-bar/.search-field/.filter-select/.count-badge из base.css */
 
+  .page-title-group { display: flex; flex-direction: column; gap: 6px; }
+
   .table-wrap {
     flex: 1; min-height: 0; overflow-y: auto;
-    border: 1px solid var(--border); border-radius: var(--radius);
-    background: var(--bg-2);
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: var(--surface);
   }
 
   .ssh-table {
@@ -350,22 +355,22 @@
 
   .ssh-table thead {
     position: sticky; top: 0; z-index: 1;
-    background: var(--surface-2); border-bottom: 1px solid var(--border);
+    background: var(--surface); border-bottom: 1px solid var(--border);
   }
 
   .ssh-table th {
-    padding: var(--sp-2) var(--sp-3); text-align: left;
-    font-size: var(--fs-2xs); font-weight: 700; color: var(--text-2);
-    text-transform: uppercase; letter-spacing: 0.05em;
+    padding: var(--sp-3) var(--sp-4); text-align: left;
+    font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--text-3);
+    text-transform: uppercase; letter-spacing: 0.7px;
     white-space: nowrap;
   }
 
-  .ssh-table td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .ssh-table td { padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--surface-2); vertical-align: middle; }
   .ssh-row:last-child td { border-bottom: none; }
-  .ssh-row:hover td { background: var(--surface-2); }
+  .ssh-row:hover td { background: var(--surface-row-hover); }
   .ssh-row { cursor: pointer; }
 
-  .col-num { width: 40px; color: var(--text-3); font-size: var(--fs-xs); }
+  .col-num { width: 44px; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-xs); }
   .col-name { width: 130px; }
   .col-host { width: 155px; }
   .col-user { width: 115px; }
@@ -375,19 +380,23 @@
   /* col-last: no fixed width — takes remaining space */
   .col-actions { width: 124px; }
 
-  .conn-name { font-weight: 600; color: var(--text); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conn-name { font-weight: var(--fw-semibold); font-size: 0.9rem; color: var(--text); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .auth-tags { display: flex; flex-wrap: wrap; gap: var(--sp-1); align-items: center; }
 
-  code { font-family: monospace; font-size: var(--fs-sm); color: var(--text-2); background: var(--surface-2); padding: 0.1rem 0.35rem; border-radius: 4px; }
+  code {
+    font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-body);
+    background: var(--surface-2); padding: 5px 10px; border-radius: 7px;
+  }
 
   .auth-badge {
-    font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.04em;
-    padding: 0.15rem var(--sp-2); border-radius: 999px;
-    border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+    padding: 4px 12px; border-radius: var(--radius-sm);
+    border: none; background: var(--accent-tint); color: var(--accent-text-2);
   }
-  .auth-key { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); color: var(--accent); }
-  .auth-key_password { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn-text) 30%, var(--border)); color: var(--warn-text); }
+  .auth-key { background: var(--accent-tint); color: var(--accent-text-2); }
+  .auth-key_password { background: var(--warn-bg); color: var(--warn-text); }
 
   .tag-2fa { font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.04em; padding: 0.15rem var(--sp-2); border-radius: 999px; background: var(--success-bg); border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border)); color: var(--success-text); }
   .tag-proxy { font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.04em; padding: 0.15rem var(--sp-2); border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-3); }
@@ -438,7 +447,7 @@
     font-size: var(--fs-sm); cursor: pointer; transition: all 0.15s;
   }
   .page-btn:hover:not(:disabled) { background: var(--surface); border-color: var(--border-2); color: var(--text); }
-  .page-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .page-btn.active { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent-text); }
   .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* uses global .empty-state */

@@ -45,6 +45,8 @@
     'refresh-cw':    '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
     'plus':          '<path d="M5 12h14M12 5v14"/>',
     'arrow-left':    '<path d="m12 19-7-7 7-7M19 12H5"/>',
+    'arrow-right':   '<path d="M5 12h14m-7-7 7 7-7 7"/>',
+    'chevron-down':  '<path d="m6 9 6 6 6-6"/>',
     'layers':        '<path d="M12 2 2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>',
     'kanban':        '<path d="M6 5v11M12 5v5M18 5v8"/><rect x="3" y="3" width="6" height="3" rx="1"/><rect x="9" y="3" width="6" height="3" rx="1"/><rect x="15" y="3" width="6" height="3" rx="1"/>',
     'list':          '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
@@ -82,6 +84,7 @@
     'rotate-ccw':    '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
     'git-merge':     '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
     'columns':       '<rect width="7" height="18" x="3" y="3" rx="1"/><rect width="7" height="18" x="14" y="3" rx="1"/>',
+    'sidebar':       '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
     'arrow-up':      '<path d="m5 12 7-7 7 7M12 19V5"/>',
     'diff':          '<path d="M12 3v14M5 10l7-7 7 7M5 21h14"/>',
   };

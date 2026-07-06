@@ -222,44 +222,24 @@
 </script>
 
 <div class="page page--fill notes-page">
-  <!-- Header -->
-  <div class="page-header">
-    <h1>{$t('notes_title')}</h1>
-    <div class="header-actions">
-      <button class="icon-btn" title={$t('notes_btn_sync')} onclick={() => api.notes.sync()}>
-        <Icon name="refresh-cw" size={13} />
-      </button>
-      <button class="icon-btn" title={$t('notes_btn_open_folder')} onclick={() => api.notes.openFolder()}>
-        <Icon name="folder-open" size={13} />
-      </button>
-      <button class="icon-btn" onclick={() => { sidebarVisible = !sidebarVisible; }} title={$t('notes_btn_toggle_sidebar')}>
-        <Icon name="sidebar" size={13} />
-      </button>
-    </div>
-  </div>
-
-  <!-- Search -->
-  <div class="toolbar">
-    <div class="search-wrap">
-      <Icon name="search" size={13} />
-      <input
-        type="text"
-        bind:value={searchQuery}
-        oninput={onSearchInput}
-        placeholder={$t('notes_search_placeholder')}
-        class="search-input"
-      />
-      {#if searching}
-        <span class="search-spinner"><Icon name="loader" size={12} /></span>
-      {/if}
-    </div>
-  </div>
-
-  <!-- Body -->
+  <!-- Body: 3 columns full height per redesign (search lives in the sidebar) -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="page-body" bind:this={pageBodyEl} class:is-dragging={dragging !== null}>
     {#if sidebarVisible}
       <div class="sidebar" style="width: {colWidths.sidebar}%">
+        <div class="search-wrap">
+          <Icon name="search" size={15} />
+          <input
+            type="text"
+            bind:value={searchQuery}
+            oninput={onSearchInput}
+            placeholder={$t('notes_search_placeholder')}
+            class="search-input"
+          />
+          {#if searching}
+            <span class="search-spinner"><Icon name="loader" size={12} /></span>
+          {/if}
+        </div>
         <NoteFilters
           notes={notesStore.list}
           allTags={notesStore.allTags}
@@ -267,6 +247,17 @@
           {activeFilter}
           onfilter={handleFilterChange}
         />
+        <div class="sidebar-footer">
+          <button class="icon-btn" title={$t('notes_btn_sync')} onclick={() => api.notes.sync()}>
+            <Icon name="refresh-cw" size={14} />
+          </button>
+          <button class="icon-btn" title={$t('notes_btn_open_folder')} onclick={() => api.notes.openFolder()}>
+            <Icon name="folder-open" size={14} />
+          </button>
+          <button class="icon-btn" onclick={() => { sidebarVisible = false; }} title={$t('notes_btn_toggle_sidebar')}>
+            <Icon name="sidebar" size={14} />
+          </button>
+        </div>
       </div>
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <div
@@ -280,9 +271,24 @@
 
     <div class="list-col" style="width: {colWidths.list}%">
       <div class="list-header">
-        <button class="btn-new" onclick={() => (showCreate = true)}>
-          <Icon name="plus" size={12} /> {$t('notes_btn_new')}
-        </button>
+        <div class="list-title-group">
+          <h2 class="list-title">{$t('notes_filter_all')}</h2>
+          <p class="list-sub">
+            {displayList.length === 1
+              ? $t('panel_notes_count_one', { n: String(displayList.length) })
+              : $t('panel_notes_count_many', { n: String(displayList.length) })}
+          </p>
+        </div>
+        <div class="list-actions">
+          {#if !sidebarVisible}
+            <button class="icon-btn" onclick={() => { sidebarVisible = true; }} title={$t('notes_btn_toggle_sidebar')}>
+              <Icon name="sidebar" size={14} />
+            </button>
+          {/if}
+          <button class="btn btn-primary btn-new" onclick={() => (showCreate = true)}>
+            <Icon name="plus" size={14} /> {$t('notes_btn_new')}
+          </button>
+        </div>
       </div>
       <div class="list-scroll">
         <NotesList
@@ -341,70 +347,35 @@
     gap: 0.875rem;
   }
 
-  .page-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-  }
-
-  h1 { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.02em; }
-
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.2rem;
-  }
-
-  .icon-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--text-2);
-    display: flex;
-    align-items: center;
-    padding: var(--sp-1);
-    border-radius: var(--radius-sm);
-    transition: all 0.15s;
-  }
-
-  .icon-btn:hover { color: var(--text); background: var(--surface); }
-
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    flex-shrink: 0;
-  }
-
+  /* Search now lives at the top of the sidebar (per redesign) */
   .search-wrap {
     position: relative;
     display: flex;
     align-items: center;
-    width: 260px;
+    margin: var(--sp-4) var(--sp-3) var(--sp-2);
     flex-shrink: 0;
   }
 
   .search-wrap :global(svg) {
     position: absolute;
-    left: 0.55rem;
+    left: 0.75rem;
     color: var(--text-3);
     pointer-events: none;
   }
 
   .search-input {
-    background: var(--surface-2);
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius);
     width: 100%;
     padding: 0 1.75rem 0 var(--sp-8);
     font-size: var(--fs-sm);
-    height: 32px;
+    height: 38px;
     outline: none;
     transition: border-color 0.15s;
   }
 
-  .search-input:focus { border-color: var(--accent); }
+  .search-input:focus { border-color: var(--accent-border); }
 
   .search-spinner {
     position: absolute;
@@ -420,7 +391,8 @@
     overflow: hidden;
     border: 1px solid var(--border);
     min-height: 0;
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
   }
 
   .page-body.is-dragging {
@@ -455,6 +427,8 @@
 
   .sidebar {
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
     min-width: 100px;
   }
@@ -468,30 +442,40 @@
   }
 
   .list-header {
-    height: 40px;
-    padding: 0 var(--sp-2);
+    padding: var(--sp-5) var(--sp-4) var(--sp-3);
     display: flex;
-    align-items: center;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--sp-2);
     flex-shrink: 0;
-    border-bottom: 1px solid var(--border);
   }
 
+  .list-title-group { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .list-title {
+    font-size: 1.25rem;
+    font-weight: var(--fw-extrabold);
+    letter-spacing: -0.3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .list-sub { font-size: 0.78rem; color: var(--text-faint); }
+
+  .list-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .list-actions .icon-btn { width: 32px; height: 32px; }
+
+  .sidebar-footer {
+    display: flex;
+    gap: 6px;
+    padding: var(--sp-2) var(--sp-3) var(--sp-3);
+    margin-top: auto;
+    flex-shrink: 0;
+  }
+  .sidebar-footer .icon-btn { width: 32px; height: 32px; }
   .btn-new {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-1);
-    margin-left: auto;
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: var(--sp-1) 0.6rem;
-    font-size: var(--fs-sm);
-    color: var(--text-2);
-    cursor: pointer;
-    transition: all 0.15s;
+    height: 36px;
+    padding: 0 14px;
+    font-size: 0.82rem;
+    border-radius: 9px;
   }
-
-  .btn-new:hover { border-color: var(--accent); color: var(--accent); }
 
   .list-scroll {
     flex: 1;
@@ -511,17 +495,17 @@
   .create-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: var(--backdrop);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 200;
+    z-index: var(--z-modal);
   }
 
   .create-card {
-    background: var(--bg-2);
+    background: var(--surface-drawer);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     padding: var(--sp-5);
     width: 320px;
     display: flex;

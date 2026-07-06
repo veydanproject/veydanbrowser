@@ -265,8 +265,8 @@
   /* Fingerprint rows */
   .section { display: flex; flex-direction: column; gap: 0.3rem; }
   .section-title {
-    font-size: var(--fs-2xs); font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.06em; color: var(--text-3); margin-bottom: 0.2rem;
+    font-size: var(--fs-2xs); font-weight: var(--fw-bold); text-transform: uppercase;
+    letter-spacing: 0.7px; color: var(--text-dim); margin-bottom: 0.2rem;
   }
   .rows { display: flex; flex-direction: column; gap: var(--sp-1); }
   .row {
@@ -279,27 +279,28 @@
   .value { color: var(--text); word-break: break-all; flex: 1; }
   .value.ua { font-size: var(--fs-xs); word-break: break-word; }
   .value.muted { color: var(--text-3); font-style: italic; }
-  .value.mono { font-family: monospace; }
+  .value.mono { font-family: var(--font-mono); }
 
-  /* Code blocks */
+  /* Code blocks — mono on --surface-3, nested-card radius */
   .code-block-wrap { display: flex; flex-direction: column; gap: 0; }
   .code-block-header {
     display: flex; align-items: center; justify-content: space-between;
     background: var(--surface-2); border: 1px solid var(--border);
-    border-bottom: none; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-    padding: 0.35rem 0.6rem; font-size: var(--fs-sm); color: var(--text-2); font-weight: 600;
+    border-bottom: none; border-radius: var(--radius-md) var(--radius-md) 0 0;
+    padding: 0.35rem 0.6rem; font-size: var(--fs-sm); color: var(--text-2); font-weight: var(--fw-semibold);
   }
   .copy-btn {
     display: flex; align-items: center; gap: var(--sp-1);
     font-size: var(--fs-xs); color: var(--text-2); background: none; border: none;
     cursor: pointer; padding: 0.1rem 0.3rem; border-radius: var(--radius-sm);
+    transition: all var(--dur-fast);
   }
-  .copy-btn:hover { color: var(--accent); background: var(--bg-3); }
+  .copy-btn:hover { color: var(--accent-text-3); background: var(--surface-3); }
 
   .code-block {
-    background: var(--bg); border: 1px solid var(--border);
-    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-    padding: var(--sp-3); font-size: var(--fs-xs); font-family: monospace;
+    background: var(--surface-3); border: 1px solid var(--border);
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    padding: var(--sp-3); font-size: var(--fs-xs); font-family: var(--font-mono);
     overflow-x: auto; white-space: pre; color: var(--text);
     max-height: 300px; overflow-y: auto; margin: 0;
   }
@@ -320,13 +321,13 @@
     font-size: var(--fs-sm);
     padding: 0.3rem 0.6rem;
     border-radius: var(--radius-sm);
-    border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
+    border: 1px solid var(--success-border);
     background: var(--success-bg);
     color: var(--success-text);
     word-break: break-all;
   }
   .cookie-export-msg.error {
-    border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+    border-color: var(--danger-border);
     background: var(--danger-bg);
     color: var(--danger-text);
   }
@@ -339,23 +340,23 @@
   .cookies-table th {
     text-align: left; padding: 0.4rem var(--sp-2);
     border-bottom: 1px solid var(--border);
-    color: var(--text-3); font-weight: 600; font-size: var(--fs-2xs);
-    text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text-3); font-weight: var(--fw-bold); font-size: var(--fs-2xs);
+    text-transform: uppercase; letter-spacing: 0.7px;
     background: var(--surface-2); white-space: nowrap;
   }
   .cookies-table td {
     padding: 0.35rem var(--sp-2);
-    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+    border-bottom: 1px solid var(--surface-2);
     color: var(--text); vertical-align: top;
   }
-  .cookies-table tr:hover td { background: var(--surface-2); }
+  .cookies-table tr:hover td { background: var(--surface-row-hover); }
   .host-cell { color: var(--text-2); white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
   .name-cell { font-weight: 500; white-space: nowrap; max-width: 100px; overflow: hidden; text-overflow: ellipsis; }
   .value-cell { color: var(--text-3); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .expiry-cell { color: var(--text-2); white-space: nowrap; }
   .flags-cell { display: flex; gap: 0.2rem; }
   .flag {
-    font-size: var(--fs-2xs); font-weight: 700; border-radius: 3px;
+    font-size: var(--fs-2xs); font-weight: var(--fw-bold); border-radius: var(--radius-xs);
     padding: 0.05rem 0.3rem;
   }
   .flag.s { background: var(--success-bg); color: var(--success-text); }

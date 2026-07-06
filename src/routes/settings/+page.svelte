@@ -4,7 +4,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { locale, t } from '$lib/i18n';
-  import { theme, toggleTheme } from '$lib/theme';
+  import { theme } from '$lib/theme';
   import { inspectorApp } from '$lib/inspector/inspector.svelte';
   import Icon from '$lib/Icon.svelte';
   import { api } from '$lib/api';
@@ -234,7 +234,7 @@
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-ghost btn-sm" disabled={downloading} onclick={downloadCamoufox}>
+        <button class="btn btn-primary btn-sm" disabled={downloading} onclick={downloadCamoufox}>
           {downloading ? $t('settings_camoufox_btn_updating') : $t('settings_camoufox_btn_update')}
         </button>
         <button class="btn btn-ghost btn-sm" disabled={checkingUpdate || downloading} onclick={checkForUpdates}>
@@ -314,17 +314,17 @@
 
   <!-- Theme -->
   <div class="card">
-    <div class="card-title">Theme</div>
+    <div class="card-title">{$t('settings_section_theme')}</div>
     <div class="theme-options">
       <button class="theme-opt" class:active={$theme === 'dark'} onclick={() => theme.set('dark')}>
         <span class="theme-icon"><Icon name="moon" size={15} /></span>
         <span>Dark</span>
         {#if $theme === 'dark'}<span class="lang-check">✓</span>{/if}
       </button>
-      <button class="theme-opt" class:active={$theme === 'light'} onclick={() => theme.set('light')}>
+      <!-- Light theme is disabled while the redesign is dark-only -->
+      <button class="theme-opt" disabled title={$t('theme_light_soon')}>
         <span class="theme-icon"><Icon name="sun" size={15} /></span>
         <span>Light</span>
-        {#if $theme === 'light'}<span class="lang-check">✓</span>{/if}
       </button>
     </div>
   </div>
@@ -338,12 +338,12 @@
         <span class="muted">{$t('inspector_hotkey_hint')}</span>
       </div>
       <button
-        class="toggle-btn"
-        class:active={inspectorApp.enabled}
+        class="toggle"
+        class:on={inspectorApp.enabled}
         onclick={() => inspectorApp.toggle()}
-      >
-        {inspectorApp.enabled ? 'ON' : 'OFF'}
-      </button>
+        aria-pressed={inspectorApp.enabled}
+        aria-label={$t('inspector_toggle')}
+      ></button>
     </div>
   </div>
 
@@ -388,8 +388,13 @@
     <div class="card-title">{$t('settings_section_about')}</div>
 
     <div class="about-head">
-      <div class="about-app">{$t('settings_about_app')}</div>
-      <div class="about-tagline">{$t('settings_about_tagline')}</div>
+      <span class="about-logo">
+        <img src="/logo.png" alt="" />
+      </span>
+      <div class="about-head-text">
+        <div class="about-app">{$t('settings_about_app')}</div>
+        <div class="about-tagline">{$t('settings_about_tagline')}</div>
+      </div>
     </div>
 
     <div class="version-table">
@@ -438,19 +443,18 @@
   /* max-width comes from global .page via --page-max (set inline) */
 
   /* bare h1 (not inside .page-header) — global .page-header h1 doesn't apply */
-  h1 { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.02em; margin-bottom: var(--sp-1); }
+  h1 { font-size: var(--fs-2xl); font-weight: var(--fw-extrabold); letter-spacing: -0.6px; margin-bottom: var(--sp-2); }
 
   /* local deltas over global .card: bg, internal flex layout, gap, shadow */
   .card {
-    background: var(--bg-2); padding: 1.125rem;
-    display: flex; flex-direction: column; gap: var(--sp-3);
-    box-shadow: var(--shadow);
+    padding: var(--sp-6);
+    display: flex; flex-direction: column; gap: var(--sp-4);
   }
 
   /* uppercase label variant — differs from global .card-title */
   .card-title {
-    font-size: var(--fs-2xs); font-weight: 700; color: var(--text-3);
-    text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 1px;
   }
 
   .status-row { display: flex; align-items: center; gap: var(--sp-3); }
@@ -465,21 +469,30 @@
 
   .version-table { display: flex; flex-direction: column; gap: 0.35rem; }
   .version-row { display: flex; align-items: baseline; gap: var(--sp-2); }
-  .version-label { font-size: var(--fs-xs); color: var(--text-3); min-width: 80px; flex-shrink: 0; }
-  .version-value { font-size: var(--fs-sm); color: var(--text-2); font-family: monospace; }
+  .version-label { font-size: 0.82rem; color: var(--text-faint); min-width: 120px; flex-shrink: 0; }
+  .version-value { font-size: var(--fs-sm); color: var(--text-body); font-family: var(--font-mono); }
   .path-value { font-size: var(--fs-2xs); word-break: break-all; }
 
   /* About section */
-  .about-head { display: flex; flex-direction: column; gap: 0.15rem; }
-  .about-app { font-size: var(--fs-lg); font-weight: 700; letter-spacing: -0.01em; color: var(--text-1); }
+  .about-head { display: flex; align-items: center; gap: 13px; }
+  .about-head-text { display: flex; flex-direction: column; gap: 2px; }
+  .about-logo {
+    display: flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; border-radius: var(--radius-md);
+    background: var(--accent-grad); box-shadow: var(--shadow-logo);
+    flex-shrink: 0;
+  }
+  .about-logo img { width: 28px; height: 28px; object-fit: contain; }
+  .about-app { font-size: var(--fs-lg); font-weight: var(--fw-extrabold); letter-spacing: -0.3px; color: var(--text); }
   .about-tagline { font-size: var(--fs-sm); color: var(--text-3); }
   .about-note { font-size: var(--fs-sm); color: var(--text-3); line-height: 1.5; margin: 0; }
   .about-links { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); }
   .link-btn {
     display: inline-flex; align-items: center; gap: 0.4rem;
     background: none; border: none; padding: 0; cursor: pointer;
-    color: var(--accent); font-size: var(--fs-sm); font-weight: 500;
+    color: var(--accent-text-3); font-size: var(--fs-sm); font-weight: 500;
   }
+  .link-btn:hover { color: var(--accent-text); }
   .link-btn:hover { text-decoration: underline; }
   .about-copyright { font-size: var(--fs-xs); color: var(--text-3); }
 
@@ -489,23 +502,24 @@
   .progress-wrap { display: flex; flex-direction: column; gap: 0.3rem; }
   .progress-bar { height: 5px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
   .progress-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.2s ease; }
-  .progress-label { font-size: var(--fs-2xs); color: var(--text-2); font-family: monospace; }
+  .progress-label { font-size: var(--fs-2xs); color: var(--text-2); font-family: var(--font-mono); }
 
   .lang-options { display: flex; gap: 0.625rem; }
 
+  /* Segment buttons per design: 46px, radius 11, accent tint when active */
   .lang-btn {
-    display: flex; align-items: center; gap: 0.4rem;
-    padding: var(--sp-2) var(--sp-4); background: var(--surface-2);
-    border: 1px solid var(--border); border-radius: var(--radius-sm);
-    color: var(--text-2); font-size: var(--fs-sm); cursor: pointer;
-    transition: all 0.15s; min-width: 120px;
+    display: flex; align-items: center; gap: 9px;
+    height: var(--control-h-lg); padding: 0 20px; background: var(--surface-3);
+    border: 1px solid var(--border); border-radius: var(--radius-field);
+    color: var(--text-body); font-size: 0.9rem; font-weight: var(--fw-semibold); cursor: pointer;
+    transition: all 0.15s; min-width: 130px;
   }
   .lang-btn:hover { border-color: var(--border-2); color: var(--text); }
-  .lang-btn.active { border-color: var(--accent); background: var(--accent-bg); color: var(--text); }
+  .lang-btn.active { border-color: var(--accent-border); background: var(--accent-bg); color: var(--accent-text); }
 
   .lang-flag { font-size: var(--fs-md); }
-  .lang-native { flex: 1; }
-  .lang-check { color: var(--accent); font-weight: 700; }
+  .lang-native { flex: 1; text-align: left; }
+  .lang-check { color: var(--accent-text); font-weight: 700; }
 
   .dev-tools-row {
     display: flex;
@@ -522,50 +536,30 @@
     color: var(--text);
   }
 
-  .toggle-btn {
-    padding: 0.3rem 0.9rem;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
-    color: var(--text-2);
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s;
-    min-width: 52px;
-  }
-
-  .toggle-btn:hover { border-color: var(--border-2); color: var(--text); }
-
-  .toggle-btn.active {
-    border-color: var(--accent);
-    background: var(--accent-bg);
-    color: var(--accent);
-  }
-
   .theme-options { display: flex; gap: 0.625rem; }
 
   .theme-opt {
-    display: flex; align-items: center; gap: 0.4rem;
-    padding: var(--sp-2) var(--sp-4); background: var(--surface-2);
-    border: 1px solid var(--border); border-radius: var(--radius-sm);
-    color: var(--text-2); font-size: var(--fs-sm); cursor: pointer;
-    transition: all 0.15s; min-width: 100px;
+    display: flex; align-items: center; gap: 9px;
+    height: var(--control-h-lg); padding: 0 20px; background: var(--surface-3);
+    border: 1px solid var(--border); border-radius: var(--radius-field);
+    color: var(--text-body); font-size: 0.9rem; font-weight: var(--fw-semibold); cursor: pointer;
+    transition: all 0.15s; min-width: 110px;
   }
-  .theme-opt:hover { border-color: var(--border-2); color: var(--text); }
-  .theme-opt.active { border-color: var(--accent); background: var(--accent-bg); color: var(--text); }
-  .theme-icon { font-size: var(--fs-md); }
+  .theme-opt:hover:not(:disabled) { border-color: var(--border-2); color: var(--text); }
+  .theme-opt.active { border-color: var(--accent-border); background: var(--accent-bg); color: var(--accent-text); }
+  .theme-opt:disabled { opacity: 0.4; cursor: not-allowed; }
+  .theme-icon { font-size: var(--fs-md); display: flex; }
 
   .dir-row {
     display: flex; align-items: center; gap: 0.4rem;
   }
   .dir-input {
-    flex: 1; background: var(--bg-1); border: 1px solid var(--border);
-    border-radius: var(--radius-sm); padding: 0.4rem 0.6rem;
-    font-size: var(--fs-sm); color: var(--text); font-family: monospace;
-    outline: none;
+    flex: 1; height: 44px; background: var(--surface-3); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 0 var(--sp-3);
+    font-size: 0.82rem; color: var(--text-body); font-family: var(--font-mono);
+    outline: none; text-overflow: ellipsis;
   }
-  .dir-input:focus { border-color: var(--accent); }
-  .btn-icon { padding: 0.35rem var(--sp-2); }
-  .error-msg { font-size: var(--fs-sm); color: var(--error, #ef4444); }
+  .dir-input:focus { border-color: var(--accent-border); }
+  .btn-icon { width: 44px; height: 44px; justify-content: center; padding: 0; }
+  .error-msg { font-size: var(--fs-sm); color: var(--danger-text); }
 </style>

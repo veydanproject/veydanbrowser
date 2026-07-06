@@ -129,10 +129,11 @@
     align-items: center;
     justify-content: space-between;
     width: 100%;
+    min-height: var(--control-h-lg);
     padding: var(--sp-2) var(--sp-3);
-    background: var(--surface-2);
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-field);
     color: var(--text);
     font-size: var(--fs-base);
     font-family: inherit;
@@ -143,7 +144,7 @@
   }
   .trigger:focus, .trigger.open {
     outline: none;
-    border-color: var(--accent);
+    border-color: var(--accent-border);
     box-shadow: 0 0 0 3px var(--accent-bg);
   }
   .trigger-label {
@@ -162,10 +163,10 @@
 
   .dropdown {
     position: fixed;
-    z-index: 9999;
-    background: var(--surface);
+    z-index: var(--z-popover);
+    background: var(--surface-drawer);
     border: 1px solid var(--border-2);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius);
     box-shadow: var(--shadow-lg);
     overflow-y: auto;
     padding: 4px;
@@ -177,8 +178,8 @@
   .option {
     display: block;
     width: 100%;
-    padding: 0.35rem 0.65rem;
-    border-radius: 4px;
+    padding: 0.45rem 0.65rem;
+    border-radius: var(--radius-sm);
     background: transparent;
     border: none;
     color: var(--text);
@@ -192,7 +193,7 @@
     transition: background 0.1s;
   }
   .option:hover { background: var(--surface-2); }
-  .option.selected { background: var(--accent-bg); color: var(--accent); }
+  .option.selected { background: var(--accent-bg); color: var(--accent-text); }
   .option.separator {
     color: var(--text-2);
     font-size: var(--fs-xs);

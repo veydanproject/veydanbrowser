@@ -110,7 +110,7 @@
   }
 </script>
 
-<Drawer open title={`${$t('profile_edit_title')} — ${profile.name}`} {onclose}>
+<Drawer open title={`${$t('profile_edit_title')} — ${profile.name}`} width="var(--drawer-w-md)" {onclose}>
       {#if error}
         <div class="error-msg" style="margin-bottom:0.75rem">{error}</div>
       {/if}
@@ -297,52 +297,66 @@
 </Drawer>
 
 <style>
-  .section { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: var(--sp-3); }
+  .section { display: flex; flex-direction: column; gap: 1rem; margin-bottom: var(--sp-4); }
 
   .section-label {
-    font-size: var(--fs-2xs); font-weight: 700; color: var(--text-muted);
-    text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.9px;
+    margin-bottom: 0.25rem;
   }
 
-  .divider { height: 1px; background: var(--border); margin: var(--sp-3) 0; }
+  .divider { height: 1px; background: var(--border); margin: var(--sp-4) 0; }
 
-  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+  /* Tall drawer form fields per design (46px / radius 11) */
+  form input[type='text'],
+  form input[type='number'] {
+    height: var(--control-h-lg);
+    border-radius: var(--radius-field);
+    font-size: 0.9rem;
+  }
+  form textarea { border-radius: var(--radius-field); min-height: 96px; font-size: 0.9rem; }
 
   .warnings {
-    background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 40%, transparent);
-    border-radius: 6px;
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: var(--radius);
     padding: 0.6rem var(--sp-3);
     margin-bottom: var(--sp-3);
     font-size: var(--fs-sm);
   }
-  .warning-title { font-weight: 700; margin-bottom: var(--sp-1); }
-  .warning-item { color: var(--text-muted); }
+  .warning-title { font-weight: 700; margin-bottom: var(--sp-1); color: var(--warn-text); }
+  .warning-item { color: var(--text-2); }
 
   .form-actions {
-    display: flex; gap: var(--sp-2); justify-content: flex-end; padding-top: var(--sp-2);
+    display: flex; gap: 10px; justify-content: flex-end; padding-top: var(--sp-3);
   }
+  .form-actions .btn { height: 42px; border-radius: var(--radius-field); padding: 0 20px; }
 
+  /* History toggle row (design: bordered row + 54×30 toggle) */
   .toggle-row {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0.45rem 0; gap: var(--sp-3);
+    padding: 1rem 0; gap: var(--sp-3);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
   }
-  .toggle-info { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
-  .toggle-label { font-size: var(--fs-base); font-weight: 500; color: var(--text); }
-  .toggle-hint { font-size: var(--fs-xs); color: var(--text-2); }
+  .toggle-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .toggle-label { font-size: 0.95rem; font-weight: var(--fw-semibold); color: var(--text); }
+  .toggle-hint { font-size: 0.8rem; color: var(--text-faint); line-height: 1.5; max-width: 290px; }
 
   .toggle-btn {
     position: relative; flex-shrink: 0;
-    width: 36px; height: 20px;
-    background: var(--border-2); border: none; border-radius: 999px;
+    width: 54px; height: 30px;
+    background: var(--toggle-off); border: none; border-radius: var(--radius-pill);
     cursor: pointer; padding: 0; transition: background 0.2s;
   }
-  .toggle-btn.active { background: var(--accent); }
+  .toggle-btn.active { background: var(--accent-hover); }
   .toggle-thumb {
-    position: absolute; top: 2px; left: 2px;
-    width: 16px; height: 16px; border-radius: 50%;
+    position: absolute; top: 3px; left: 3px;
+    width: 24px; height: 24px; border-radius: 50%;
     background: #fff; transition: transform 0.2s;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
   }
-  .toggle-btn.active .toggle-thumb { transform: translateX(16px); }
+  .toggle-btn.active .toggle-thumb { transform: translateX(24px); }
 </style>

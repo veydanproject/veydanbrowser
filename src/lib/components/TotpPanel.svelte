@@ -7,6 +7,7 @@
   import { totpStore } from '$lib/store/totp.svelte';
   import TotpList from './TotpList.svelte';
   import TotpAddModal from './TotpAddModal.svelte';
+  import Icon from '$lib/Icon.svelte';
 
   interface Props {
     profileId: string;
@@ -27,8 +28,8 @@
 <div class="totp-panel">
   <div class="panel-toolbar">
     <span class="toolbar-count">{entries.length} TOTP</span>
-    <button class="btn-ghost btn-sm" onclick={() => (showAdd = true)}>
-      + {$t('totp_btn_add')}
+    <button class="btn btn-primary toolbar-add" onclick={() => (showAdd = true)}>
+      <Icon name="plus" size={14} /> {$t('totp_btn_add')}
     </button>
   </div>
 
@@ -64,8 +65,15 @@
   }
 
   .toolbar-count {
-    font-size: var(--fs-sm);
-    color: var(--text-2);
+    font-size: 0.78rem;
+    color: var(--text-faint);
+  }
+
+  .toolbar-add {
+    height: 34px;
+    padding: 0 13px;
+    font-size: 0.82rem;
+    border-radius: 9px;
   }
 
   .loading {
@@ -75,20 +83,5 @@
     text-align: center;
   }
 
-  .btn-ghost {
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.35rem var(--sp-3);
-    font-size: var(--fs-sm);
-    cursor: pointer;
-    color: var(--text-2);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    transition: all 0.15s;
-  }
-
-  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
-  .btn-sm { padding: 0.3rem 0.65rem; }
+  /* .btn / .btn-ghost / .btn-sm are global primitives (base.css) */
 </style>

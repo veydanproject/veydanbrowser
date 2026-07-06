@@ -304,7 +304,7 @@
         </div>
       {:else if entries.length === 0}
         <div class="empty-state">
-          <Icon name="clock" size={22} />
+          <span class="empty-icon"><Icon name="clock" size={22} /></span>
           <p>История пуста</p>
           <span>Версии появятся после редактирования заметки</span>
         </div>
@@ -343,7 +343,7 @@
     width: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--bg-1);
+    background: var(--surface);
     overflow: hidden;
     font-size: var(--fs-sm);
   }
@@ -383,8 +383,8 @@
     transition: color 0.15s, background 0.15s;
   }
 
-  .btn-close:hover, .btn-mode:hover { color: var(--text); background: var(--surface); }
-  .btn-mode.active { color: var(--accent); }
+  .btn-close:hover, .btn-mode:hover { color: var(--text); background: var(--surface-hover); }
+  .btn-mode.active { color: var(--accent-text); }
 
   .filter-bar {
     display: flex;
@@ -398,7 +398,7 @@
 
   .filter-select {
     font-size: var(--fs-xs);
-    background: var(--surface);
+    background: var(--surface-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     color: var(--text);
@@ -409,7 +409,7 @@
 
   .filter-date {
     font-size: var(--fs-2xs);
-    background: var(--surface);
+    background: var(--surface-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     color: var(--text);
@@ -430,13 +430,13 @@
     flex-shrink: 0;
   }
 
-  .btn-filter:hover { background: var(--surface); color: var(--text); }
+  .btn-filter:hover { background: var(--surface-hover); color: var(--text); }
   .btn-clear { color: var(--danger-text); }
 
   .compare-hint {
     font-size: var(--fs-2xs);
-    color: var(--accent);
-    background: var(--accent-bg, rgba(99,102,241,0.06));
+    color: var(--accent-text);
+    background: var(--accent-tint);
     padding: 0.3rem var(--sp-3);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
@@ -444,8 +444,8 @@
   }
 
   .error-bar {
-    background: var(--danger-bg, #fef2f2);
-    color: var(--danger-text, #dc2626);
+    background: var(--danger-bg);
+    color: var(--danger-text);
     font-size: var(--fs-xs);
     padding: 0.3rem var(--sp-3);
     flex-shrink: 0;
@@ -465,9 +465,9 @@
     transition: background 0.15s, color 0.15s;
   }
 
-  .btn-action:hover { background: var(--surface); color: var(--text); }
-  .btn-restore { border-color: var(--accent); color: var(--accent); }
-  .btn-restore:hover { background: var(--accent-bg); }
+  .btn-action:hover { background: var(--surface-hover); color: var(--text); }
+  .btn-restore { border-color: var(--accent-border); color: var(--accent-text); }
+  .btn-restore:hover { background: var(--accent-tint); }
   .btn-restore:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .diff-header {
@@ -505,16 +505,16 @@
     display: flex;
     gap: var(--sp-2);
     font-size: var(--fs-xs);
-    font-family: monospace;
+    font-family: var(--font-mono);
   }
 
-  .stat-added { color: var(--success-text, #16a34a); }
-  .stat-removed { color: var(--danger-text, #dc2626); }
+  .stat-added { color: var(--success-text); }
+  .stat-removed { color: var(--danger-text); }
 
   .diff-view {
     flex: 1;
     overflow-y: auto;
-    font-family: 'Menlo', 'Consolas', monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-xs);
     line-height: 1.5;
   }
@@ -528,8 +528,8 @@
   }
 
   .diff-context { color: var(--text-3); }
-  .diff-added { background: rgba(22, 163, 74, 0.1); color: var(--success-text, #16a34a); }
-  .diff-removed { background: rgba(220, 38, 38, 0.08); color: var(--danger-text, #dc2626); }
+  .diff-added { background: var(--success-bg); color: var(--success-text); }
+  .diff-removed { background: var(--danger-bg); color: var(--danger-text); }
 
   .diff-marker {
     flex-shrink: 0;
@@ -570,7 +570,7 @@
     padding: 0.4rem var(--sp-3) 0.2rem;
     position: sticky;
     top: 0;
-    background: var(--bg-1);
+    background: var(--surface);
     z-index: 1;
   }
 
@@ -589,9 +589,9 @@
     color: var(--text);
   }
 
-  .entry:hover { background: var(--surface); }
-  .entry.selected-a { background: var(--accent-bg, rgba(99,102,241,0.1)); }
-  .entry.selected-b { background: rgba(16, 185, 129, 0.08); }
+  .entry:hover { background: var(--surface-row-hover); }
+  .entry.selected-a { background: var(--accent-bg); }
+  .entry.selected-b { background: var(--success-bg); }
 
   .entry-icon {
     color: var(--text-3);
@@ -624,7 +624,7 @@
   .entry-rev {
     font-size: var(--fs-2xs);
     color: var(--text-3);
-    font-family: monospace;
+    font-family: var(--font-mono);
     flex-shrink: 0;
   }
 </style>

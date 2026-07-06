@@ -121,11 +121,11 @@
     <div class="tab-header">
       <span class="count">{$t('ssh_profile_linked_count', { n: String(linked.length) })}</span>
       <div class="header-actions">
-        <button class="btn-sm btn-ghost" onclick={() => { showPicker = !showPicker; pickerSearch = ''; }}>
+        <button class="btn btn-sm btn-ghost" onclick={() => { showPicker = !showPicker; pickerSearch = ''; }}>
           <Icon name={showPicker ? 'x' : 'link'} size={12} />
           {showPicker ? $t('ssh_btn_cancel') : $t('ssh_btn_link')}
         </button>
-        <button class="btn-sm btn-primary" onclick={() => { showForm = true; editConn = null; }}>
+        <button class="btn btn-sm btn-primary" onclick={() => { showForm = true; editConn = null; }}>
           <Icon name="plus" size={12} /> {$t('ssh_btn_new')}
         </button>
       </div>
@@ -181,11 +181,15 @@
 </div>
 
 <style>
-  .ssh-tab { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); }
+  .ssh-tab { display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-2) 0; min-height: 100%; }
 
-  .tab-header { display: flex; align-items: center; justify-content: space-between; }
-  .count { font-size: var(--fs-xs); color: var(--text-2); }
-  .header-actions { display: flex; gap: 0.3rem; }
+  .tab-header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+  .count { font-size: 0.78rem; color: var(--text-faint); }
+  .header-actions { display: flex; gap: 8px; }
+  /* Кнопки шапки вкладки: компактные 34px по дизайну вторичных действий */
+  .header-actions :global(.btn) {
+    height: 34px; padding: 0 13px; font-size: 0.82rem; border-radius: 9px;
+  }
 
   .form-header { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-1); }
   .back-btn {
@@ -194,12 +198,12 @@
     color: var(--text-2); font-size: var(--fs-sm); font-family: inherit; padding: 0.2rem 0;
   }
   .back-btn:hover { color: var(--text); }
-  .form-title { font-size: var(--fs-sm); font-weight: 500; color: var(--text); }
+  .form-title { font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--text); }
 
   .picker {
-    background: var(--bg-2);
+    background: var(--surface-2);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     overflow: hidden;
   }
   .search-row {
@@ -219,19 +223,21 @@
     padding: 0.35rem 0.6rem; background: none; border: none; cursor: pointer;
     text-align: left; gap: var(--sp-2); transition: background 0.12s;
   }
-  .picker-item:hover { background: var(--surface, var(--bg)); }
+  .picker-item:hover { background: var(--surface-hover); }
   .pi-info { display: flex; flex-direction: column; gap: 1px; }
   .pi-name { font-size: var(--fs-sm); color: var(--text); }
-  .pi-sub { font-size: var(--fs-2xs); color: var(--text-2); }
+  .pi-sub { font-size: var(--fs-2xs); color: var(--text-2); font-family: var(--font-mono); }
 
+  /* «Управление всеми» — вторичная 46px кнопка, прижата к низу вкладки
+     (тот же паттерн, что стек действий на вкладке Info) */
   .open-panel-btn {
-    display: flex; align-items: center; gap: 0.35rem;
-    background: none; border: 1px solid var(--border); border-radius: var(--radius-sm);
-    padding: 0.3rem 0.6rem; cursor: pointer; color: var(--text-2);
-    font-size: var(--fs-xs); font-family: inherit; width: 100%; justify-content: center;
-    transition: all 0.12s; margin-top: var(--sp-1);
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-field);
+    height: 46px; padding: 0 14px; cursor: pointer; color: var(--text-body);
+    font-size: 0.9rem; font-weight: var(--fw-semibold); font-family: inherit; width: 100%;
+    transition: all var(--dur-fast); margin-top: auto; flex-shrink: 0;
   }
-  .open-panel-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .open-panel-btn:hover { background: var(--surface-hover); border-color: var(--border-2); color: var(--text); }
 
   .connect-error {
     background: var(--danger-bg);

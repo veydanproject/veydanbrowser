@@ -5,6 +5,10 @@
  * Veydan Browser — design tokens (single source of truth)
  * Imported once from src/routes/+layout.svelte.
  *
+ * Palette: redesign "Variant A — Тёмный продукт" (design handoff 2026-07).
+ * Dark theme is the product theme; the light block keeps legacy values plus
+ * approximations for the new token names (light switcher is disabled in UI).
+ *
  * Layers:
  *   :root              — theme-independent scales (spacing, type, radius, z, size, motion)
  *   [data-theme=…]     — themed colour tokens (dark / light)
@@ -12,12 +16,16 @@
  *                        onto canonical tokens, so stray var() refs stop
  *                        silently collapsing to transparent / inherited.
  *
- * Naming canon: --bg / --bg-2 / --surface / --surface-2 / --border / --border-2
+ * Naming canon: --bg / --bg-2 / --surface / --surface-2 / --surface-3 / --border / --border-2
  *               --text / --text-2 / --text-3 / --accent / --success / --danger / --warn-*
  * Do NOT introduce new ad-hoc names in components — extend this file instead.
  * ========================================================================== */
 
 :root {
+  /* ── Fonts ── (bundled via @fontsource-variable, imported in +layout.svelte) */
+  --font-ui:   'Manrope Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', 'Fira Code', 'Consolas', monospace;
+
   /* ── Spacing scale — 4px grid ── */
   --sp-0:   0;
   --sp-1:   4px;
@@ -38,36 +46,43 @@
   --fs-md:   1rem;      /* emphasis / dialog titles */
   --fs-lg:   1.15rem;   /* section titles */
   --fs-xl:   1.4rem;    /* page h1 */
-  --fs-2xl:  1.75rem;   /* hero */
+  --fs-2xl:  1.75rem;   /* hero / page headers (28px) */
+  --fs-3xl:  2rem;      /* note reader title (32px) */
 
   --fw-normal: 400;
   --fw-medium: 500;
   --fw-semibold: 600;
   --fw-bold: 700;
+  --fw-extrabold: 800;
 
   --lh-tight: 1.2;
   --lh-base:  1.5;
 
   /* ── Radius ── (theme-independent) */
-  --radius-xs:   4px;
-  --radius-sm:   6px;
-  --radius:      10px;
-  --radius-pill: 999px;
+  --radius-xs:    4px;
+  --radius-sm:    8px;   /* chips / badges / icon buttons (design: 7–9px) */
+  --radius:       10px;  /* buttons / inputs (design: 9–11px) */
+  --radius-field: 11px;  /* tall drawer form fields (46px) */
+  --radius-md:    12px;  /* nested cards (profile cards, icon tiles) */
+  --radius-lg:    16px;  /* cards / tables / sections */
+  --radius-pill:  999px; /* toggle knobs / status dots only — badges are rounded-rect now */
 
-  /* ── Layout heights (were hard-coded as 44 / 36 in 6+ files) ── */
-  --topbar-h: 44px;
+  /* ── Layout heights ── */
+  --topbar-h: 64px;
   --dock-h:   36px;
   --bar-h:    36px;   /* ssh session bar / inspector bar / inspector rulers offset */
-  --control-h: 32px;  /* высота контролов в панелях фильтров (поиск / select / кнопки) */
+  --control-h: 38px;  /* высота контролов в панелях фильтров (поиск / select / кнопки) */
+  --control-h-lg: 46px; /* поля форм в drawer'ах, сегмент-кнопки */
 
   /* ── Content rail (app width — shared by all routes + topbar) ── */
   --page-max:        1280px;  /* standard content rail — every route + topbar inner */
-  --page-max-narrow: 640px;   /* reading/forms column (settings) */
+  --page-max-narrow: 820px;   /* reading/forms column (settings) */
   --rail-pad-x:      1.75rem; /* shared horizontal inset for topbar + content, so rails align */
 
-  /* ── Panel / dialog widths (were 380–520 ad-hoc) ── */
-  --drawer-w:    380px;
-  --drawer-w-lg: 520px;
+  /* ── Panel / dialog widths ── */
+  --drawer-w:    440px;  /* profile detail */
+  --drawer-w-md: 480px;  /* create / edit profile forms */
+  --drawer-w-lg: 520px;  /* content-heavy drawers (notes / ssh / raw data) */
   --dialog-w:    440px;
 
   /* ── Z-index scale (was 20 → 9999 ad-hoc) ── */
@@ -85,34 +100,74 @@
   /* ── Motion ── */
   --dur-fast: 0.15s;
   --dur-base: 0.2s;
+  --dur-drawer: 0.28s;
   --ease:     cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-drawer: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 /* ── Colours: DARK ── */
 [data-theme='dark'] {
   color-scheme: dark;
-  --bg:          #0d1117;
-  --bg-2:        #161b27;
-  --surface:     #1c2333;
-  --surface-2:   #232d3f;
-  --border:      #2a3549;
-  --border-2:    #334155;
-  --text:        #e2e8f0;
-  --text-2:      #94a3b8;
-  --text-3:      #4a5568;
-  --accent:      #4f8ef7;
-  --accent-hover:#3b7de0;
-  --accent-bg:   rgba(79,142,247,0.12);
-  --success:     #38a169;
-  --success-bg:  rgba(56,161,105,0.15);
-  --success-text:#68d391;
-  --danger:      #e53e3e;
-  --danger-bg:   rgba(229,62,62,0.12);
-  --danger-text: #fc8181;
-  --warn-bg:     rgba(236,153,75,0.15);
-  --warn-text:   #f6ad55;
-  --shadow:      0 2px 8px rgba(0,0,0,0.4);
-  --shadow-lg:   0 8px 24px rgba(0,0,0,0.5);
+  --bg:          #08080c;
+  --bg-2:        #0b0b10;  /* chrome: header / dock / session bar */
+  --surface:     #0e0e14;  /* cards / sections / tables */
+  --surface-2:   #14141b;  /* nested: profile cards, mono chips */
+  --surface-3:   #101017;  /* form fields / segment containers / filter chips */
+  --surface-hover: #181820;
+  --surface-row-hover: #12121a;  /* table row hover — subtler than card hover */
+  --surface-drawer: #0b0b11;
+  --surface-drawer-footer: #0c0c12;
+  --toggle-off:  #22222c;  /* toggle track in "off" state */
+  --border:      #1c1c26;
+  --border-2:    #2c2c38;  /* hover border */
+  --text:        #eaeaf0;
+  --text-2:      #8a8a96;
+  --text-3:      #5c5c68;  /* dimmest: placeholders, table header labels */
+  --text-body:   #c1c1cb;  /* long-form body text (note reader, descriptions) */
+  --text-soft:   #a6a6b2;  /* metric text, default icon-button glyphs */
+  --text-faint:  #7f7f8b;  /* field labels, sublabels */
+  --text-dim:    #6a6a76;  /* "без прокси", stopped status, em-dashes */
+
+  --accent:        #8b7bff;
+  --accent-hover:  #6d5cf0;
+  --accent-bg:     rgba(124, 108, 246, 0.15);
+  --accent-border: rgba(124, 108, 246, 0.45);
+  --accent-grad:   linear-gradient(135deg, #8b7bff, #6d5cf0);
+  --accent-text:   #b5a8ff;  /* active nav / tabs */
+  --accent-text-2: #a99bff;  /* mono badges */
+  --accent-text-3: #9d8dff;  /* inline links ("Открыть →") */
+  --accent-tint:        rgba(139, 123, 255, 0.12);  /* tag / badge fills */
+  --accent-tint-border: rgba(139, 123, 255, 0.3);
+
+  --success:        #34d399;
+  --success-bg:     rgba(52, 211, 153, 0.12);
+  --success-text:   #34d399;
+  --success-border: rgba(52, 211, 153, 0.3);
+  --success-grad:   linear-gradient(135deg, #34d399, #10b981);
+  --danger:         #e5484d;  /* solid danger buttons */
+  --danger-bg:      rgba(242, 109, 109, 0.14);
+  --danger-text:    #f26d6d;
+  --danger-border:  rgba(242, 109, 109, 0.3);
+  --warn-bg:        rgba(245, 196, 81, 0.12);
+  --warn-text:      #f5c451;
+  --warn-border:    rgba(245, 196, 81, 0.4);
+
+  /* Category colours (workspaces / proxy types) */
+  --cat-purple: #8b7bff;
+  --cat-blue:   #60a5fa;
+  --cat-teal:   #2dd4bf;
+  --cat-pink:   #f472b6;
+
+  --shadow:      0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg:   0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-accent: 0 5px 14px rgba(124, 108, 246, 0.33);
+  --shadow-danger: 0 5px 16px rgba(229, 72, 77, 0.3);
+  --shadow-drawer: -24px 0 60px rgba(0, 0, 0, 0.5);
+  --shadow-logo:   0 4px 14px rgba(124, 108, 246, 0.4);
+  --shadow-note-active: 0 0 0 1px rgba(124, 108, 246, 0.15), 0 8px 22px rgba(0, 0, 0, 0.35);
+
+  --bg-glow:  radial-gradient(1200px 600px at 80% -10%, rgba(124, 108, 246, 0.06), transparent 60%);
+  --backdrop: rgba(4, 4, 8, 0.55);
 
   /* ── Compatibility aliases → canonical tokens ──
      These names leaked in from a second naming scheme and were referenced
@@ -139,31 +194,71 @@
   --color-text-muted:  var(--text-2);
 }
 
-/* ── Colours: LIGHT ── */
+/* ── Colours: LIGHT ──
+   Legacy palette. The light switcher is disabled in the UI (redesign is
+   dark-only for now); values for NEW token names are approximations so no
+   var() ever dangles if someone lands here with a persisted light theme. */
 [data-theme='light'] {
   color-scheme: light;
   --bg:          #f0f4f8;
   --bg-2:        #ffffff;
   --surface:     #ffffff;
   --surface-2:   #f8fafc;
+  --surface-3:   #f8fafc;
+  --surface-hover: #eef2f7;
+  --surface-row-hover: #f1f5f9;
+  --surface-drawer: #ffffff;
+  --surface-drawer-footer: #f8fafc;
+  --toggle-off:  #cbd5e1;
   --border:      #e2e8f0;
   --border-2:    #cbd5e1;
   --text:        #1a202c;
   --text-2:      #4a5568;
   --text-3:      #a0aec0;
-  --accent:      #2563eb;
-  --accent-hover:#1d4ed8;
-  --accent-bg:   rgba(37,99,235,0.08);
-  --success:     #16a34a;
-  --success-bg:  rgba(22,163,74,0.1);
-  --success-text:#15803d;
-  --danger:      #dc2626;
-  --danger-bg:   rgba(220,38,38,0.08);
-  --danger-text: #b91c1c;
-  --warn-bg:     rgba(217,119,6,0.1);
-  --warn-text:   #b45309;
-  --shadow:      0 2px 8px rgba(0,0,0,0.08);
-  --shadow-lg:   0 8px 24px rgba(0,0,0,0.12);
+  --text-body:   #2d3748;
+  --text-soft:   #64748b;
+  --text-faint:  #94a3b8;
+  --text-dim:    #94a3b8;
+
+  --accent:        #6d5cf0;
+  --accent-hover:  #5a49dd;
+  --accent-bg:     rgba(109, 92, 240, 0.1);
+  --accent-border: rgba(109, 92, 240, 0.4);
+  --accent-grad:   linear-gradient(135deg, #8b7bff, #6d5cf0);
+  --accent-text:   #6d5cf0;
+  --accent-text-2: #7a6af5;
+  --accent-text-3: #7a6af5;
+  --accent-tint:        rgba(109, 92, 240, 0.1);
+  --accent-tint-border: rgba(109, 92, 240, 0.3);
+
+  --success:        #16a34a;
+  --success-bg:     rgba(22, 163, 74, 0.1);
+  --success-text:   #15803d;
+  --success-border: rgba(22, 163, 74, 0.3);
+  --success-grad:   linear-gradient(135deg, #34d399, #10b981);
+  --danger:         #dc2626;
+  --danger-bg:      rgba(220, 38, 38, 0.08);
+  --danger-text:    #b91c1c;
+  --danger-border:  rgba(220, 38, 38, 0.3);
+  --warn-bg:        rgba(217, 119, 6, 0.1);
+  --warn-text:      #b45309;
+  --warn-border:    rgba(217, 119, 6, 0.35);
+
+  --cat-purple: #8b7bff;
+  --cat-blue:   #60a5fa;
+  --cat-teal:   #2dd4bf;
+  --cat-pink:   #f472b6;
+
+  --shadow:      0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-lg:   0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-accent: 0 5px 14px rgba(109, 92, 240, 0.25);
+  --shadow-danger: 0 5px 16px rgba(220, 38, 38, 0.2);
+  --shadow-drawer: -24px 0 60px rgba(0, 0, 0, 0.15);
+  --shadow-logo:   0 4px 14px rgba(109, 92, 240, 0.3);
+  --shadow-note-active: 0 0 0 1px rgba(109, 92, 240, 0.15), 0 8px 22px rgba(0, 0, 0, 0.08);
+
+  --bg-glow:  radial-gradient(1200px 600px at 80% -10%, rgba(124, 108, 246, 0.05), transparent 60%);
+  --backdrop: rgba(15, 23, 42, 0.35);
 
   /* aliases (resolve to this theme's canonical values) */
   --text-1:            var(--text);

@@ -32,21 +32,41 @@ Both CSS files are imported once at the top of `src/routes/+layout.svelte`.
 
 ## Tokens cheat-sheet
 
-- Surfaces: `--bg` < `--bg-2` < `--surface` < `--surface-2`; borders `--border` / `--border-2`.
-- Text: `--text` (primary) / `--text-2` (secondary) / `--text-3` (tertiary).
-- Semantic: `--accent*`, `--success*`, `--danger*`, `--warn-*`.
+- Surfaces: `--bg` < `--bg-2` < `--surface` < `--surface-2`; nested/fields `--surface-3`;
+  hovers `--surface-hover` / `--surface-row-hover`; drawers `--surface-drawer(-footer)`;
+  borders `--border` / `--border-2`.
+- Text: `--text` / `--text-2` / `--text-3`; long-form `--text-body`; extras
+  `--text-soft` (metrics/icons) · `--text-faint` (field labels) · `--text-dim` (caps labels, «—»).
+- Accent (purple): `--accent` / `--accent-hover` / `--accent-grad` (primary buttons, logo)
+  · text tiers `--accent-text` (active nav/tabs) / `--accent-text-2` (mono badges) / `--accent-text-3` (links)
+  · fills `--accent-bg` / `--accent-tint`(+`-border`) · `--accent-border` · `--shadow-accent`.
+- Semantic: `--success*` (+`-border`, `-grad`), `--danger*` (+`-border`, `--shadow-danger`), `--warn-*` (+`-border`).
+- Category colours (workspaces / proxy types): `--cat-purple` / `--cat-blue` / `--cat-teal` / `--cat-pink`.
+- Fonts: `--font-ui` (Manrope Variable) · `--font-mono` (JetBrains Mono Variable — hosts, versions, IDs).
 - Spacing (4px grid): `--sp-1`=4 … `--sp-6`=24, `--sp-8`=32.
-- Type: `--fs-xs` 0.72 · `--fs-sm` 0.8 · `--fs-base` 0.875 · `--fs-md` 1 · `--fs-lg` 1.15 · `--fs-xl` 1.4rem.
-- Radius: `--radius-xs` 4 · `--radius-sm` 6 · `--radius` 10 · `--radius-pill` 999.
-- Size: `--topbar-h` 44 · `--dock-h`/`--bar-h` 36 · `--drawer-w` 380 · `--drawer-w-lg` 520 · `--dialog-w` 440.
+- Type: `--fs-xs` 0.75 · `--fs-sm` 0.8 · `--fs-base` 0.875 · `--fs-md` 1 · `--fs-lg` 1.15 · `--fs-xl` 1.4 · `--fs-2xl` 1.75 (page h1) · `--fs-3xl` 2rem; weights up to `--fw-extrabold` 800.
+- Radius: `--radius-xs` 4 · `--radius-sm` 8 (chips/badges/icon-btns) · `--radius` 10 (buttons/inputs) ·
+  `--radius-field` 11 (46px drawer fields) · `--radius-md` 12 (nested cards) · `--radius-lg` 16 (cards/tables) · `--radius-pill` 999.
+- Size: `--topbar-h` 64 · `--dock-h`/`--bar-h` 36 · `--control-h` 38 · `--control-h-lg` 46 ·
+  `--drawer-w` 440 · `--drawer-w-md` 480 · `--drawer-w-lg` 520 · `--dialog-w` 440.
+
+### Extrapolation rules (redesign «Variant A»)
+
+Surfaces not covered by the design handoff follow the same language:
+cards `--surface`+`--radius-lg` (padding 22–24) · nested `--surface-2`+`--radius-md` ·
+fields `--surface-3`+`--radius`/`--radius-field` (46px in drawers) · caps section labels
+11px/700/letter-spacing `--text-dim` · technical values in `--font-mono` (often as `.mono-chip`) ·
+status pills = tint bg + coloured text + 6px dot · active nav/tab = `--accent-bg` + `--accent-text` ·
+segment controls = `.seg`/`.seg-btn` (or `.seg-btn-lg` standalone) · toggles = `.toggle` 54×30.
 
 ## Primitives
 
-`.page` (+`--page-max` override) · `.page-header`(+`.spacer`) · `.card`/`.card-title`
-· `.section`/`.section-label` · `.muted` · `.btn`(+`-primary/-ghost/-success/-danger/-sm`)
-· `.icon-btn`(+`.success/.danger`) · `.badge`(+`-accent/-ok/-danger/-warn`) · `.chip`(+`.active`)
-· `.tab-bar`/`.tab`(+`.active`)/`.tab-count` · `.empty-state` · `.loading`/`.spinner`/`.spin`
-· `.form-group`/`.form-row` · `.error-msg`.
+`.page` (+`--page-max` override) · `.page-header`(+`.spacer`)/`.page-sub` · `.card`(+`.card--hover`)/`.card-title`
+· `.section`/`.section-label` · `.muted` · `.btn`(+`-primary/-ghost/-success/-success-soft/-danger/-sm`)
+· `.icon-btn`(+`.success/.danger/.accent-soft`) · `.badge`(+`-accent/-ok/-danger/-warn`) · `.chip`(+`.active`)
+· `.tab-bar`/`.tab`(+`.active`)/`.tab-count` · `.seg`/`.seg-btn`/`.seg-btn-lg` · `.toggle`(+`.on`)
+· `.mono-chip` · `.data-table`(+`-head/-row`) · `.empty-state`/`.empty-icon` · `.loading`/`.spinner`/`.spin`
+· `.form-group`/`.form-row` · `.error-msg` · keyframes `vfade`/`vslide`.
 
 ## Modals & drawers
 

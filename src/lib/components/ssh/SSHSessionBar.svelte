@@ -14,7 +14,7 @@
 
   function statusColor(status: string): string {
     if (status === 'connected') return 'var(--success)';
-    if (status === 'connecting') return 'var(--warn-text, #f6ad55)';
+    if (status === 'connecting') return 'var(--warn-text)';
     return 'var(--danger)';
   }
 </script>
@@ -72,19 +72,23 @@
     align-items: center;
     gap: 0.3rem;
     padding: 0.2rem 0.55rem;
-    border-radius: 999px;
-    background: var(--surface, var(--bg));
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
     border: 1px solid var(--border);
     cursor: pointer;
     font-size: var(--fs-xs);
     color: var(--text);
-    transition: all 0.15s;
+    transition: all var(--dur-fast);
     white-space: nowrap;
   }
-  .ssh-chip:hover { border-color: var(--accent); }
-  .ssh-chip.active { border-color: var(--accent); background: var(--accent-bg); }
-  .ssh-chip.error { border-color: var(--danger); background: var(--danger-bg); }
+  .ssh-chip:hover { border-color: var(--border-2); }
+  .ssh-chip.active {
+    border-color: var(--accent-tint-border);
+    background: var(--accent-tint);
+    color: var(--accent-text-2);
+  }
+  .ssh-chip.error { border-color: var(--danger-border); background: var(--danger-bg); color: var(--danger-text); }
   .chip-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-  .chip-name { font-weight: 500; }
-  .chip-host { color: var(--text-3); font-size: var(--fs-2xs); }
+  .chip-name { font-weight: var(--fw-medium); }
+  .chip-host { color: var(--text-3); font-size: var(--fs-2xs); font-family: var(--font-mono); }
 </style>

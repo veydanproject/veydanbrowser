@@ -131,7 +131,7 @@
   <div class="ssh-body">
   {#if showForm}
     <div class="form-header">
-      <button class="btn-ghost btn-sm" onclick={() => { showForm = false; editConn = null; }}>
+      <button class="btn btn-ghost btn-sm" onclick={() => { showForm = false; editConn = null; }}>
         <Icon name="arrow-left" size={13} /> {$t('ssh_btn_cancel')}
       </button>
       <span class="form-title">{editConn ? $t('ssh_form_edit') : $t('ssh_form_new')}</span>
@@ -150,7 +150,7 @@
 
     <div class="list-header">
       <span class="list-count">{$t('ssh_connections_count', { n: String(filteredConnections.length) })}</span>
-      <button class="btn-primary btn-sm" onclick={handleNew}>
+      <button class="btn btn-primary btn-sm" onclick={handleNew}>
         <Icon name="plus" size={13} /> {$t('ssh_btn_new')}
       </button>
     </div>
@@ -174,7 +174,7 @@
     gap: var(--sp-2);
     margin-bottom: var(--sp-1);
   }
-  .form-title { font-size: var(--fs-sm); font-weight: 500; color: var(--text); }
+  .form-title { font-size: var(--fs-sm); font-weight: var(--fw-medium); color: var(--text); }
   .list-header { display: flex; align-items: center; justify-content: space-between; }
   .list-count { font-size: var(--fs-sm); color: var(--text-2); }
 </style>

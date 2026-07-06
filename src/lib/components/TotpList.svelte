@@ -36,8 +36,8 @@
   }
 
   function ringColor(secondsLeft: number): string {
-    if (secondsLeft <= 5) return 'var(--danger, #ef4444)';
-    if (secondsLeft <= 10) return 'var(--warning, #f59e0b)';
+    if (secondsLeft <= 5) return 'var(--danger-text)';
+    if (secondsLeft <= 10) return 'var(--warn-text)';
     return 'var(--accent)';
   }
 
@@ -114,11 +114,11 @@
 </script>
 
 {#if entries.length === 0}
-  <div class="empty">
-    <span style="opacity:0.3;display:flex"><Icon name="shield-off" size={28} /></span>
-    <span>{emptyText ?? $t('totp_empty')}</span>
+  <div class="empty-state">
+    <span class="empty-icon"><Icon name="shield-off" size={22} /></span>
+    <p>{emptyText ?? $t('totp_empty')}</p>
     {#if onrequestAdd}
-      <button class="btn-ghost btn-sm" onclick={onrequestAdd}>
+      <button class="btn btn-ghost btn-sm" onclick={onrequestAdd}>
         <Icon name="plus" size={13} /> {$t('totp_btn_add')}
       </button>
     {/if}
@@ -208,14 +208,14 @@
     display: flex;
     align-items: center;
     gap: var(--sp-3);
-    padding: 0.6rem var(--sp-3);
-    background: var(--surface);
+    padding: 0.875rem;
+    background: var(--surface-2);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    transition: border-color 0.15s;
+    border-radius: var(--radius-md);
+    transition: border-color var(--dur-fast);
   }
 
-  .entry:hover { border-color: var(--border-2, var(--accent)); }
+  .entry:hover { border-color: var(--border-2); }
 
   .entry-info {
     flex: 1;
@@ -224,7 +224,7 @@
 
   .entry-name {
     font-size: var(--fs-base);
-    font-weight: 500;
+    font-weight: var(--fw-semibold);
     color: var(--text);
     display: flex;
     align-items: center;
@@ -239,13 +239,13 @@
   }
 
   .profile-badge {
-    background: var(--accent-bg);
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    border-radius: 999px;
+    background: var(--accent-tint);
+    border: 1px solid var(--accent-tint-border);
+    color: var(--accent-text-2);
+    border-radius: var(--radius-sm);
     font-size: var(--fs-2xs);
     padding: 0.1rem 0.4rem;
-    font-weight: 400;
+    font-weight: var(--fw-medium);
   }
 
   .entry-code {
@@ -260,10 +260,10 @@
   }
 
   .code-value {
-    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-    font-size: var(--fs-lg);
-    font-weight: 700;
-    letter-spacing: 0.1em;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xl);
+    font-weight: var(--fw-bold);
+    letter-spacing: 0.08em;
     min-width: 5.5ch;
     text-align: center;
   }
@@ -274,50 +274,5 @@
     flex-shrink: 0;
   }
 
-  .empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--sp-3);
-    padding: var(--sp-10) var(--sp-4);
-    color: var(--text-2);
-    font-size: var(--fs-base);
-    text-align: center;
-  }
-
-  .icon-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: none;
-    cursor: pointer;
-    color: var(--text-2);
-    transition: all 0.15s;
-  }
-
-  .icon-btn:hover { border-color: var(--border-2, var(--accent)); color: var(--text); }
-  .icon-btn.success { color: var(--success); border-color: var(--success); }
-  .icon-btn.danger-soft:hover { color: var(--danger, #ef4444); border-color: var(--danger, #ef4444); }
-  .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .btn-ghost {
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.4rem 0.85rem;
-    font-size: var(--fs-sm);
-    cursor: pointer;
-    color: var(--text-2);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    transition: all 0.15s;
-  }
-
-  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
-  .btn-sm { padding: 0.3rem 0.65rem; }
+  /* .icon-btn / .empty-state / .btn are global primitives (base.css) */
 </style>

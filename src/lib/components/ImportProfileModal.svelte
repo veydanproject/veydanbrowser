@@ -250,7 +250,8 @@
 
   .file-drop {
     border: 2px dashed var(--border-2);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
     padding: var(--sp-6);
     display: flex;
     flex-direction: column;
@@ -262,39 +263,39 @@
     transition: border-color 0.15s, background 0.15s;
   }
   .file-drop:hover, .file-drop:focus {
-    border-color: var(--accent);
-    background: var(--accent-bg);
+    border-color: var(--accent-border);
+    background: var(--accent-tint);
     outline: none;
   }
   .file-drop.has-file {
-    border-color: var(--accent);
+    border-color: var(--accent-border);
     color: var(--text);
   }
 
-  .file-name { font-weight: 500; color: var(--text); }
+  .file-name { font-weight: var(--fw-medium); color: var(--text); }
   .file-meta { font-size: var(--fs-sm); color: var(--text-3); }
 
   .json-input {
     width: 100%;
-    background: var(--surface-2);
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius);
     color: var(--text);
     font-size: var(--fs-sm);
-    font-family: monospace;
+    font-family: var(--font-mono);
     padding: 0.6rem var(--sp-3);
     resize: vertical;
     box-sizing: border-box;
   }
   .json-input:focus {
-    border-color: var(--accent);
+    border-color: var(--accent-border);
     box-shadow: 0 0 0 3px var(--accent-bg);
   }
 
   .preview {
     background: var(--surface-2);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     padding: 0.6rem var(--sp-3);
     display: flex;
     flex-direction: column;
@@ -302,11 +303,11 @@
   }
 
   .preview-title {
-    font-size: var(--fs-xs);
-    font-weight: 600;
+    font-size: var(--fs-2xs);
+    font-weight: var(--fw-bold);
     text-transform: uppercase;
-    color: var(--text-3);
-    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    letter-spacing: 0.7px;
     margin-bottom: 0.2rem;
   }
 
@@ -328,7 +329,7 @@
     display: flex;
     align-items: center;
     gap: 0.3rem;
-    font-family: monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-sm);
   }
 

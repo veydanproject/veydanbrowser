@@ -21,12 +21,12 @@
 
   let createModal = $state(false);
   let editModal = $state<{ open: boolean; id: string; name: string; description: string; color: string }>({
-    open: false, id: '', name: '', description: '', color: '#6366f1',
+    open: false, id: '', name: '', description: '', color: '#8b7bff',
   });
   let deleteModal = $state<{ open: boolean; id: string; name: string }>({
     open: false, id: '', name: '',
   });
-  let createForm = $state<CreateWorkspaceRequest>({ name: '', description: '', color: '#6366f1' });
+  let createForm = $state<CreateWorkspaceRequest>({ name: '', description: '', color: '#8b7bff' });
   let saving = $state(false);
 
   let dragSrcIndex = $state(-1);
@@ -37,10 +37,10 @@
 
   const ORDER_KEY = 'ws_order';
 
+  // Category palette from the redesign (workspace accents); stored per-workspace as data.
   const COLORS = [
-    '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e',
-    '#f97316', '#eab308', '#22c55e', '#14b8a6',
-    '#06b6d4', '#3b82f6',
+    '#8b7bff', '#60a5fa', '#2dd4bf', '#f472b6',
+    '#f5c451', '#34d399', '#f26d6d', '#f97316',
   ];
 
   onMount(async () => {
@@ -167,7 +167,7 @@
       stats = { ...stats, [w.id]: { id: w.id, profile_count: 0, proxy_count: 0, active_count: 0 } };
       saveOrder();
       createModal = false;
-      createForm = { name: '', description: '', color: '#6366f1' };
+      createForm = { name: '', description: '', color: '#8b7bff' };
     } catch (e) {
       error = formatError(e);
     } finally {
@@ -188,7 +188,7 @@
         color: editModal.color,
       });
       workspaces = workspaces.map((w) => (w.id === updated.id ? updated : w));
-      editModal = { open: false, id: '', name: '', description: '', color: '#6366f1' };
+      editModal = { open: false, id: '', name: '', description: '', color: '#8b7bff' };
     } catch (e) {
       error = formatError(e);
     } finally {
@@ -221,9 +221,12 @@
 
 <div class="page">
   <div class="page-header">
-    <h1>{$t('workspaces_title')}</h1>
+    <div class="page-title-group">
+      <h1>{$t('workspaces_title')}</h1>
+      <p class="page-sub">{$t('workspaces_sub', { count: String(workspaces.length) })}</p>
+    </div>
     <button class="btn btn-primary spacer" onclick={() => (createModal = true)}>
-      <Icon name="plus" size={14} />{$t('workspaces_new')}
+      <Icon name="plus" size={15} />{$t('workspaces_new')}
     </button>
   </div>
 
@@ -262,7 +265,7 @@
               <div class="drag-handle" role="button" tabindex="-1" aria-label="Drag to reorder" title="Drag to reorder" onpointerdown={(e) => onHandlePointerDown(e, i)}>
                 <Icon name="grip-vertical" size={14} />
               </div>
-              <div class="card-icon" style="background: color-mix(in srgb, {ws.color} 15%, var(--surface-2))">
+              <div class="card-icon" style="background: color-mix(in srgb, {ws.color} 14%, transparent)">
                 <Icon name="layers" size={18} />
               </div>
               <div class="card-title-group">
@@ -304,6 +307,7 @@
           <div class="card-footer">
             <a href="/workspace/{ws.id}" class="open-btn" onclick={(e) => e.stopPropagation()}>
               {$t('workspaces_open')}
+              <Icon name="arrow-right" size={16} />
             </a>
           </div>
         </div>
@@ -320,7 +324,7 @@
 {#if ghostActive && dragSrcIndex !== -1}
   <div
     class="drag-ghost"
-    style="left:{ghostX}px; top:{ghostY}px; --ws-color:{workspaces[dragSrcIndex]?.color ?? '#6366f1'}"
+    style="left:{ghostX}px; top:{ghostY}px; --ws-color:{workspaces[dragSrcIndex]?.color ?? '#8b7bff'}"
   >
     <div class="card-accent"></div>
     <div class="ghost-name">{workspaces[dragSrcIndex]?.name}</div>
@@ -454,30 +458,32 @@
 </Dialog>
 
 <style>
+  /* Screen entry animation (design: vfade) */
+  .page { animation: vfade 0.25s ease; }
+  .page-title-group { display: flex; flex-direction: column; gap: 6px; }
+
   /* ── Grid ── */
   .workspace-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: var(--sp-4);
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 18px;
   }
 
   /* ── Card ── */
   .workspace-card {
-    background: var(--bg-2);
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    box-shadow: var(--shadow);
-    transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+    transition: border-color 0.18s, transform 0.18s, box-shadow 0.18s;
     cursor: pointer;
   }
 
   .workspace-card:hover {
-    border-color: var(--ws-color, var(--border-2));
+    border-color: var(--border-2);
     transform: translateY(-2px);
-    box-shadow: var(--shadow-lg);
   }
   .workspace-card.drag-source { opacity: 0.25; transition: none; }
   .workspace-card.insert-before { box-shadow: -4px 0 0 0 var(--accent), var(--shadow-lg); }
@@ -513,16 +519,21 @@
   .workspace-card:hover .drag-handle { opacity: 1; }
   .drag-handle:active { cursor: grabbing; }
 
+  /* Colour tick (design: 44×3 rounded bar at the card top, not a full strip) */
   .card-accent {
+    width: 44px;
     height: 3px;
+    border-radius: 3px;
+    margin: 22px 0 0 22px;
     background: var(--ws-color, var(--accent));
+    flex-shrink: 0;
   }
 
   .card-body {
-    padding: var(--sp-4);
+    padding: 18px 22px 4px;
     display: flex;
     flex-direction: column;
-    gap: 0.875rem;
+    gap: 1.1rem;
     flex: 1;
   }
 
@@ -533,9 +544,9 @@
   }
 
   .card-icon {
-    width: 36px;
-    height: 36px;
-    border-radius: var(--radius-sm);
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -544,45 +555,49 @@
   }
 
   .card-title-group { flex: 1; min-width: 0; }
-  .card-title { font-size: var(--fs-md); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .card-desc { font-size: var(--fs-xs); color: var(--text-2); margin-top: 0.15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-title { font-size: var(--fs-md); font-weight: var(--fw-bold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-desc { font-size: 0.78rem; color: var(--text-faint); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .card-menu { display: flex; gap: 0.2rem; flex-shrink: 0; }
+  .card-menu { display: flex; gap: 2px; flex-shrink: 0; opacity: 0; transition: opacity 0.15s; }
+  .workspace-card:hover .card-menu { opacity: 1; }
   .menu-btn {
     display: flex; align-items: center; justify-content: center;
-    width: 26px; height: 26px; background: transparent; border-radius: var(--radius-sm);
+    width: 30px; height: 30px; background: transparent; border-radius: var(--radius-sm);
     border: none; color: var(--text-3); cursor: pointer; transition: all 0.15s;
   }
-  .menu-btn:hover { background: var(--surface-2); color: var(--text-2); }
+  .menu-btn:hover { background: var(--surface-2); color: var(--text-body); }
   .menu-btn.danger:hover { background: var(--danger-bg); color: var(--danger-text); }
 
-  .card-stats { display: flex; flex-direction: column; gap: 0.35rem; }
-  .stat { display: flex; align-items: center; gap: 0.4rem; font-size: var(--fs-sm); color: var(--text-2); }
+  .card-stats { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+  .stat { display: flex; align-items: center; gap: 7px; font-size: 0.82rem; color: var(--text-soft); }
+  .stat :global(svg) { color: var(--text-dim); }
   .stat.active { color: var(--success-text); font-weight: 500; }
+  .stat.active :global(svg) { color: var(--success); }
   .active-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
 
   .card-footer {
     border-top: 1px solid var(--border);
-    padding: 0.625rem var(--sp-4);
+    margin: 14px 22px 0;
+    padding: 14px 0 18px;
   }
 
   .open-btn {
     display: inline-flex;
     align-items: center;
-    gap: 0.3rem;
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    color: var(--ws-color, var(--accent));
+    gap: 6px;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semibold);
+    color: var(--accent-text-3);
     text-decoration: none;
-    transition: opacity 0.15s;
+    transition: gap 0.15s, color 0.15s;
   }
-  .open-btn:hover { opacity: 0.75; }
+  .open-btn:hover { color: var(--accent-text); gap: 10px; }
 
   /* ── Add card ── */
   .add-card {
     background: transparent;
-    border: 2px dashed var(--border);
-    border-radius: var(--radius);
+    border: 1.5px dashed var(--border-2);
+    border-radius: var(--radius-lg);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -590,11 +605,11 @@
     gap: var(--sp-2);
     color: var(--text-3);
     cursor: pointer;
-    min-height: 160px;
+    min-height: 210px;
     transition: all 0.15s;
-    font-size: var(--fs-sm);
+    font-size: var(--fs-base);
   }
-  .add-card:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+  .add-card:hover { border-color: var(--border-2); color: var(--text-2); background: var(--surface); }
 
   /* ── Modal form layout (dialog body) ── */
   .ws-form { display: flex; flex-direction: column; gap: 0.875rem; }

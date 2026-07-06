@@ -111,12 +111,13 @@
     term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, 'Courier New', monospace",
+      fontFamily: "'JetBrains Mono Variable', 'JetBrains Mono', 'Fira Code', Menlo, monospace",
+      // Palette matches the redesign dark theme (JS data — xterm can't read CSS vars)
       theme: {
-        background: '#0d1117',
-        foreground: '#e2e8f0',
-        cursor: '#e2e8f0',
-        selectionBackground: '#334155',
+        background: '#0b0b11',
+        foreground: '#eaeaf0',
+        cursor: '#8b7bff',
+        selectionBackground: 'rgba(139,123,255,0.25)',
       },
       scrollback: 5000,
       allowProposedApi: true,

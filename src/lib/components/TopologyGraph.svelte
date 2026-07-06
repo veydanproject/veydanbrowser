@@ -146,13 +146,15 @@
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const isDark = document.body.dataset.theme === 'dark';
-    const edgeColor = isDark ? 'rgba(148,163,184,0.2)' : 'rgba(100,116,139,0.2)';
-    const proxyFill = '#3b82f6';
-    const profileFill = '#22c55e';
-    const profileStoppedFill = isDark ? '#334155' : '#cbd5e1';
-    const textColor = isDark ? '#e2e8f0' : '#1a202c';
-    const bgColor = isDark ? '#0d1117' : '#f0f4f8';
+    // Canvas can't read CSS vars — resolve the design tokens at draw time
+    const css = getComputedStyle(document.body);
+    const tok = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
+    const edgeColor = 'rgba(138,138,150,0.2)';
+    const proxyFill = tok('--cat-blue', '#60a5fa');
+    const profileFill = tok('--success', '#34d399');
+    const profileStoppedFill = tok('--border-2', '#2c2c38');
+    const textColor = tok('--text', '#eaeaf0');
+    const bgColor = tok('--bg', '#08080c');
 
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = bgColor;
@@ -188,7 +190,7 @@
       ctx.fill();
 
       if (isHovered) {
-        ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.3)';
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
         ctx.lineWidth = 2;
         ctx.stroke();
       }
@@ -305,7 +307,7 @@
 
   .legend-item { display: flex; align-items: center; gap: 0.3rem; }
   .legend-item .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .legend-item.proxy .dot { background: #3b82f6; }
-  .legend-item.running .dot { background: #22c55e; }
+  .legend-item.proxy .dot { background: var(--cat-blue); }
+  .legend-item.running .dot { background: var(--success); }
   .legend-item.stopped .dot { background: var(--border-2); }
 </style>

@@ -87,7 +87,8 @@
   .dialog-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--backdrop);
+    -webkit-backdrop-filter: blur(2px);
     backdrop-filter: blur(2px);
     display: flex;
     align-items: center;
@@ -102,9 +103,9 @@
     width: var(--dialog-w);
     max-width: 92vw;
     max-height: 88vh;
-    background: var(--bg-2);
+    background: var(--surface-drawer);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
     overflow: hidden;
     animation: dialog-in var(--dur-base) var(--ease);
@@ -128,7 +129,8 @@
   }
   .dialog-title {
     font-size: var(--fs-md);
-    font-weight: var(--fw-semibold);
+    font-weight: var(--fw-extrabold);
+    letter-spacing: -0.3px;
     color: var(--text);
   }
   .dialog-close {
@@ -136,15 +138,15 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: var(--radius-sm);
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
     background: transparent;
     color: var(--text-2);
     border: none;
     flex-shrink: 0;
   }
-  .dialog-close:hover { background: var(--surface-2); color: var(--text); }
+  .dialog-close:hover { background: var(--surface-hover); color: var(--text); }
 
   .dialog-body {
     flex: 1;

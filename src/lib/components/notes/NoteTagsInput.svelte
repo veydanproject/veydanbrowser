@@ -30,8 +30,8 @@
   let { selectedTags, allTags, onchange, contextChips = [], folders = [], activeFolderIds = [], onaddFolder, workspaces = [], profiles = [], activeBindings = [], onaddBinding }: Props = $props();
 
   const TAG_COLORS = [
-    '#6366f1', '#3b82f6', '#06b6d4', '#10b981',
-    '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6',
+    '#8b7bff', '#60a5fa', '#2dd4bf', '#f472b6',
+    '#f5c451', '#34d399', '#f26d6d', '#f97316',
   ];
 
   let open = $state(false);

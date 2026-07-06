@@ -133,7 +133,7 @@
               rows="5"
               bind:value={form.private_key}
               placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
-              style="font-family: monospace; font-size: 0.72rem; resize: vertical;"
+              style="font-family: var(--font-mono); font-size: 0.72rem; resize: vertical;"
             ></textarea>
           </div>
           <div class="field-hint">Если заполнено — используется вместо пароля</div>
@@ -169,40 +169,53 @@
   .section { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-1); }
 
   .section-label {
-    font-size: var(--fs-2xs); font-weight: 700; color: var(--text-2);
-    text-transform: uppercase; letter-spacing: 0.08em;
+    font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.9px;
   }
 
-  .type-row { display: flex; gap: 0.35rem; }
+  /* Proxy type — standalone segment buttons (46px / radius 11) */
+  .type-row { display: flex; gap: var(--sp-2); }
 
   .type-btn {
-    flex: 1; padding: 0.4rem; font-size: var(--fs-sm); font-weight: 600;
-    background: var(--surface-2); border: 1px solid var(--border);
-    color: var(--text-2); border-radius: var(--radius-sm); cursor: pointer;
-    transition: all 0.15s;
+    flex: 1; height: var(--control-h-lg); padding: 0 0.5rem;
+    font-size: var(--fs-sm); font-weight: var(--fw-semibold);
+    background: var(--surface-3); border: 1px solid var(--border);
+    color: var(--text-2); border-radius: var(--radius-field); cursor: pointer;
+    transition: all var(--dur-fast);
   }
-  .type-btn:hover { border-color: var(--border-2); color: var(--text); }
-  .type-btn.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+  .type-btn:hover:not(.active) { border-color: var(--border-2); color: var(--text); }
+  .type-btn.active { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent-text); }
 
   .divider { height: 1px; background: var(--border); margin: var(--sp-3) 0; }
 
   .field-hint {
-    font-size: var(--fs-2xs); color: var(--text-3); margin-top: -0.25rem;
+    font-size: var(--fs-2xs); color: var(--text-faint); margin-top: -0.25rem;
+  }
+
+  /* Tall drawer form fields per design (46px / radius 11) */
+  form input[type='text'],
+  form input[type='number'],
+  form input[type='password'] {
+    height: var(--control-h-lg);
+    border-radius: var(--radius-field);
+    background: var(--surface-3);
+    font-size: 0.9rem;
   }
 
   textarea {
-    width: 100%; background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius-sm); color: var(--text);
-    padding: 0.45rem 0.6rem; box-sizing: border-box;
+    width: 100%; background: var(--surface-3); border: 1px solid var(--border);
+    border-radius: var(--radius-field); color: var(--text);
+    padding: 0.6rem 0.75rem; box-sizing: border-box;
   }
-  textarea:focus { outline: none; border-color: var(--accent); }
+  textarea:focus { outline: none; border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-bg); }
 
   .form-row { display: grid; grid-template-columns: 1fr auto; gap: var(--sp-2); }
-  .port-group { width: 90px; }
+  .port-group { width: 100px; }
   .host-group { flex: 1; }
 
   .form-actions {
-    display: flex; gap: var(--sp-2); justify-content: flex-end;
+    display: flex; gap: 10px; justify-content: flex-end;
     padding-top: var(--sp-3);
   }
+  .form-actions .btn { height: 42px; border-radius: var(--radius-field); padding: 0 20px; }
 </style>

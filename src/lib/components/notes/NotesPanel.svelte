@@ -47,6 +47,39 @@
   let dragging: 'sidebar' | 'list' | null = $state(null);
   let hoveredResizer: 'sidebar' | 'list' | null = $state(null);
 
+  // ── Panel width: resizable, persisted globally (shared across profiles/workspaces) ──
+  const PANEL_W_KEY = 'notes-panel-width';
+  function loadPanelWidth(): number {
+    try {
+      const v = parseInt(localStorage.getItem(PANEL_W_KEY) ?? '', 10);
+      if (Number.isFinite(v)) return v;
+    } catch {}
+    return 900;
+  }
+  let panelWidth = $state(loadPanelWidth());
+  let panelDragging = $state(false);
+
+  function clampPanelWidth(w: number): number {
+    return Math.max(640, Math.min(window.innerWidth * 0.96, w));
+  }
+
+  function startPanelDrag(e: MouseEvent) {
+    e.preventDefault();
+    panelDragging = true;
+
+    function onMove(ev: MouseEvent) {
+      panelWidth = clampPanelWidth(window.innerWidth - ev.clientX);
+    }
+    function onUp() {
+      panelDragging = false;
+      try { localStorage.setItem(PANEL_W_KEY, String(Math.round(panelWidth))); } catch {}
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
   function saveColWidths() {
     try { localStorage.setItem('notes-col-widths', JSON.stringify(colWidths)); } catch {}
   }
@@ -88,6 +121,7 @@
 
   $effect(() => {
     if (open) {
+      panelWidth = loadPanelWidth();
       untrack(() => notesStore.ensureLoaded());
       // Pre-set filter based on context
       if (context === 'workspace' && contextId) {
@@ -247,7 +281,23 @@
     role="presentation"
     tabindex="-1"
   >
-    <div class="panel" role="dialog" aria-label={$t('notes_title')}>
+    <div
+      class="panel"
+      class:panel-dragging={panelDragging}
+      style="width: min({panelWidth}px, 96vw)"
+      role="dialog"
+      aria-label={$t('notes_title')}
+    >
+      <!-- Left-edge resizer: drag to set panel width (persisted globally) -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="panel-edge-resizer"
+        class:active={panelDragging}
+        onmousedown={startPanelDrag}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize panel"
+      ></div>
       <!-- Header -->
       <div class="panel-header">
         <div class="header-title">
@@ -256,43 +306,30 @@
           <span class="badge badge-accent">{displayList.length}</span>
         </div>
         <div class="header-actions">
-          <button class="icon-btn" title={$t('notes_btn_sync')} onclick={() => api.notes.sync()}>
-            <Icon name="refresh-cw" size={13} />
-          </button>
-          <button class="icon-btn" title={$t('notes_btn_open_folder')} onclick={() => api.notes.openFolder()}>
-            <Icon name="folder-open" size={13} />
-          </button>
-          <button class="icon-btn" onclick={() => { sidebarVisible = !sidebarVisible; }} title={$t('notes_btn_toggle_sidebar')}>
-            <Icon name="sidebar" size={13} />
-          </button>
           <button class="close-btn" onclick={() => (open = false)}>
             <Icon name="x" size={15} />
           </button>
         </div>
       </div>
 
-      <!-- Search -->
-      <div class="panel-search">
-        <div class="search-wrap">
-          <span class="search-icon"><Icon name="search" size={13} /></span>
-          <input
-            type="text"
-            bind:value={searchQuery}
-            oninput={onSearchInput}
-            placeholder={$t('notes_search_placeholder')}
-            class="search-input"
-          />
-          {#if searching}
-            <span class="search-spinner"><Icon name="loader" size={12} /></span>
-          {/if}
-        </div>
-      </div>
-
-      <!-- Body: sidebar + list + editor -->
+      <!-- Body: sidebar + list + editor (same layout as the Notes screen) -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="panel-body" bind:this={panelBodyEl} class:is-dragging={dragging !== null}>
         {#if sidebarVisible}
           <div class="sidebar" style="width: {colWidths.sidebar}%">
+            <div class="search-wrap">
+              <span class="search-icon"><Icon name="search" size={15} /></span>
+              <input
+                type="text"
+                bind:value={searchQuery}
+                oninput={onSearchInput}
+                placeholder={$t('notes_search_placeholder')}
+                class="search-input"
+              />
+              {#if searching}
+                <span class="search-spinner"><Icon name="loader" size={12} /></span>
+              {/if}
+            </div>
             <NoteFilters
               notes={notesStore.list}
               allTags={notesStore.allTags}
@@ -300,6 +337,17 @@
               {activeFilter}
               onfilter={handleFilterChange}
             />
+            <div class="sidebar-footer">
+              <button class="icon-btn" title={$t('notes_btn_sync')} onclick={() => api.notes.sync()}>
+                <Icon name="refresh-cw" size={14} />
+              </button>
+              <button class="icon-btn" title={$t('notes_btn_open_folder')} onclick={() => api.notes.openFolder()}>
+                <Icon name="folder-open" size={14} />
+              </button>
+              <button class="icon-btn" onclick={() => { sidebarVisible = false; }} title={$t('notes_btn_toggle_sidebar')}>
+                <Icon name="sidebar" size={14} />
+              </button>
+            </div>
           </div>
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <div
@@ -313,9 +361,24 @@
 
         <div class="list-col" style="width: {colWidths.list}%">
           <div class="list-header">
-            <button class="btn-new" onclick={() => (showCreate = true)}>
-              <Icon name="plus" size={12} /> {$t('notes_btn_new')}
-            </button>
+            <div class="list-title-group">
+              <h2 class="list-title">{$t('notes_filter_all')}</h2>
+              <p class="list-sub">
+                {displayList.length === 1
+                  ? $t('panel_notes_count_one', { n: String(displayList.length) })
+                  : $t('panel_notes_count_many', { n: String(displayList.length) })}
+              </p>
+            </div>
+            <div class="list-actions">
+              {#if !sidebarVisible}
+                <button class="icon-btn" onclick={() => { sidebarVisible = true; }} title={$t('notes_btn_toggle_sidebar')}>
+                  <Icon name="sidebar" size={14} />
+                </button>
+              {/if}
+              <button class="btn btn-primary btn-new" onclick={() => (showCreate = true)}>
+                <Icon name="plus" size={14} /> {$t('notes_btn_new')}
+              </button>
+            </div>
           </div>
           <div class="list-scroll">
             <NotesList
@@ -374,22 +437,49 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.3);
-    z-index: 900;
+    background: var(--backdrop);
+    z-index: var(--z-drawer);
     display: flex;
     justify-content: flex-end;
   }
 
   .panel {
-    background: var(--bg-2);
+    background: var(--surface-drawer);
     border-left: 1px solid var(--border);
-    width: min(900px, 96vw);
+    min-width: 640px;
     height: 100%;
     display: flex;
     flex-direction: column;
-    box-shadow: var(--shadow-lg);
-    animation: slide-in 0.2s ease;
+    box-shadow: var(--shadow-drawer);
+    animation: slide-in var(--dur-drawer) var(--ease-drawer);
     position: relative;
+  }
+  .panel.panel-dragging { user-select: none; }
+
+  /* Left-edge drag handle for panel width */
+  .panel-edge-resizer {
+    position: absolute;
+    left: -3px;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: col-resize;
+    z-index: 2;
+  }
+  .panel-edge-resizer::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 1px;
+    background: transparent;
+    transition: background 0.15s, width 0.1s;
+  }
+  .panel-edge-resizer:hover::before,
+  .panel-edge-resizer.active::before {
+    background: var(--accent);
+    width: 2px;
   }
 
   @keyframes slide-in {
@@ -414,8 +504,9 @@
 
   .header-title h3 {
     margin: 0;
-    font-size: var(--fs-md);
-    font-weight: 600;
+    font-size: 1.15rem;
+    font-weight: var(--fw-extrabold);
+    letter-spacing: -0.3px;
   }
 
   .header-actions {
@@ -424,35 +515,35 @@
     gap: 0.2rem;
   }
 
-  .icon-btn, .close-btn {
+  /* .icon-btn is the global 32px primitive (base.css) */
+  .close-btn {
     background: none;
     border: none;
     cursor: pointer;
-    color: var(--text-2);
+    color: var(--text-soft);
     display: flex;
     align-items: center;
-    padding: var(--sp-1);
-    border-radius: var(--radius-sm);
-    transition: all 0.15s;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    transition: all var(--dur-fast);
   }
 
-  .icon-btn:hover, .close-btn:hover { color: var(--text); background: var(--surface); }
-
-  .panel-search {
-    padding: 0.6rem var(--sp-4) 0;
-    flex-shrink: 0;
-  }
+  .close-btn:hover { color: var(--text); background: var(--surface-hover); }
 
   .search-wrap {
     position: relative;
     display: flex;
     align-items: center;
+    margin: var(--sp-3) var(--sp-3) var(--sp-2);
+    flex-shrink: 0;
   }
 
   .search-icon {
     position: absolute;
-    left: 0.6rem;
-    color: var(--text-2);
+    left: 0.75rem;
+    color: var(--text-3);
     pointer-events: none;
     display: flex;
   }
@@ -461,14 +552,18 @@
     width: 100%;
     box-sizing: border-box;
     padding: 0.42rem 0.6rem 0.42rem var(--sp-8);
-    background: var(--surface);
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius);
     color: var(--text);
     font-size: var(--fs-sm);
   }
 
-  .search-input:focus { outline: none; border-color: var(--accent); }
+  .search-input:focus {
+    outline: none;
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 3px var(--accent-bg);
+  }
 
   .search-spinner {
     position: absolute;
@@ -482,7 +577,6 @@
     flex: 1;
     display: flex;
     overflow: hidden;
-    margin-top: var(--sp-2);
   }
 
   .panel-body.is-dragging {
@@ -517,9 +611,20 @@
 
   .sidebar {
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
     min-width: 100px;
   }
+
+  .sidebar-footer {
+    display: flex;
+    gap: 6px;
+    padding: var(--sp-2) var(--sp-3) var(--sp-3);
+    margin-top: auto;
+    flex-shrink: 0;
+  }
+  .sidebar-footer .icon-btn { width: 32px; height: 32px; }
 
   .list-col {
     flex-shrink: 0;
@@ -530,26 +635,33 @@
   }
 
   .list-header {
-    padding: 0.4rem var(--sp-2);
+    padding: var(--sp-4) var(--sp-4) var(--sp-3);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--sp-2);
     flex-shrink: 0;
-    border-bottom: 1px solid var(--border);
   }
+
+  .list-title-group { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .list-title {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: var(--fw-extrabold);
+    letter-spacing: -0.3px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .list-sub { margin: 0; font-size: 0.78rem; color: var(--text-faint); }
+
+  .list-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .list-actions .icon-btn { width: 32px; height: 32px; }
 
   .btn-new {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--sp-1);
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: var(--sp-1) 0.6rem;
-    font-size: var(--fs-sm);
-    color: var(--text-2);
-    cursor: pointer;
-    transition: all 0.15s;
+    height: 34px;
+    padding: 0 14px;
+    font-size: 0.82rem;
+    border-radius: 9px;
   }
-
-  .btn-new:hover { border-color: var(--accent); color: var(--accent); }
 
   .list-scroll {
     flex: 1;
@@ -569,17 +681,17 @@
   .create-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: var(--backdrop);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 10;
+    z-index: var(--z-sticky);
   }
 
   .create-card {
-    background: var(--bg-2);
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     padding: var(--sp-5);
     width: 320px;
     display: flex;
@@ -595,9 +707,9 @@
   }
 
   .create-title {
-    background: var(--surface);
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius);
     padding: 0.45rem var(--sp-3);
     color: var(--text);
     font-size: var(--fs-base);
@@ -605,7 +717,11 @@
     box-sizing: border-box;
   }
 
-  .create-title:focus { outline: none; border-color: var(--accent); }
+  .create-title:focus {
+    outline: none;
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 3px var(--accent-bg);
+  }
 
   .create-actions {
     display: flex;

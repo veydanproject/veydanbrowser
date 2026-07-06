@@ -57,7 +57,7 @@
   // ── Add column modal ─────────────────────────────────────────────────────────
   let showAddColumn = $state(false);
   let newColName = $state('');
-  let newColColor = $state('#6366f1');
+  let newColColor = $state('#8b7bff');
   let addColLoading = $state(false);
 
   // ── Edit column ───────────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@
   let editColName = $state('');
   let editColColor = $state('');
 
-  const PALETTE = ['#6366f1', '#f97316', '#22c55e', '#ef4444', '#eab308', '#06b6d4', '#ec4899', '#8b5cf6'];
+  const PALETTE = ['#8b7bff', '#60a5fa', '#2dd4bf', '#f472b6', '#f5c451', '#34d399', '#f26d6d', '#f97316'];
 
   const proxyMap = $derived(new Map(proxies.map((p) => [p.id, p])));
   const sortedCols = $derived([...columns].sort((a, b) => a.position - b.position));
@@ -269,7 +269,7 @@
   </div>
 
   <!-- Board -->
-  <div class="board" style="grid-template-columns: repeat({sortedCols.length + 1 + (columns.length < 20 ? 1 : 0)}, minmax(200px, 1fr))">
+  <div class="board" style="grid-template-columns: repeat({sortedCols.length + 1 + (columns.length < 20 ? 1 : 0)}, minmax(280px, 1fr))">
     <!-- Dynamic columns -->
     {#each sortedCols as col (col.id)}
       {@const cards = colProfiles(col.tag_name)}
@@ -280,7 +280,7 @@
         role="list"
       >
         <div class="col-header">
-          <span class="col-dot" style="background:{col.color}"></span>
+          <span class="col-dot" style="background:{col.color}; box-shadow: 0 0 8px {col.color}"></span>
           {#if editingCol?.id === col.id}
             <input
               class="col-edit-input"
@@ -362,7 +362,7 @@
         role="list"
       >
         <div class="col-header">
-          <span class="col-dot" style="background:#94a3b8"></span>
+          <span class="col-dot" style="background:#60a5fa; box-shadow: 0 0 8px #60a5fa"></span>
           <span class="col-title">Unassigned</span>
           <span class="col-count">{cards.length}</span>
         </div>
@@ -411,7 +411,7 @@
     {#if columns.length === 0}
       <div class="column" role="list">
         <div class="col-header">
-          <span class="col-dot" style="background:#94a3b8"></span>
+          <span class="col-dot" style="background:#60a5fa; box-shadow: 0 0 8px #60a5fa"></span>
           <span class="col-title">All Profiles</span>
           <span class="col-count">{profiles.filter(filterProfile).length}</span>
         </div>
@@ -531,71 +531,82 @@
   }
 
   .column {
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
     display: flex; flex-direction: column; min-height: 120px; max-height: 100%;
+    overflow: hidden;
     transition: border-color 0.15s, background 0.15s;
   }
-  .column.drop-target { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg2)); }
-  .column.unassigned { opacity: 0.7; }
+  .column.drop-target { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+  .column.unassigned { opacity: 0.85; }
 
   .col-header {
-    display: flex; align-items: center; gap: 0.4rem;
-    padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--border);
-    min-height: 38px; flex-wrap: wrap;
+    display: flex; align-items: center; gap: 9px;
+    padding: 0.8rem 1rem; border-bottom: 1px solid var(--border);
+    min-height: 44px; flex-wrap: wrap;
   }
-  .col-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .col-title { font-size: var(--fs-2xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); flex: 1; }
-  .col-count { font-size: var(--fs-2xs); background: var(--bg3); border: 1px solid var(--border); padding: 0 0.35rem; border-radius: 999px; color: var(--text-muted); }
+  .col-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .col-title { font-size: 0.82rem; font-weight: var(--fw-bold); text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-body); flex: 1; }
+  .col-count {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 7px;
+    font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+    background: var(--surface-2); color: var(--text-2);
+  }
 
   .col-edit-input {
-    flex: 1; background: var(--bg3); border: 1px solid var(--accent); border-radius: 4px;
+    flex: 1; background: var(--surface-3); border: 1px solid var(--accent); border-radius: var(--radius-xs);
     color: var(--text); font-size: var(--fs-sm); padding: 0.2rem 0.4rem; outline: none;
   }
   .col-color-row { display: flex; gap: 3px; flex-wrap: wrap; width: 100%; padding-top: var(--sp-1); }
 
   .col-cards {
-    padding: var(--sp-2); display: flex; flex-direction: column; gap: 0.4rem;
+    padding: var(--sp-3); display: flex; flex-direction: column; gap: 10px;
     overflow-y: auto; flex: 1;
   }
 
   .card {
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.55rem 0.6rem; cursor: grab; transition: border-color 0.13s, box-shadow 0.13s, opacity 0.13s;
-    display: flex; gap: 0.35rem; align-items: flex-start;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-md);
+    padding: 0.85rem; cursor: grab; transition: border-color 0.15s, background 0.15s, opacity 0.13s;
+    display: flex; gap: 0.6rem; align-items: flex-start;
     user-select: none; touch-action: none;
   }
-  .card:hover { border-color: var(--border-strong, var(--accent)); box-shadow: 0 1px 4px rgba(0,0,0,.12); }
-  .card.card-running { border-color: color-mix(in srgb, #22c55e 35%, var(--border)); }
+  .card:hover { border-color: var(--border-2); background: var(--surface-hover); }
+  .card.card-running { border-color: color-mix(in srgb, var(--success) 35%, var(--border)); }
   .card.dragging { opacity: 0.35; cursor: grabbing; }
 
-  .card-drag { color: var(--text-muted); padding-top: 2px; flex-shrink: 0; }
-  .card-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; }
+  .card-drag { color: var(--text-3); padding-top: 2px; flex-shrink: 0; }
+  .card-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.5rem; }
   .card-top-row { display: flex; align-items: center; justify-content: space-between; gap: 0.3rem; }
-  .card-name { font-size: var(--fs-sm); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .running-dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; flex-shrink: 0; }
+  .card-name { font-size: 0.9rem; font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .running-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
 
   .totp-badge {
-    background: var(--accent-bg);
-    color: var(--accent);
-    border: 1px solid var(--accent);
-    border-radius: 999px;
+    background: var(--accent-tint);
+    color: var(--accent-text-2);
+    border: 1px solid var(--accent-tint-border);
+    border-radius: 6px;
     font-size: var(--fs-2xs);
-    padding: 0.05rem 0.3rem;
+    padding: 0.05rem 0.35rem;
     font-weight: 600;
     line-height: 1.4;
     flex-shrink: 0;
   }
-  .card-meta { display: flex; flex-wrap: wrap; gap: 0.2rem; }
-  .meta-item { display: inline-flex; align-items: center; gap: 0.2rem; font-size: var(--fs-2xs); color: var(--text-muted); }
-  .meta-item.accent { color: var(--accent); }
-  .meta-item.muted { opacity: 0.6; }
+  .card-meta { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+  .meta-item { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--text-dim); }
+  /* OS / fingerprint preset chip — mono per design */
+  .meta-item:first-child {
+    font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-soft);
+    background: var(--border); padding: 3px 8px; border-radius: 7px;
+  }
+  .meta-item.accent { color: var(--accent-text-2); }
+  .meta-item.muted { opacity: 0.8; }
 
   /* Drag ghost */
   .drag-ghost {
     position: fixed;
     pointer-events: none;
-    z-index: 9999;
-    background: var(--bg);
+    z-index: var(--z-max);
+    background: var(--surface-2);
     border: 1px solid var(--accent);
     border-radius: 6px;
     padding: 0.4rem 0.65rem;
@@ -616,23 +627,23 @@
 
   /* Add column */
   .add-col-btn {
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.4rem;
-    min-height: 80px; border: 2px dashed var(--border); border-radius: 8px;
-    background: none; cursor: pointer; color: var(--text-muted); font-size: var(--fs-sm);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px;
+    min-height: 110px; border: 1.5px dashed var(--border-2); border-radius: var(--radius-lg);
+    background: none; cursor: pointer; color: var(--text-3); font-size: var(--fs-base);
     transition: border-color 0.15s, color 0.15s; padding: var(--sp-4);
   }
-  .add-col-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .add-col-btn:hover { border-color: var(--border-2); color: var(--text-2); }
 
   .add-col-form {
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
     padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2);
   }
   .col-name-input {
-    background: var(--bg3); border: 1px solid var(--border); border-radius: 5px;
+    background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius-sm);
     color: var(--text); padding: 0.4rem 0.6rem; font-size: var(--fs-base); outline: none;
     width: 100%;
   }
-  .col-name-input:focus { border-color: var(--accent); }
+  .col-name-input:focus { border-color: var(--accent-border); }
   .palette-row { display: flex; gap: 4px; flex-wrap: wrap; }
   .add-col-actions { display: flex; gap: 0.4rem; }
 
@@ -643,24 +654,16 @@
   .swatch.active { border-color: var(--text); transform: scale(1.15); }
   .swatch:hover { transform: scale(1.1); }
 
+  /* Column header hover controls (local override of the global .icon-btn) */
   .icon-btn {
-    background: none; border: none; cursor: pointer; color: var(--text-muted);
-    padding: 0.2rem; border-radius: 3px; display: inline-flex; align-items: center;
+    width: auto; height: auto;
+    background: none; border: none; cursor: pointer; color: var(--text-3);
+    padding: 0.2rem; border-radius: var(--radius-xs); display: inline-flex; align-items: center;
     opacity: 0;
     transition: opacity 0.15s, color 0.15s;
   }
   .col-header:hover .icon-btn { opacity: 1; }
-  .icon-btn:hover { color: var(--text); background: var(--bg3); }
-  .icon-btn.danger:hover { color: #ef4444; }
-
-  .btn-primary {
-    background: var(--accent); color: white; border: none; border-radius: 5px;
-    padding: 0.35rem 0.7rem; font-size: var(--fs-sm); cursor: pointer;
-  }
-  .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
-  .btn-ghost {
-    background: none; border: 1px solid var(--border); border-radius: 5px;
-    color: var(--text-muted); padding: 0.35rem 0.7rem; font-size: var(--fs-sm); cursor: pointer;
-  }
-  .btn-ghost:hover { border-color: var(--text-muted); color: var(--text); }
+  .icon-btn:hover { color: var(--text); background: var(--surface-3); }
+  .icon-btn.danger { background: none; border: none; }
+  .icon-btn.danger:hover { color: var(--danger-text); background: var(--danger-bg); }
 </style>

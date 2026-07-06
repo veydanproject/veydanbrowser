@@ -270,8 +270,8 @@
   </details>
 
   <div class="form-actions">
-    <button class="btn-ghost btn-sm" onclick={onCancel}>{$t('ssh_btn_cancel')}</button>
-    <button class="btn-primary btn-sm" onclick={save} disabled={saving}>
+    <button class="btn btn-ghost" onclick={onCancel}>{$t('ssh_btn_cancel')}</button>
+    <button class="btn btn-primary" onclick={save} disabled={saving}>
       {#if saving}<Icon name="loader" size={13} />{/if}
       {connection ? $t('ssh_btn_save') : $t('ssh_btn_create')}
     </button>
@@ -279,48 +279,62 @@
 </div>
 
 <style>
-  .form { display: flex; flex-direction: column; gap: var(--sp-3); }
-  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
-  .form-group { display: flex; flex-direction: column; gap: 0.3rem; }
-  label, .field-label { font-size: var(--fs-xs); text-transform: uppercase; color: var(--text-2); font-weight: 500; }
+  .form { display: flex; flex-direction: column; gap: var(--sp-4); }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .form-group { display: flex; flex-direction: column; gap: 8px; }
+  /* Caps field labels per redesign drawer-form spec */
+  label, .field-label {
+    font-size: 0.72rem; text-transform: uppercase; color: var(--text-faint);
+    font-weight: var(--fw-bold); letter-spacing: 0.5px;
+  }
+  /* Tall drawer form fields (46px / radius 11) */
   input, select, textarea {
-    background: var(--bg-2);
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-field);
     color: var(--text);
-    padding: 0.4rem 0.6rem;
-    font-size: var(--fs-sm);
+    padding: 0 14px;
+    height: var(--control-h-lg);
+    font-size: 0.9rem;
     font-family: inherit;
     resize: vertical;
   }
+  textarea { height: auto; min-height: 96px; padding: 12px 14px; font-family: var(--font-mono); font-size: 0.8rem; }
   input:focus, select:focus, textarea:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 3px var(--accent-bg);
   }
-  .toggle-row { display: flex; align-items: center; justify-content: space-between; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.4rem 0.6rem; }
-  .toggle-info { display: flex; flex-direction: column; gap: 0.1rem; }
-  .toggle-text { font-size: var(--fs-sm); color: var(--text); }
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+    padding: 1rem 0;
+  }
+  .toggle-info { display: flex; flex-direction: column; gap: 4px; }
+  .toggle-text { font-size: 0.95rem; font-weight: var(--fw-semibold); color: var(--text); text-transform: none; letter-spacing: 0; }
   .toggle-btn {
     position: relative; flex-shrink: 0;
-    width: 36px; height: 20px;
-    background: var(--border-2); border: none; border-radius: 999px;
+    width: 54px; height: 30px;
+    background: var(--toggle-off); border: none; border-radius: 999px;
     cursor: pointer; padding: 0; transition: background 0.2s;
   }
-  .toggle-btn.active { background: var(--accent); }
+  .toggle-btn.active { background: var(--accent-hover); }
   .toggle-thumb {
-    position: absolute; top: 2px; left: 2px;
-    width: 16px; height: 16px; border-radius: 50%;
+    position: absolute; top: 3px; left: 3px;
+    width: 24px; height: 24px; border-radius: 50%;
     background: #fff; transition: transform 0.2s;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
   }
-  .toggle-btn.active .toggle-thumb { transform: translateX(16px); }
+  .toggle-btn.active .toggle-thumb { transform: translateX(24px); }
 
   /* Workspace tag picker */
-  .tag-grid { display: flex; flex-wrap: wrap; gap: 0.3rem; }
-  .hint { font-size: var(--fs-xs); color: var(--text-3); }
+  .tag-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .hint { font-size: var(--fs-xs); color: var(--text-faint); text-transform: none; letter-spacing: 0; font-weight: var(--fw-normal); }
 
-  .advanced { border: 1px solid var(--border); border-radius: var(--radius-sm); }
-  summary { padding: 0.4rem 0.6rem; cursor: pointer; font-size: var(--fs-sm); color: var(--text-2); user-select: none; }
-  .advanced-body { padding: var(--sp-2) 0.6rem 0.6rem; display: flex; flex-direction: column; gap: var(--sp-2); }
-  .form-actions { display: flex; gap: var(--sp-2); justify-content: flex-end; margin-top: var(--sp-1); }
+  .advanced { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
+  summary { padding: 0.7rem 1rem; cursor: pointer; font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--text-2); user-select: none; }
+  summary:hover { color: var(--text); }
+  .advanced-body { padding: var(--sp-2) 1rem 1rem; display: flex; flex-direction: column; gap: var(--sp-3); }
+  .form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: var(--sp-2); }
+  .form-actions .btn { height: 42px; border-radius: var(--radius-field); padding: 0 20px; }
 </style>

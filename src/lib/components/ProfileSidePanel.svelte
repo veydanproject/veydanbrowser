@@ -317,12 +317,12 @@
 
       <div class="panel-actions">
         {#if !isRunning}
-          <button class="btn btn-success" disabled={actionLoading} onclick={launch}>
-            {actionLoading ? '…' : $t('panel_btn_launch')}
+          <button class="btn btn-success btn-main" disabled={actionLoading} onclick={launch}>
+            <Icon name="play" size={16} />{actionLoading ? '…' : $t('panel_btn_launch')}
           </button>
         {:else}
-          <button class="btn btn-danger" disabled={actionLoading} onclick={stop}>
-            {actionLoading ? '…' : $t('panel_btn_stop')}
+          <button class="btn btn-danger btn-main" disabled={actionLoading} onclick={stop}>
+            <Icon name="square" size={16} />{actionLoading ? '…' : $t('panel_btn_stop')}
           </button>
         {/if}
 
@@ -463,7 +463,7 @@
     gap: var(--sp-1);
     transition: background 0.15s;
   }
-  .note-card-inline:hover { background: var(--bg-3); }
+  .note-card-inline:hover { background: var(--surface-2); }
   .note-card-top {
     display: flex;
     align-items: center;
@@ -473,7 +473,7 @@
   .note-title-inline {
     font-size: var(--fs-sm);
     font-weight: 500;
-    color: var(--text-1);
+    color: var(--text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -483,7 +483,7 @@
     font-size: var(--fs-2xs);
     font-weight: 600;
     color: var(--text-2);
-    background: var(--bg-3);
+    background: var(--surface-2);
     border-radius: 3px;
     padding: 0.1rem 0.3rem;
     flex-shrink: 0;
@@ -517,7 +517,7 @@
     font-size: var(--fs-2xs);
   }
   .draft-flag {
-    background: var(--warn, #f59e0b);
+    background: var(--warn-text);
     color: #fff;
     border-radius: 3px;
     padding: 0.05rem 0.25rem;
@@ -557,40 +557,45 @@
   .btn-open-notes:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); }
 
   .status-badge {
-    display: inline-flex; align-items: center;
-    font-size: var(--fs-2xs); font-weight: 600; padding: 0.18rem var(--sp-2);
-    border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 0.72rem; font-weight: var(--fw-bold); padding: 4px 11px;
+    border-radius: var(--radius-sm); text-transform: uppercase; letter-spacing: 0.4px;
     background: var(--surface-2); color: var(--text-2);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-2);
     width: fit-content;
   }
-  .status-badge.running { background: var(--success-bg); color: var(--success-text); border-color: color-mix(in srgb, var(--success) 30%, transparent); }
+  .status-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .status-badge.running { background: var(--success-bg); color: var(--success-text); border-color: var(--success-border); }
 
   .psp-body {
     display: flex;
     flex-direction: column;
     gap: var(--sp-4);
+    min-height: 100%;
   }
 
-  .info-section { display: flex; flex-direction: column; gap: 0.625rem; }
+  .info-section { display: flex; flex-direction: column; gap: 14px; }
 
+  /* Design: grid 135px / 1fr rows */
   .info-row {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--sp-2);
-    font-size: var(--fs-sm);
+    display: grid;
+    grid-template-columns: 135px 1fr;
+    align-items: center;
+    gap: var(--sp-3);
+    font-size: var(--fs-base);
   }
 
-  .info-label { color: var(--text-3); min-width: 80px; flex-shrink: 0; padding-top: 1px; }
+  .info-label { color: var(--text-faint); font-size: 0.82rem; }
 
   .info-value {
     color: var(--text);
     display: flex;
     align-items: center;
-    gap: 0.3rem;
+    gap: 8px;
     flex-wrap: wrap;
   }
-  .info-value.no-proxy { color: var(--text-3); }
+  .info-value :global(svg) { color: var(--text-2); }
+  .info-value.no-proxy { color: var(--text-dim); }
   .info-value.muted { color: var(--text-2); }
 
   .country-badge {
@@ -614,10 +619,11 @@
     padding: var(--sp-2) 0.65rem;
   }
 
-  .panel-actions { display: flex; flex-direction: column; gap: 0.4rem; }
-  .panel-actions .btn { width: 100%; justify-content: center; }
+  .panel-actions { display: flex; flex-direction: column; gap: 9px; }
+  .panel-actions .btn { width: 100%; justify-content: center; height: 46px; border-radius: var(--radius-field); }
+  .panel-actions .btn-main { height: 48px; font-size: 0.95rem; font-weight: var(--fw-bold); }
   .btn-delete { color: var(--danger-text) !important; }
-  .btn-delete:hover:not(:disabled) { background: var(--danger-bg) !important; border-color: color-mix(in srgb, var(--danger) 35%, var(--border)) !important; }
+  .btn-delete:hover:not(:disabled) { background: var(--danger-bg) !important; border-color: var(--danger-border) !important; }
 
   .crm-count {
     font-size: var(--fs-xl);
@@ -651,21 +657,22 @@
     border-radius: 4px;
     padding: 0.1rem 0.4rem;
     color: var(--text-2);
-    font-family: monospace;
+    font-family: var(--font-mono);
   }
 
   /* Tags */
-  .tags-section { display: flex; flex-direction: column; gap: 0.4rem; }
-  .tags-label { font-size: var(--fs-xs); font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
-  .no-tags { font-size: var(--fs-sm); color: var(--text-muted); }
-  .column-select-row { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+  .tags-section { display: flex; flex-direction: column; gap: 10px; }
+  .tags-label { font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--text-3); text-transform: uppercase; letter-spacing: 0.8px; }
+  .no-tags { font-size: var(--fs-sm); color: var(--text-2); }
+  .column-select-row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .col-chip {
     display: inline-flex; align-items: center;
     background: color-mix(in srgb, var(--col-color) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--col-color) 35%, transparent);
+    border: 1px solid color-mix(in srgb, var(--col-color) 40%, transparent);
     color: var(--col-color);
-    border-radius: 4px; padding: 0.15rem var(--sp-2);
-    font-size: var(--fs-sm); cursor: pointer; transition: all 0.15s;
+    border-radius: 9px; padding: 5px 13px;
+    font-size: var(--fs-sm); font-weight: var(--fw-semibold);
+    cursor: pointer; transition: all 0.15s;
     opacity: 0.55;
   }
   .col-chip:hover { opacity: 0.85; }

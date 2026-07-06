@@ -64,18 +64,19 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--backdrop);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 100;
+    z-index: var(--z-modal);
+    -webkit-backdrop-filter: blur(2px);
     backdrop-filter: blur(2px);
   }
 
   .modal {
-    background: var(--bg-2);
+    background: var(--surface-drawer);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     padding: 1.25rem 1.5rem;
     box-shadow: var(--shadow-lg);
     max-width: 400px;
@@ -87,7 +88,8 @@
 
   .modal-title {
     font-size: var(--fs-md);
-    font-weight: 600;
+    font-weight: var(--fw-extrabold);
+    letter-spacing: -0.3px;
     color: var(--text);
   }
 

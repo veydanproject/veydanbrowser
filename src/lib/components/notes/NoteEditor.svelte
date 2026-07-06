@@ -485,8 +485,9 @@
     background: none;
     border: none;
     outline: none;
-    font-size: var(--fs-md);
-    font-weight: 600;
+    font-size: var(--fs-lg);
+    font-weight: var(--fw-extrabold);
+    letter-spacing: -0.3px;
     color: var(--text);
     padding: 0;
     min-width: 0;
@@ -533,7 +534,7 @@
     padding: 0.3rem var(--sp-3);
     border-top: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
-    background: var(--bg-1);
+    background: var(--surface);
     flex-shrink: 0;
     flex-wrap: wrap;
   }
@@ -550,7 +551,7 @@
     min-width: 1.8rem;
     text-align: center;
   }
-  .tb-btn:hover { background: var(--bg-3); color: var(--text-1); }
+  .tb-btn:hover { background: var(--surface-2); color: var(--text); }
   .tb-sep {
     width: 1px;
     height: 1.1rem;
@@ -570,7 +571,7 @@
     border-color: var(--accent);
     color: var(--accent);
   }
-  .tb-mode-toggle:hover { background: var(--bg-3); color: var(--text-1); }
+  .tb-mode-toggle:hover { background: var(--surface-2); color: var(--text); }
 
   .note-content {
     flex: 1;
@@ -585,15 +586,15 @@
 
   .editor-body {
     flex: 1;
-    padding: var(--sp-2) var(--sp-4);
+    padding: var(--sp-3) var(--sp-5);
     background: none;
     border: none;
     outline: none;
     resize: none;
-    font-size: var(--fs-base);
-    line-height: 1.6;
-    color: var(--text);
-    font-family: 'Menlo', 'Consolas', 'SF Mono', monospace;
+    font-size: 0.95rem;
+    line-height: 1.75;
+    color: var(--text-body);
+    font-family: var(--font-mono);
     overflow-y: auto;
   }
 
@@ -611,7 +612,7 @@
     color: var(--text-3);
     text-transform: uppercase;
     letter-spacing: 0.03em;
-    font-family: monospace;
+    font-family: var(--font-mono);
   }
 
   .footer-actions {
@@ -633,7 +634,7 @@
 
   .icon-action:hover { color: var(--text); background: var(--surface); }
   .icon-action.active { color: var(--accent); }
-  .icon-danger:hover { color: #ef4444 !important; }
+  .icon-danger:hover { color: var(--danger-text) !important; }
 
   .delete-overlay {
     position: absolute;
@@ -660,7 +661,7 @@
     margin: 0;
     font-size: var(--fs-md);
     font-weight: 600;
-    color: var(--text-1);
+    color: var(--text);
   }
   .delete-warn {
     margin: 0;

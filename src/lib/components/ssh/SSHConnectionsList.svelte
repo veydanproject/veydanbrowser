@@ -44,7 +44,7 @@
 
   function statusColor(status: string): string {
     if (status === 'connected') return 'var(--success)';
-    if (status === 'connecting') return 'var(--warn-text, #f6ad55)';
+    if (status === 'connecting') return 'var(--warn-text)';
     return 'var(--danger)';
   }
 
@@ -76,6 +76,7 @@
   <div class="list">
     {#if filtered.length === 0}
       <div class="empty-state">
+        <span class="empty-icon"><Icon name="terminal" size={22} /></span>
         <p>{search ? $t('ssh_search_empty') : $t('ssh_list_empty')}</p>
       </div>
     {/if}
@@ -106,10 +107,10 @@
                 {/if}
               {/if}
               {#if conn.proxy_id}
-                <span class="badge">proxy</span>
+                <span class="badge badge-accent">proxy</span>
               {/if}
               {#if conn.requires_2fa}
-                <span class="badge">2FA</span>
+                <span class="badge badge-accent">2FA</span>
               {/if}
               {#if conn.last_connected_at}
                 <span class="last">{formatDate(conn.last_connected_at, $locale)}</span>
@@ -140,7 +141,7 @@
               <Icon name="square" size={13} />
             </button>
           {:else}
-            <button class="icon-btn" title="Connect" onclick={() => onConnect(conn)}>
+            <button class="icon-btn success" title="Connect" onclick={() => onConnect(conn)}>
               <Icon name="play" size={13} />
             </button>
           {/if}
@@ -189,10 +190,10 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    background: var(--bg-2);
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.3rem var(--sp-2);
+    border-radius: var(--radius);
+    padding: 0.35rem var(--sp-3);
     color: var(--text-2);
   }
   .search-input {
@@ -217,11 +218,11 @@
     display: flex;
     align-items: center;
     gap: var(--sp-2);
-    background: var(--bg-2);
+    background: var(--surface-2);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.45rem 0.6rem;
-    transition: border-color 0.15s;
+    border-radius: var(--radius-md);
+    padding: 0.875rem;
+    transition: border-color var(--dur-fast);
   }
   .item:hover { border-color: var(--border-2); }
   .item-main {
@@ -232,22 +233,23 @@
     cursor: pointer;
     min-width: 0;
   }
-  .item-icon { color: var(--text-2); flex-shrink: 0; padding-top: 2px; }
+  .item-icon { color: var(--text-soft); flex-shrink: 0; padding-top: 2px; }
   .item-info { flex: 1; min-width: 0; }
   .item-name {
     display: flex;
     align-items: center;
     gap: 0.35rem;
     font-size: var(--fs-sm);
-    font-weight: 500;
+    font-weight: var(--fw-semibold);
     color: var(--text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-  .item-sub { font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .item-sub { font-size: var(--fs-xs); color: var(--text-2); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
   .item-badges { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-top: 3px; align-items: center; }
+  .item-badges .badge { font-family: var(--font-mono); font-size: var(--fs-2xs); padding: 0.15rem 0.45rem; }
   .last { font-size: var(--fs-2xs); color: var(--text-3); }
   .item-actions { display: flex; gap: 0.2rem; flex-shrink: 0; }
 </style>

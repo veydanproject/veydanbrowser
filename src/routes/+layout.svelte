@@ -2,13 +2,15 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
+  import '@fontsource-variable/manrope/index.css';
+  import '@fontsource-variable/jetbrains-mono/index.css';
   import '$lib/styles/tokens.css';
   import '$lib/styles/base.css';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import { t } from '$lib/i18n';
-  import { theme, toggleTheme } from '$lib/theme';
+  import { theme } from '$lib/theme';
   import Icon from '$lib/Icon.svelte';
   import { api } from '$lib/api';
   import type { Profile } from '$lib/types';
@@ -111,7 +113,9 @@
   <header class="topbar">
    <div class="topbar-inner">
     <a href="/" class="topbar-brand">
-      <img src="/logo.png" alt="Veydan Browser" class="brand-logo" />
+      <span class="brand-tile">
+        <img src="/logo.png" alt="Veydan Browser" class="brand-logo" />
+      </span>
       <span class="brand-name">Veydan Browser</span>
     </a>
 
@@ -140,16 +144,18 @@
 
     <div class="topbar-right">
       <button class="theme-toggle" onclick={() => (totpOpen = !totpOpen)} title={$t('totp_title')}>
-        <Icon name="shield" size={14} />
+        <Icon name="shield" size={15} />
       </button>
       <button class="theme-toggle" onclick={() => (pwgenOpen = !pwgenOpen)} title={$t('pwgen_title')}>
-        <Icon name="key" size={14} />
+        <Icon name="key" size={15} />
       </button>
-      <button class="theme-toggle" onclick={toggleTheme} title="Toggle theme">
+      <!-- Light theme is disabled for now: the redesign palette is dark-only.
+           toggleTheme stays wired for when the light palette lands. -->
+      <button class="theme-toggle" disabled title={$t('theme_light_soon')}>
         {#if $theme === 'dark'}
-          <Icon name="sun" size={14} />
+          <Icon name="sun" size={15} />
         {:else}
-          <Icon name="moon" size={14} />
+          <Icon name="moon" size={15} />
         {/if}
       </button>
     </div>
@@ -212,13 +218,14 @@
   /* ── Top Bar ── */
   .topbar {
     height: var(--topbar-h);
-    background: var(--bg-2);
+    background: color-mix(in srgb, var(--bg-2) 85%, transparent);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     padding: 0 var(--rail-pad-x);
     flex-shrink: 0;
-    box-shadow: var(--shadow);
     z-index: 10;
   }
 
@@ -235,23 +242,35 @@
   .topbar-brand {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 11px;
     text-decoration: none;
     color: var(--text);
     flex-shrink: 0;
   }
 
+  /* Gradient tile behind the logo (design: 34×34, radius 9, purple gradient) */
+  .brand-tile {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: var(--accent-grad);
+    box-shadow: var(--shadow-logo);
+    flex-shrink: 0;
+  }
+
   .brand-logo {
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
     object-fit: contain;
-    border-radius: 6px;
   }
 
   .brand-name {
-    font-weight: 700;
-    font-size: var(--fs-base);
-    letter-spacing: -0.01em;
+    font-weight: var(--fw-bold);
+    font-size: 1rem;
+    letter-spacing: -0.2px;
   }
 
   .topbar-nav {
@@ -264,18 +283,19 @@
   .nav-link {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.35rem 0.75rem;
-    border-radius: var(--radius-sm);
+    gap: 8px;
+    height: 38px;
+    padding: 0 14px;
+    border-radius: var(--radius);
     text-decoration: none;
     color: var(--text-2);
-    font-size: var(--fs-sm);
-    font-weight: 500;
+    font-size: var(--fs-base);
+    font-weight: var(--fw-semibold);
     transition: all 0.15s;
   }
 
   .nav-link:hover { background: var(--surface); color: var(--text); }
-  .nav-link.active { background: var(--accent-bg); color: var(--accent); }
+  .nav-link.active { background: var(--accent-bg); color: var(--accent-text); }
 
   .topbar-right {
     display: flex;
@@ -288,16 +308,16 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 30px;
-    background: transparent;
+    width: 38px;
+    height: 38px;
+    background: var(--surface-3);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-2);
+    border-radius: 9px;
+    color: var(--text-soft);
     cursor: pointer;
     transition: all 0.15s;
   }
-  .theme-toggle:hover { background: var(--surface); color: var(--text); }
+  .theme-toggle:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--border-2); color: var(--text); }
 
   /* ── Content ── */
   .content {

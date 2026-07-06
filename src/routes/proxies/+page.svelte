@@ -119,9 +119,12 @@
 
 <div class="page page--fill">
   <div class="page-header">
-    <h1>{$t('proxies_title')}</h1>
+    <div class="page-title-group">
+      <h1>{$t('proxies_title')}</h1>
+      <p class="page-sub">{$t('proxies_sub', { count: String(proxiesStore.list.length) })}</p>
+    </div>
     <button class="btn btn-primary spacer" onclick={() => (panelProxy = null)}>
-      <Icon name="plus" size={14} />{$t('proxies_add')}
+      <Icon name="plus" size={15} />{$t('proxies_add')}
     </button>
   </div>
 
@@ -295,11 +298,13 @@
 <style>
   /* панель фильтров — единые примитивы .filter-bar/.search-field/.filter-select/.count-badge из base.css */
 
+  .page-title-group { display: flex; flex-direction: column; gap: 6px; }
+
   /* Table */
   .table-wrap {
     flex: 1; min-height: 0; overflow-y: auto;
-    border: 1px solid var(--border); border-radius: var(--radius);
-    background: var(--bg-2);
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: var(--surface);
   }
 
   .proxy-table {
@@ -308,45 +313,53 @@
 
   .proxy-table thead {
     position: sticky; top: 0; z-index: 1;
-    background: var(--surface-2); border-bottom: 1px solid var(--border);
+    background: var(--surface); border-bottom: 1px solid var(--border);
   }
 
   .proxy-table th {
-    padding: var(--sp-2) var(--sp-3); text-align: left;
-    font-size: var(--fs-2xs); font-weight: 700; color: var(--text-2);
-    text-transform: uppercase; letter-spacing: 0.05em;
+    padding: var(--sp-3) var(--sp-4); text-align: left;
+    font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--text-3);
+    text-transform: uppercase; letter-spacing: 0.7px;
     white-space: nowrap;
   }
 
-  .proxy-table td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .proxy-table td { padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--surface-2); vertical-align: middle; }
   .proxy-row:last-child td { border-bottom: none; }
-  .proxy-row:hover td { background: var(--surface-2); }
+  .proxy-row:hover td { background: var(--surface-row-hover); }
   .proxy-row { cursor: pointer; }
 
-  .col-num { width: 40px; color: var(--text-3); font-size: var(--fs-xs); }
-  .col-type { width: 80px; }
-  .col-status { width: 90px; }
+  .col-num { width: 44px; color: var(--text-3); font-family: var(--font-mono); font-size: var(--fs-xs); }
+  .col-type { width: 100px; }
+  .col-status { width: 120px; }
   .col-geo { width: 120px; }
-  .col-actions { width: 100px; }
+  .col-actions { width: 120px; }
 
-  .proxy-name { font-weight: 600; color: var(--text); display: block; }
+  .proxy-name { font-weight: var(--fw-semibold); font-size: 0.9rem; color: var(--text); display: block; }
 
-  code { font-family: monospace; font-size: var(--fs-sm); color: var(--text-2); background: var(--surface-2); padding: 0.1rem 0.35rem; border-radius: 4px; }
-
-  .type-badge {
-    font-size: var(--fs-2xs); font-weight: 700; letter-spacing: 0.04em;
-    padding: 0.15rem var(--sp-2); border-radius: 999px;
-    border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2);
+  code {
+    font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-body);
+    background: var(--surface-2); padding: 5px 10px; border-radius: 7px;
   }
-  .type-socks5 { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); color: var(--accent); }
+
+  /* Proxy type badges: http → blue tint, socks5 → purple tint (design) */
+  .type-badge {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+    padding: 4px 12px; border-radius: var(--radius-sm);
+    border: none; background: var(--surface-2); color: var(--text-2);
+  }
+  .type-http, .type-https { background: color-mix(in srgb, var(--cat-blue) 14%, transparent); color: var(--cat-blue); }
+  .type-socks5 { background: var(--accent-tint); color: var(--accent-text-2); }
 
   .status-badge {
-    font-size: var(--fs-2xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
-    padding: 0.15rem var(--sp-2); border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 0.72rem; font-weight: var(--fw-bold); text-transform: uppercase; letter-spacing: 0.4px;
+    padding: 4px 11px; border-radius: var(--radius-sm);
   }
+  .status-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .status-active { background: var(--success-bg); color: var(--success-text); }
   .status-failed { background: var(--danger-bg); color: var(--danger-text); }
-  .status-unknown { background: var(--surface-2); color: var(--text-3); border: 1px solid var(--border); }
+  .status-unknown { background: var(--surface-2); color: var(--text-2); }
 
   .geo-chip { font-size: var(--fs-xs); color: var(--text-2); }
   .text-muted { color: var(--text-3); font-size: var(--fs-xs); }
@@ -367,7 +380,7 @@
     font-size: var(--fs-sm); cursor: pointer; transition: all 0.15s;
   }
   .page-btn:hover:not(:disabled) { background: var(--surface); border-color: var(--border-2); color: var(--text); }
-  .page-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .page-btn.active { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent-text); }
   .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
   /* Empty (uses global .empty-state) */
@@ -383,7 +396,7 @@
   .fingerprint-banner-body { flex: 1; display: flex; flex-direction: column; gap: var(--sp-1); }
   .fingerprint-banner-title { font-weight: 700; font-size: var(--fs-base); }
   .fingerprint-banner-fp {
-    font-family: monospace; font-size: var(--fs-sm); color: var(--text-2);
+    font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text-2);
     word-break: break-all;
   }
   .fingerprint-banner-hint { font-size: var(--fs-sm); color: var(--text-2); }

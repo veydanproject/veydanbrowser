@@ -5,7 +5,7 @@
   import Icon from '$lib/Icon.svelte';
   import { t, locale } from '$lib/i18n';
   import { formatDateTime } from '$lib/utils';
-  import { theme, toggleTheme } from '$lib/theme';
+  import { theme } from '$lib/theme';
   import { api } from '$lib/api';
   import { pwSettings, generatePassword, type PwEntry } from '$lib/password-gen';
   import CustomSelect from '$lib/components/CustomSelect.svelte';
@@ -85,7 +85,8 @@
 
 <Drawer bind:open title={$t('pwgen_title')}>
   {#snippet actions()}
-    <button class="icon-btn" onclick={toggleTheme} title={$t('pwgen_btn_toggle_theme')}>
+    <!-- Light theme disabled while the redesign is dark-only -->
+    <button class="icon-btn" disabled title={$t('theme_light_soon')}>
       {#if $theme === 'dark'}
         <Icon name="sun" size={14} />
       {:else}
@@ -273,13 +274,18 @@
     align-items: center;
   }
 
+  /* Generated password display — large mono on --surface-3 */
   .pw-field {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: var(--fs-base);
+    font-family: var(--font-mono);
+    font-size: var(--fs-md);
+    font-weight: var(--fw-semibold);
     letter-spacing: 0.04em;
+    height: var(--control-h-lg);
     padding-right: 4.5rem;
-    background: var(--surface);
-    border-color: var(--border-2);
+    background: var(--surface-3);
+    border-color: var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text);
   }
 
   .pw-eye {
@@ -300,13 +306,16 @@
     width: 100%;
     justify-content: center;
     gap: var(--sp-2);
+    height: 42px;
+    border-radius: var(--radius-field);
   }
 
-  /* Sections */
+  /* Sections — nested cards (--surface-2 + radius-md) */
   .section {
     flex-shrink: 0;
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
     overflow: hidden;
   }
 
@@ -316,18 +325,18 @@
     align-items: center;
     gap: var(--sp-2);
     padding: 0.55rem var(--sp-3);
-    background: var(--surface);
+    background: transparent;
     border: none;
     border-radius: 0;
     font-size: var(--fs-sm);
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
     color: var(--text-2);
     text-align: left;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: background var(--dur-fast);
   }
 
-  .section-toggle:hover { background: var(--surface-2); }
+  .section-toggle:hover { background: var(--surface-hover); }
 
   :global(.rot90) { transform: rotate(90deg); }
 
@@ -337,7 +346,7 @@
     flex-direction: column;
     gap: 0.6rem;
     border-top: 1px solid var(--border);
-    background: var(--bg);
+    background: var(--surface);
   }
 
   .setting-row {
@@ -404,7 +413,7 @@
     align-items: center;
     justify-content: space-between;
     padding: var(--sp-2) var(--sp-3);
-    background: var(--surface);
+    background: transparent;
     border-bottom: 1px solid var(--border);
   }
 
@@ -412,9 +421,11 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    color: var(--text-2);
+    font-size: var(--fs-2xs);
+    font-weight: var(--fw-bold);
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--text-dim);
   }
 
   .empty-note {
@@ -450,7 +461,7 @@
   }
 
   .pw-text {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-family: var(--font-mono);
     font-size: var(--fs-sm);
     color: var(--text);
     overflow: hidden;
@@ -483,7 +494,7 @@
     font-size: var(--fs-sm);
     font-weight: 600;
     padding: 0.4rem var(--sp-4);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     box-shadow: var(--shadow);
     pointer-events: none;
     animation: fade-in 0.15s ease;

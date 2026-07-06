@@ -139,23 +139,28 @@
   .notes-list {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 10px;
   }
 
   .note-card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.55rem var(--sp-3);
+    border-radius: 14px;
+    padding: var(--sp-4);
     cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
+    gap: 0.5rem;
   }
 
   .note-card:hover { border-color: var(--border-2); }
-  .note-card.active { border-color: var(--accent); background: var(--accent-bg); }
+  /* Active card per design: raised surface + accent ring + soft glow */
+  .note-card.active {
+    border-color: var(--accent-border);
+    background: var(--surface-2);
+    box-shadow: var(--shadow-note-active);
+  }
 
   .card-top {
     display: flex;
@@ -165,8 +170,8 @@
   }
 
   .note-title {
-    font-size: var(--fs-sm);
-    font-weight: 500;
+    font-size: 0.92rem;
+    font-weight: var(--fw-bold);
     color: var(--text);
     white-space: nowrap;
     overflow: hidden;
@@ -186,13 +191,14 @@
   }
 
   .note-format {
-    font-size: var(--fs-2xs);
-    color: var(--text-3);
+    font-size: 0.65rem;
+    font-weight: var(--fw-semibold);
+    color: var(--text-faint);
     text-transform: uppercase;
-    font-family: monospace;
-    background: var(--surface-2);
-    padding: 0.05rem 0.3rem;
-    border-radius: 3px;
+    font-family: var(--font-mono);
+    background: var(--border);
+    padding: 2px 6px;
+    border-radius: 5px;
   }
 
   .draft-dot {
@@ -239,7 +245,7 @@
 
   .note-snippet :global(mark) {
     background: color-mix(in srgb, var(--accent) 25%, transparent);
-    color: var(--text-1);
+    color: var(--text);
     border-radius: 2px;
     padding: 0 1px;
   }
@@ -251,11 +257,11 @@
   }
 
   .tag-chip {
-    font-size: var(--fs-2xs);
-    padding: 0.1rem 0.4rem;
-    border-radius: 999px;
+    font-size: var(--fs-xs);
+    padding: 3px 9px;
+    border-radius: var(--radius-sm);
     border: 1px solid;
-    font-weight: 500;
+    font-weight: var(--fw-semibold);
     white-space: nowrap;
   }
 
