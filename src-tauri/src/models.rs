@@ -260,6 +260,33 @@ pub struct CreateProxyRequest {
     pub private_key: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct BulkProxyItem {
+    pub line_number: i64,
+    pub proxy_type: String,
+    pub host: String,
+    pub port: i64,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BulkImportRowResult {
+    pub line_number: i64,
+    /// "imported" | "duplicate" | "error"
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BulkImportResult {
+    pub rows: Vec<BulkImportRowResult>,
+    pub imported: Vec<Proxy>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CookieEntry {
     pub host: String,

@@ -153,6 +153,7 @@ pub fn run() {
             proxies_list,
             proxy_get,
             proxy_create,
+            proxies_bulk_create,
             proxy_update,
             proxy_delete,
             proxy_check,

@@ -153,6 +153,27 @@ export interface CreateProxyRequest {
   private_key?: string | null;
 }
 
+export interface BulkProxyItem {
+  line_number: number;
+  proxy_type: string;
+  host: string;
+  port: number;
+  username?: string | null;
+  password?: string | null;
+}
+
+export interface BulkImportRowResult {
+  line_number: number;
+  status: 'imported' | 'duplicate' | 'error';
+  message?: string;
+  id?: string;
+}
+
+export interface BulkImportResult {
+  rows: BulkImportRowResult[];
+  imported: Proxy[];
+}
+
 export interface ProxyCheckResult {
   ip: string;
   country: string | null;

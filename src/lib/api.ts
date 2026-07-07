@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 import type {
+  BulkImportResult,
+  BulkProxyItem,
   CamoufoxStatus,
   CreateProfileRequest,
   CreateProxyRequest,
@@ -111,6 +113,8 @@ export const api = {
     list: () => call<Proxy[]>('proxies_list'),
     get: (id: string) => call<Proxy | null>('proxy_get', { id }),
     create: (req: CreateProxyRequest) => call<Proxy>('proxy_create', { req }),
+    bulkCreate: (items: BulkProxyItem[]) =>
+      call<BulkImportResult>('proxies_bulk_create', { items }),
     update: (id: string, req: CreateProxyRequest) =>
       call<Proxy>('proxy_update', { id, req }),
     delete: (id: string) => call<void>('proxy_delete', { id }),

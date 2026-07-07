@@ -9,6 +9,7 @@
   import Icon from '$lib/Icon.svelte';
   import Modal from '$lib/Modal.svelte';
   import ProxyPanel from '$lib/components/ProxyPanel.svelte';
+  import BulkImportProxyModal from '$lib/components/BulkImportProxyModal.svelte';
   import { proxiesStore } from '$lib/store/proxies.svelte';
   import { formatError } from '$lib/utils';
 
@@ -23,6 +24,7 @@
   let page = $state(0);
 
   let panelProxy = $state<Proxy | null | undefined>(undefined);
+  let importOpen = $state(false);
   let checkResults = $state<Record<string, ProxyCheckResult & { checking?: boolean; err?: string }>>({});
   let deleteModal = $state({ open: false, id: '', name: '' });
 
@@ -123,7 +125,10 @@
       <h1>{$t('proxies_title')}</h1>
       <p class="page-sub">{$t('proxies_sub', { count: String(proxiesStore.list.length) })}</p>
     </div>
-    <button class="btn btn-primary spacer" onclick={() => (panelProxy = null)}>
+    <button class="btn btn-ghost spacer" onclick={() => (importOpen = true)}>
+      <Icon name="upload" size={15} />{$t('proxies_import_btn')}
+    </button>
+    <button class="btn btn-primary" onclick={() => (panelProxy = null)}>
       <Icon name="plus" size={15} />{$t('proxies_add')}
     </button>
   </div>
@@ -275,6 +280,8 @@
     {/if}
   {/if}
 </div>
+
+<BulkImportProxyModal open={importOpen} onclose={() => (importOpen = false)} />
 
 {#if panelProxy !== undefined}
   <ProxyPanel

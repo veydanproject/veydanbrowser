@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 import { api } from '$lib/api';
-import type { Proxy, ProxyCheckResult } from '$lib/types';
+import type { BulkImportResult, BulkProxyItem, Proxy, ProxyCheckResult } from '$lib/types';
 
 class ProxiesStore {
   list = $state<Proxy[]>([]);
@@ -41,6 +41,13 @@ class ProxiesStore {
     this.list = exists
       ? this.list.map((p) => (p.id === proxy.id ? proxy : p))
       : [proxy, ...this.list];
+  }
+
+  /** Bulk-create proxies; imported ones are merged into the cached list. */
+  async bulkImport(items: BulkProxyItem[]): Promise<BulkImportResult> {
+    const result = await api.proxies.bulkCreate(items);
+    for (const proxy of result.imported) this.upsert(proxy);
+    return result;
   }
 
   /** Delete a proxy and drop it from the cached list. */
