@@ -8,6 +8,7 @@
   import Icon from '$lib/Icon.svelte';
   import ProfileSidePanel from './ProfileSidePanel.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
+  import { proxiesStore } from '$lib/store/proxies.svelte';
 
   interface Props {
     profiles: Profile[];
@@ -67,7 +68,10 @@
 
   const PALETTE = ['#8b7bff', '#60a5fa', '#2dd4bf', '#f472b6', '#f5c451', '#34d399', '#f26d6d', '#f97316'];
 
-  const proxyMap = $derived(new Map(proxies.map((p) => [p.id, p])));
+  // Lookup over ALL proxies, not the workspace-filtered `proxies` prop: a
+  // profile may reference a proxy tagged to another workspace, and it must
+  // still show up on cards and in the side panel.
+  const proxyMap = $derived(new Map(proxiesStore.list.map((p) => [p.id, p])));
   const sortedCols = $derived([...columns].sort((a, b) => a.position - b.position));
   const colTagSet = $derived(new Set(columns.map((c) => c.tag_name)));
 

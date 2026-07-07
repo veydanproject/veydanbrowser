@@ -8,7 +8,7 @@
   import type { PresetInfo, Profile, Proxy, UpdateProfileRequest } from '$lib/types';
   import { LOCALES } from '$lib/locales';
   import { GPU_PRESETS, presetToGpuOs, defaultGpuForPreset } from '$lib/gpu-presets';
-  import { formatError } from '$lib/utils';
+  import { formatError, proxyOptionLabel } from '$lib/utils';
   import { TIMEZONES, getExpectedRegion, getTimezoneRegion } from '$lib/timezones';
   import CustomSelect from '$lib/components/CustomSelect.svelte';
   import Drawer from '$lib/components/ui/Drawer.svelte';
@@ -27,7 +27,7 @@
   const proxyOptions = $derived.by(() => {
     const ws = proxies.filter(p => p.tags.includes(wsTag));
     const other = proxies.filter(p => !p.tags.includes(wsTag));
-    const toOpt = (p: Proxy) => ({ label: `${p.name} (${p.proxy_type}://${p.host}:${p.port})`, value: p.id });
+    const toOpt = (p: Proxy) => ({ label: proxyOptionLabel(p), value: p.id });
     return [
       { label: $t('profile_proxy_none'), value: null as string | null },
       ...ws.map(toOpt),

@@ -348,7 +348,7 @@
         {:else}
           <TableView
             {profiles}
-            {proxies}
+            proxies={proxiesStore.list}
             {columns}
             {runningProfiles}
             onSelect={(p) => (selectedProfile = p)}
@@ -441,7 +441,9 @@
         </div>
 
       {:else if tab === 'topology'}
-        <TopologyGraph {profiles} {proxies} {runningProfiles} />
+        <!-- Full proxy list: profiles may reference proxies not tagged to this
+             workspace (e.g. bulk-imported); the graph only draws referenced ones. -->
+        <TopologyGraph {profiles} proxies={proxiesStore.list} {runningProfiles} />
 
       {:else if tab === 'notes'}
         <div class="notes-tab">
