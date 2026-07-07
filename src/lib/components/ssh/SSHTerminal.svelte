@@ -112,6 +112,8 @@
       cursorBlink: true,
       fontSize: 13,
       fontFamily: "'JetBrains Mono Variable', 'JetBrains Mono', 'Fira Code', Menlo, monospace",
+      // The terminal viewport is ALWAYS dark, regardless of app theme: remote
+      // ANSI output (vim, htop, dotfiles) assumes a dark background.
       // Palette matches the redesign dark theme (JS data — xterm can't read CSS vars)
       theme: {
         background: '#0b0b11',
@@ -331,7 +333,7 @@
     flex: 1;
     min-height: 0;
     background: var(--bg);
-    border-top: 2px solid #1e293b;
+    border-top: 2px solid var(--border);
     box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.5);
     overflow: hidden;
     position: relative;
@@ -347,7 +349,7 @@
     justify-content: center;
     transition: background 0.15s;
   }
-  .drawer-handle:hover { background: #1a2332; }
+  .drawer-handle:hover { background: var(--surface-hover); }
   .handle-grip {
     width: 32px;
     height: 2px;
@@ -362,8 +364,8 @@
     align-items: center;
     gap: 0.4rem;
     padding: 0.2rem var(--sp-2) 0.2rem var(--sp-3);
-    background: #0f1923;
-    border-bottom: 1px solid #1a2535;
+    background: var(--surface-drawer);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     height: 30px;
   }
@@ -372,16 +374,16 @@
     align-items: center;
     gap: 0.35rem;
     font-size: var(--fs-xs);
-    color: #64748b;
+    color: var(--text-2);
     flex: 1;
     min-width: 0;
   }
-  .host-label { color: #374151; font-size: var(--fs-2xs); }
+  .host-label { color: var(--text-dim); font-size: var(--fs-2xs); }
   .terminal-status { display: flex; align-items: center; }
   .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-  .dot.green { background: #22c55e; }
-  .dot.yellow { background: #f59e0b; }
-  .dot.red { background: #ef4444; }
+  .dot.green { background: var(--success); }
+  .dot.yellow { background: var(--warn-text); }
+  .dot.red { background: var(--danger); }
 
   .header-actions {
     display: flex;
@@ -397,23 +399,23 @@
     background: none;
     border: none;
     cursor: pointer;
-    color: #475569;
+    color: var(--text-3);
     border-radius: 3px;
     transition: background 0.12s, color 0.12s;
     padding: 0;
   }
-  .hbtn:hover { background: #1e293b; color: var(--text-2); }
-  .hbtn.danger:hover { background: rgba(239,68,68,0.15); color: #f87171; }
+  .hbtn:hover { background: var(--surface-hover); color: var(--text-2); }
+  .hbtn.danger:hover { background: var(--danger-bg); color: var(--danger-text); }
 
   .disconnected-banner {
     display: flex;
     align-items: center;
     gap: var(--sp-2);
     padding: 0.3rem var(--sp-3);
-    background: rgba(239, 68, 68, 0.1);
+    background: var(--danger-bg);
     color: var(--danger-text);
     font-size: var(--fs-xs);
-    border-bottom: 1px solid rgba(239, 68, 68, 0.2);
+    border-bottom: 1px solid var(--danger-border);
     flex-shrink: 0;
   }
   .disconnected-banner .btn-primary { margin-left: auto; }
@@ -423,6 +425,9 @@
     min-height: 0;
     overflow: hidden;
     padding: 0.2rem 0.25rem;
+    /* Always dark to match the fixed xterm palette — no light seams around the canvas */
+    background: #0b0b11;
+    color-scheme: dark;
   }
   .xterm-container :global(.xterm) { height: 100%; width: 100%; }
   .xterm-container :global(.xterm-screen) { height: 100%; width: 100%; }
@@ -432,7 +437,7 @@
   .prompt-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(13, 17, 23, 0.85);
+    background: var(--backdrop);
     backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
@@ -440,8 +445,8 @@
     z-index: 10;
   }
   .prompt-card {
-    background: #0f1923;
-    border: 1px solid #1e3a5f;
+    background: var(--surface-drawer);
+    border: 1px solid var(--border-2);
     border-radius: 8px;
     padding: var(--sp-5) var(--sp-6);
     min-width: 320px;
@@ -450,7 +455,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-3);
-    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    box-shadow: var(--shadow-lg);
   }
   .prompt-title {
     font-size: var(--fs-base);
@@ -459,7 +464,7 @@
   }
   .prompt-instructions {
     font-size: var(--fs-sm);
-    color: #64748b;
+    color: var(--text-2);
   }
   .prompt-field {
     display: flex;
@@ -471,8 +476,8 @@
     color: var(--text-2);
   }
   .prompt-field input {
-    background: #1a2535;
-    border: 1px solid #2a3f5f;
+    background: var(--surface-3);
+    border: 1px solid var(--border);
     border-radius: 5px;
     padding: 0.45rem 0.6rem;
     color: var(--text);
@@ -480,10 +485,10 @@
     outline: none;
     transition: border-color 0.15s;
   }
-  .prompt-field input:focus { border-color: #3b82f6; }
+  .prompt-field input:focus { border-color: var(--accent); }
   .prompt-error {
     font-size: var(--fs-xs);
-    color: #f87171;
+    color: var(--danger-text);
   }
   .prompt-actions {
     display: flex;

@@ -8,9 +8,7 @@ export type Theme = 'dark' | 'light';
 function loadTheme(): Theme {
   if (typeof localStorage !== 'undefined') {
     const saved = localStorage.getItem('rb_theme');
-    // Light theme is disabled while the redesign is dark-only: migrate any
-    // persisted 'light' back to 'dark' so users don't land on the stale palette.
-    if (saved === 'dark') return saved;
+    if (saved === 'dark' || saved === 'light') return saved;
   }
   return 'dark';
 }

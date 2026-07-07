@@ -446,7 +446,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   height: 24px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-knob);
   transition: left var(--dur-base);
 }
 .toggle.on::after { left: 27px; }

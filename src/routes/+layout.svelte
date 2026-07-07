@@ -10,7 +10,7 @@
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import { t } from '$lib/i18n';
-  import { theme } from '$lib/theme';
+  import { theme, toggleTheme } from '$lib/theme';
   import Icon from '$lib/Icon.svelte';
   import { api } from '$lib/api';
   import type { Profile } from '$lib/types';
@@ -149,9 +149,7 @@
       <button class="theme-toggle" onclick={() => (pwgenOpen = !pwgenOpen)} title={$t('pwgen_title')}>
         <Icon name="key" size={15} />
       </button>
-      <!-- Light theme is disabled for now: the redesign palette is dark-only.
-           toggleTheme stays wired for when the light palette lands. -->
-      <button class="theme-toggle" disabled title={$t('theme_light_soon')}>
+      <button class="theme-toggle" onclick={toggleTheme} title={$t('theme_toggle')}>
         {#if $theme === 'dark'}
           <Icon name="sun" size={15} />
         {:else}

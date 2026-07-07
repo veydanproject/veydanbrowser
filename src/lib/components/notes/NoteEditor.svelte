@@ -454,7 +454,7 @@
     transition: background 0.15s;
   }
 
-  .banner-actions button:hover { background: rgba(255,255,255,0.1); }
+  .banner-actions button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
 
   .editor-header {
     display: flex;
@@ -639,7 +639,7 @@
   .delete-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(0,0,0,0.55);
+    background: var(--backdrop);
     display: flex;
     align-items: center;
     justify-content: center;

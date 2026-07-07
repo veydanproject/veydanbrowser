@@ -5,7 +5,7 @@
   import Icon from '$lib/Icon.svelte';
   import { t, locale } from '$lib/i18n';
   import { formatDateTime } from '$lib/utils';
-  import { theme } from '$lib/theme';
+  import { theme, toggleTheme } from '$lib/theme';
   import { api } from '$lib/api';
   import { pwSettings, generatePassword, type PwEntry } from '$lib/password-gen';
   import CustomSelect from '$lib/components/CustomSelect.svelte';
@@ -85,8 +85,7 @@
 
 <Drawer bind:open title={$t('pwgen_title')}>
   {#snippet actions()}
-    <!-- Light theme disabled while the redesign is dark-only -->
-    <button class="icon-btn" disabled title={$t('theme_light_soon')}>
+    <button class="icon-btn" onclick={toggleTheme} title={$t('theme_toggle')}>
       {#if $theme === 'dark'}
         <Icon name="sun" size={14} />
       {:else}

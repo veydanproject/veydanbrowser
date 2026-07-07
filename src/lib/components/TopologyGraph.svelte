@@ -4,6 +4,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from '$lib/i18n';
+  import { theme } from '$lib/theme';
   import type { Profile, Proxy } from '$lib/types';
 
   interface Props {
@@ -149,7 +150,7 @@
     // Canvas can't read CSS vars — resolve the design tokens at draw time
     const css = getComputedStyle(document.body);
     const tok = (name: string, fallback: string) => css.getPropertyValue(name).trim() || fallback;
-    const edgeColor = 'rgba(138,138,150,0.2)';
+    const edgeColor = tok('--graph-edge', 'rgba(138,138,150,0.2)');
     const proxyFill = tok('--cat-blue', '#60a5fa');
     const profileFill = tok('--success', '#34d399');
     const profileStoppedFill = tok('--border-2', '#2c2c38');
@@ -190,7 +191,7 @@
       ctx.fill();
 
       if (isHovered) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+        ctx.strokeStyle = tok('--graph-node-ring', 'rgba(255,255,255,0.4)');
         ctx.lineWidth = 2;
         ctx.stroke();
       }
@@ -248,7 +249,9 @@
       draw();
     });
     ro.observe(canvas.parentElement!);
-    return () => { ro.disconnect(); cancelAnimationFrame(animFrame); };
+    // Canvas doesn't react to CSS var changes — redraw when the theme flips
+    const unsubTheme = theme.subscribe(() => requestAnimationFrame(draw));
+    return () => { ro.disconnect(); cancelAnimationFrame(animFrame); unsubTheme(); };
   });
 </script>
 

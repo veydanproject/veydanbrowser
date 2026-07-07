@@ -362,7 +362,7 @@
         role="list"
       >
         <div class="col-header">
-          <span class="col-dot" style="background:#60a5fa; box-shadow: 0 0 8px #60a5fa"></span>
+          <span class="col-dot" style="background:var(--cat-blue); box-shadow: 0 0 8px var(--cat-blue)"></span>
           <span class="col-title">Unassigned</span>
           <span class="col-count">{cards.length}</span>
         </div>
@@ -411,7 +411,7 @@
     {#if columns.length === 0}
       <div class="column" role="list">
         <div class="col-header">
-          <span class="col-dot" style="background:#60a5fa; box-shadow: 0 0 8px #60a5fa"></span>
+          <span class="col-dot" style="background:var(--cat-blue); box-shadow: 0 0 8px var(--cat-blue)"></span>
           <span class="col-title">All Profiles</span>
           <span class="col-count">{profiles.filter(filterProfile).length}</span>
         </div>
@@ -613,7 +613,7 @@
     font-size: var(--fs-sm);
     font-weight: 600;
     color: var(--text);
-    box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+    box-shadow: var(--shadow-lg);
     transform: translate(12px, -50%);
     opacity: 0.92;
     white-space: nowrap;

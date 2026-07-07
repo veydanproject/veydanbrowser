@@ -494,7 +494,7 @@
     background: var(--bg-2);
     border: 1.5px solid var(--ws-color, var(--accent));
     border-radius: var(--radius);
-    box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+    box-shadow: var(--shadow-lg);
     pointer-events: none;
     z-index: 9999;
     opacity: 0.93;

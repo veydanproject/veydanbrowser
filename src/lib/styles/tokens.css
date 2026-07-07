@@ -5,9 +5,9 @@
  * Veydan Browser — design tokens (single source of truth)
  * Imported once from src/routes/+layout.svelte.
  *
- * Palette: redesign "Variant A — Тёмный продукт" (design handoff 2026-07).
- * Dark theme is the product theme; the light block keeps legacy values plus
- * approximations for the new token names (light switcher is disabled in UI).
+ * Palette: redesign "Variant A" (design handoff 2026-07).
+ * Dark is the primary product theme; the light block mirrors it with the same
+ * brand purple accent and violet-tinted neutrals (hue ~248°).
  *
  * Layers:
  *   :root              — theme-independent scales (spacing, type, radius, z, size, motion)
@@ -165,9 +165,14 @@
   --shadow-drawer: -24px 0 60px rgba(0, 0, 0, 0.5);
   --shadow-logo:   0 4px 14px rgba(124, 108, 246, 0.4);
   --shadow-note-active: 0 0 0 1px rgba(124, 108, 246, 0.15), 0 8px 22px rgba(0, 0, 0, 0.35);
+  --shadow-knob: 0 2px 5px rgba(0, 0, 0, 0.4);  /* toggle knob */
 
   --bg-glow:  radial-gradient(1200px 600px at 80% -10%, rgba(124, 108, 246, 0.06), transparent 60%);
   --backdrop: rgba(4, 4, 8, 0.55);
+
+  /* Topology graph (canvas reads these at draw time) */
+  --graph-edge:      rgba(138, 138, 150, 0.2);
+  --graph-node-ring: rgba(255, 255, 255, 0.4);
 
   /* ── Compatibility aliases → canonical tokens ──
      These names leaked in from a second naming scheme and were referenced
@@ -194,71 +199,78 @@
   --color-text-muted:  var(--text-2);
 }
 
-/* ── Colours: LIGHT ──
-   Legacy palette. The light switcher is disabled in the UI (redesign is
-   dark-only for now); values for NEW token names are approximations so no
-   var() ever dangles if someone lands here with a persisted light theme. */
+/* ── Colours: LIGHT ── ("Variant A — Light", mirrors the dark product theme)
+   Neutrals are violet-tinted cool grays (hue ~248°) mirroring the dark
+   #08080c→#eaeaf0 axis; accent steps down to #6d5cf0 for contrast on white.
+   Text tiers keep AA on their surfaces (ratios noted vs #ffffff). */
 [data-theme='light'] {
   color-scheme: light;
-  --bg:          #f0f4f8;
-  --bg-2:        #ffffff;
-  --surface:     #ffffff;
-  --surface-2:   #f8fafc;
-  --surface-3:   #f8fafc;
-  --surface-hover: #eef2f7;
-  --surface-row-hover: #f1f5f9;
-  --surface-drawer: #ffffff;
-  --surface-drawer-footer: #f8fafc;
-  --toggle-off:  #cbd5e1;
-  --border:      #e2e8f0;
-  --border-2:    #cbd5e1;
-  --text:        #1a202c;
-  --text-2:      #4a5568;
-  --text-3:      #a0aec0;
-  --text-body:   #2d3748;
-  --text-soft:   #64748b;
-  --text-faint:  #94a3b8;
-  --text-dim:    #94a3b8;
+  --bg:          #f4f3f8;  /* page bg — violet-tinted */
+  --bg-2:        #fafafd;  /* chrome: header / dock / session bar */
+  --surface:     #ffffff;  /* cards / sections / tables */
+  --surface-2:   #f6f5fa;  /* nested: profile cards, mono chips */
+  --surface-3:   #f8f7fc;  /* form fields / segment containers / filter chips */
+  --surface-hover: #efeef6;
+  --surface-row-hover: #f8f8fc;  /* table row hover — subtler than card hover */
+  --surface-drawer: #fcfcfe;
+  --surface-drawer-footer: #f7f7fb;
+  --toggle-off:  #d5d4e2;
+  --border:      #e6e5ef;
+  --border-2:    #cfcede;  /* hover border */
+  --text:        #16161e;  /* 16.8:1 */
+  --text-2:      #666672;  /* 5.5:1 */
+  --text-3:      #9898a6;  /* dimmest: placeholders, table header labels */
+  --text-body:   #33333e;  /* long-form body text */
+  --text-soft:   #4c4c58;  /* metric text, default icon-button glyphs */
+  --text-faint:  #757584;  /* field labels, sublabels */
+  --text-dim:    #82828f;  /* stopped status, em-dashes */
 
-  --accent:        #6d5cf0;
+  --accent:        #6d5cf0;  /* brand purple, darker step for light bg */
   --accent-hover:  #5a49dd;
   --accent-bg:     rgba(109, 92, 240, 0.1);
-  --accent-border: rgba(109, 92, 240, 0.4);
-  --accent-grad:   linear-gradient(135deg, #8b7bff, #6d5cf0);
-  --accent-text:   #6d5cf0;
-  --accent-text-2: #7a6af5;
-  --accent-text-3: #7a6af5;
+  --accent-border: rgba(109, 92, 240, 0.45);
+  --accent-grad:   linear-gradient(135deg, #8b7bff, #6d5cf0);  /* brand, unchanged */
+  --accent-text:   #5a49dd;  /* active nav / tabs */
+  --accent-text-2: #6353e6;  /* mono badges */
+  --accent-text-3: #5f4ee3;  /* inline links */
   --accent-tint:        rgba(109, 92, 240, 0.1);
-  --accent-tint-border: rgba(109, 92, 240, 0.3);
+  --accent-tint-border: rgba(109, 92, 240, 0.32);
 
-  --success:        #16a34a;
-  --success-bg:     rgba(22, 163, 74, 0.1);
-  --success-text:   #15803d;
-  --success-border: rgba(22, 163, 74, 0.3);
-  --success-grad:   linear-gradient(135deg, #34d399, #10b981);
-  --danger:         #dc2626;
-  --danger-bg:      rgba(220, 38, 38, 0.08);
-  --danger-text:    #b91c1c;
-  --danger-border:  rgba(220, 38, 38, 0.3);
-  --warn-bg:        rgba(217, 119, 6, 0.1);
-  --warn-text:      #b45309;
-  --warn-border:    rgba(217, 119, 6, 0.35);
+  --success:        #0e9f6e;
+  --success-bg:     rgba(16, 185, 129, 0.12);
+  --success-text:   #0a7d57;
+  --success-border: rgba(16, 185, 129, 0.38);
+  --success-grad:   linear-gradient(135deg, #10b981, #0c8a5f);
+  --danger:         #d63640;
+  --danger-bg:      rgba(217, 45, 54, 0.1);
+  --danger-text:    #c92a32;
+  --danger-border:  rgba(217, 45, 54, 0.32);
+  --warn-bg:        rgba(214, 158, 20, 0.14);
+  --warn-text:      #9a6700;
+  --warn-border:    rgba(178, 128, 12, 0.42);
 
-  --cat-purple: #8b7bff;
-  --cat-blue:   #60a5fa;
-  --cat-teal:   #2dd4bf;
-  --cat-pink:   #f472b6;
+  /* Category colours — one step darker than dark theme for light-bg legibility */
+  --cat-purple: #6d5cf0;
+  --cat-blue:   #3b82f6;
+  --cat-teal:   #0d9488;
+  --cat-pink:   #db2777;
 
-  --shadow:      0 2px 8px rgba(0, 0, 0, 0.08);
-  --shadow-lg:   0 8px 24px rgba(0, 0, 0, 0.12);
-  --shadow-accent: 0 5px 14px rgba(109, 92, 240, 0.25);
-  --shadow-danger: 0 5px 16px rgba(220, 38, 38, 0.2);
-  --shadow-drawer: -24px 0 60px rgba(0, 0, 0, 0.15);
+  /* Shadows — violet-gray ink instead of pure black */
+  --shadow:      0 2px 8px rgba(23, 20, 60, 0.08);
+  --shadow-lg:   0 8px 24px rgba(23, 20, 60, 0.13);
+  --shadow-accent: 0 5px 14px rgba(109, 92, 240, 0.28);
+  --shadow-danger: 0 5px 16px rgba(214, 54, 64, 0.22);
+  --shadow-drawer: -24px 0 60px rgba(23, 20, 60, 0.14);
   --shadow-logo:   0 4px 14px rgba(109, 92, 240, 0.3);
-  --shadow-note-active: 0 0 0 1px rgba(109, 92, 240, 0.15), 0 8px 22px rgba(0, 0, 0, 0.08);
+  --shadow-note-active: 0 0 0 1px rgba(109, 92, 240, 0.18), 0 8px 22px rgba(23, 20, 60, 0.1);
+  --shadow-knob: 0 1px 3px rgba(23, 20, 60, 0.25);
 
-  --bg-glow:  radial-gradient(1200px 600px at 80% -10%, rgba(124, 108, 246, 0.05), transparent 60%);
-  --backdrop: rgba(15, 23, 42, 0.35);
+  --bg-glow:  radial-gradient(1200px 600px at 80% -10%, rgba(124, 108, 246, 0.07), transparent 60%);
+  --backdrop: rgba(22, 20, 42, 0.35);
+
+  /* Topology graph (canvas reads these at draw time) */
+  --graph-edge:      rgba(90, 90, 115, 0.28);
+  --graph-node-ring: rgba(255, 255, 255, 0.9);
 
   /* aliases (resolve to this theme's canonical values) */
   --text-1:            var(--text);

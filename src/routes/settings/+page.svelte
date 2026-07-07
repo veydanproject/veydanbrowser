@@ -321,10 +321,10 @@
         <span>Dark</span>
         {#if $theme === 'dark'}<span class="lang-check">✓</span>{/if}
       </button>
-      <!-- Light theme is disabled while the redesign is dark-only -->
-      <button class="theme-opt" disabled title={$t('theme_light_soon')}>
+      <button class="theme-opt" class:active={$theme === 'light'} onclick={() => theme.set('light')}>
         <span class="theme-icon"><Icon name="sun" size={15} /></span>
         <span>Light</span>
+        {#if $theme === 'light'}<span class="lang-check">✓</span>{/if}
       </button>
     </div>
   </div>

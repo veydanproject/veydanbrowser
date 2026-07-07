@@ -323,7 +323,7 @@
     position: absolute; top: 3px; left: 3px;
     width: 24px; height: 24px; border-radius: 50%;
     background: #fff; transition: transform 0.2s;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-knob);
   }
   .toggle-btn.active .toggle-thumb { transform: translateX(24px); }
 
