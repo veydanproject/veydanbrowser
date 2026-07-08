@@ -104,11 +104,27 @@ fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the updater can install updates in-place for this install method.
+/// On Linux only AppImage is updatable; deb/rpm installs must download manually.
+#[tauri::command]
+fn update_supported() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("APPIMAGE").is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let data_dir = app_data_dir.join("VeydanBrowser");
@@ -153,6 +169,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             fingerprint_presets,
             open_url,
+            update_supported,
             // Profiles
             profiles_list,
             profile_get,

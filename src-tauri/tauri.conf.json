@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "publisher": "Veydan Project",
     "category": "Productivity",
     "linux": {
@@ -43,5 +44,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZCQjAxQzdGOUQ5ODY2RTEKUldUaFpwaWRmeHl3Ky92Q2tDczBlTmpsbFFQMHAwL2xGZlFkYVJSdFZjYVEvdjY2bmR6ODBSUkYK",
+      "endpoints": [
+        "https://github.com/veydanproject/veydanbrowser/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

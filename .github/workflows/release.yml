@@ -83,18 +83,40 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs updater artifacts (.sig) so installed apps accept them.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Veydan Browser ${{ github.ref_name }}'
           releaseBody: 'See the assets below to download and install this version.'
           releaseDraft: true
           prerelease: false
+          # latest.json must deterministically point at the NSIS installer
+          # (targets "all" builds both NSIS and MSI on Windows).
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
   publish:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # The matrix jobs merge their platform entries into the release's
+      # latest.json via download→merge→re-upload; two jobs finishing at the
+      # same moment can silently drop an entry. Gate publishing on all four
+      # platforms being present — a failed gate keeps the release draft, and
+      # re-running the dropped platform's build job re-merges its entry.
+      - name: Verify latest.json covers all platforms
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern latest.json -O latest.json
+          for p in linux-x86_64 windows-x86_64 darwin-aarch64 darwin-x86_64; do
+            jq -e ".platforms[\"$p\"].signature" latest.json >/dev/null \
+              || { echo "::error::latest.json is missing platform $p"; exit 1; }
+          done
+
       - name: Publish the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

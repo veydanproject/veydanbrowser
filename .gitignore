@@ -29,6 +29,9 @@ docs/
 *.env.*
 *.pem
 *.key
+*.key.password
+latest.json.sig
+*.sig
 *.p12
 *.pfx
 *.sqlite

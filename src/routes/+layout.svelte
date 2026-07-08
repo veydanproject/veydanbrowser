@@ -20,6 +20,8 @@
   import SSHTerminal from '$lib/components/ssh/SSHTerminal.svelte';
   import { sshStore } from '$lib/store/ssh.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
+  import { updaterStore } from '$lib/store/updater.svelte';
+  import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import { listen } from '@tauri-apps/api/event';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import UIInspector from '$lib/inspector/UIInspector.svelte';
@@ -90,8 +92,13 @@
       runningIds = e.payload.running_ids;
     });
 
+    // Background update check: delayed so startup work (profiles/db) settles first
+    updaterStore.init();
+    const updateTimer = setTimeout(() => updaterStore.check(true), 5000);
+
     return () => {
       unsub();
+      clearTimeout(updateTimer);
       window.removeEventListener('focus', refreshRunning);
       window.removeEventListener('keydown', handleKeyBack);
       window.removeEventListener('mouseup', handleMouseBack);
@@ -163,6 +170,8 @@
     </div>
    </div>
   </header>
+
+  <UpdateBanner />
 
   <main class="content">
     {@render children()}

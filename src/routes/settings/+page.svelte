@@ -11,6 +11,7 @@
   import type { Locale } from '$lib/i18n';
   import type { CamoufoxStatus } from '$lib/types';
   import { formatError } from '$lib/utils';
+  import { updaterStore } from '$lib/store/updater.svelte';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -19,9 +20,8 @@
     { value: 'ru', label: 'Russian', native: 'Русский' },
   ];
 
-  // About / license links. Set REPO_URL once the public repo is live to reveal
-  // the source-code, summary and third-party-licenses links.
-  const REPO_URL: string = '';
+  const REPO_URL: string = 'https://github.com/veydanproject/veydanbrowser';
+  const RELEASES_URL = `${REPO_URL}/releases/latest`;
   const LICENSE_URL = 'https://polyformproject.org/licenses/perimeter/1.0.1';
   const CAMOUFOX_URL = 'https://camoufox.com/';
   const summaryUrl = REPO_URL ? `${REPO_URL}/blob/main/LICENSE-SUMMARY.md` : '';
@@ -380,6 +380,65 @@
     {/if}
     {#if notesDirError}
       <div class="error-msg">{notesDirError}</div>
+    {/if}
+  </div>
+
+  <!-- App updates -->
+  <div class="card">
+    <div class="card-title">{$t('settings_update_section')}</div>
+
+    <div class="version-table">
+      <div class="version-row">
+        <span class="version-label">{$t('settings_about_version')}</span>
+        <span class="version-value">{appVersion ? `v${appVersion}` : '—'}</span>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      {#if updaterStore.status === 'available' && updaterStore.supported}
+        <button class="btn btn-primary btn-sm" onclick={() => updaterStore.install()}>
+          {$t('settings_update_install')}
+        </button>
+      {/if}
+      <button
+        class="btn btn-ghost btn-sm"
+        disabled={updaterStore.status === 'checking' ||
+          updaterStore.status === 'downloading' ||
+          updaterStore.status === 'installing'}
+        onclick={() => updaterStore.check(false)}
+      >
+        {updaterStore.status === 'checking'
+          ? $t('settings_update_checking')
+          : $t('settings_update_check')}
+      </button>
+    </div>
+
+    {#if updaterStore.status === 'upToDate'}
+      <p class="ok-msg">{$t('settings_update_up_to_date')}</p>
+    {:else if updaterStore.status === 'available'}
+      <p class="warn-msg">{$t('settings_update_available', { version: updaterStore.version })}</p>
+      {#if !updaterStore.supported}
+        <p class="muted small">{$t('settings_update_unsupported')}</p>
+        <div class="btn-row">
+          <button class="btn btn-ghost btn-sm" onclick={() => openExternal(RELEASES_URL)}>
+            <Icon name="external-link" size={14} />
+            {$t('settings_update_open_releases')}
+          </button>
+        </div>
+      {/if}
+    {:else if updaterStore.status === 'downloading'}
+      <div class="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {updaterStore.progress}%"></div>
+        </div>
+        <span class="progress-label">
+          {$t('settings_update_downloading')} · {updaterStore.progress}%
+        </span>
+      </div>
+    {:else if updaterStore.status === 'installing'}
+      <p class="muted small">{$t('settings_update_installing')}</p>
+    {:else if updaterStore.status === 'error'}
+      <div class="error-msg">{updaterStore.error}</div>
     {/if}
   </div>
 

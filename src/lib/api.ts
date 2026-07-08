@@ -72,6 +72,7 @@ const devMocks: Record<string, unknown> = {
     { name: 'readme.txt', path: '/home/dev/readme.txt', is_dir: false, is_symlink: false, size: 1234, mtime: Date.now(), mode: 0o100644, permissions: 'rw-r--r--', octal: '0644', owner: '1000', group: '1000' },
   ],
   sftp_session_list: [],
+  update_supported: true,
 };
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -309,5 +310,6 @@ export const api = {
 
   system: {
     openUrl: (url: string) => call<void>('open_url', { url }),
+    updateSupported: () => call<boolean>('update_supported'),
   },
 };
