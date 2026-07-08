@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 mod browser;
-mod commands;
+// Public so integration smoke examples (examples/*.rs) can exercise command internals.
+pub mod commands;
 mod db;
 pub mod error;
 mod fingerprint;
@@ -33,10 +34,22 @@ use commands::totp::{
 };
 use commands::profiles::*;
 use commands::proxies::*;
+use commands::sftp::{
+    sftp_chmod, sftp_connect, sftp_create_file, sftp_delete, sftp_disconnect, sftp_home,
+    sftp_list, sftp_mkdir, sftp_rename, sftp_respond_prompt, sftp_session_list, sftp_stat,
+    SftpSessions,
+};
+use commands::transfer::{sftp_transfer_cancel, sftp_transfer_start};
+use commands::fs::{
+    fs_chmod, fs_create_file, fs_delete, fs_home, fs_list, fs_mkdir, fs_rename, fs_stat,
+};
 use commands::ssh::{
     ssh_connect, ssh_connection_create, ssh_connection_delete, ssh_connection_get,
     ssh_connection_list, ssh_connection_update, ssh_disconnect, ssh_resize, ssh_send_data,
     ssh_session_list, ssh_session_remove, ssh_respond_prompt, SshSessions,
+};
+use commands::ssh_keys::{
+    ssh_key_delete, ssh_key_generate, ssh_key_get, ssh_key_import, ssh_key_list, ssh_key_update,
 };
 use commands::workspaces::*;
 use sqlx::{Pool, Sqlite};
@@ -51,6 +64,7 @@ pub struct AppState {
     pub download: DownloadManager,
     pub notes_custom_dir: Arc<std::sync::RwLock<Option<PathBuf>>>,
     pub ssh_sessions: SshSessions,
+    pub sftp_sessions: SftpSessions,
 }
 
 #[tauri::command]
@@ -126,6 +140,7 @@ pub fn run() {
                 download: DownloadManager::default(),
                 notes_custom_dir: Arc::new(std::sync::RwLock::new(notes_custom_dir)),
                 ssh_sessions: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+                sftp_sessions: Arc::new(commands::sftp::SftpState::default()),
             });
 
             commands::notes::start_notes_watcher(app.handle().clone(), data_dir, {
@@ -251,6 +266,37 @@ pub fn run() {
             ssh_session_list,
             ssh_session_remove,
             ssh_respond_prompt,
+            // SSH keys store
+            ssh_key_list,
+            ssh_key_get,
+            ssh_key_import,
+            ssh_key_generate,
+            ssh_key_update,
+            ssh_key_delete,
+            // SFTP file browser
+            sftp_connect,
+            sftp_disconnect,
+            sftp_session_list,
+            sftp_home,
+            sftp_list,
+            sftp_stat,
+            sftp_respond_prompt,
+            sftp_transfer_start,
+            sftp_transfer_cancel,
+            sftp_mkdir,
+            sftp_create_file,
+            sftp_rename,
+            sftp_delete,
+            sftp_chmod,
+            // Local filesystem (file browser)
+            fs_home,
+            fs_list,
+            fs_stat,
+            fs_mkdir,
+            fs_create_file,
+            fs_rename,
+            fs_delete,
+            fs_chmod,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -20,6 +20,20 @@ export function proxyOptionLabel(p: Proxy): string {
   return geo ? `${p.name} (${geo})` : p.name;
 }
 
+/** Human-readable byte size, e.g. "1.4 MB". Binary multiplier, short units. */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = bytes;
+  let i = -1;
+  do {
+    v /= 1024;
+    i++;
+  } while (v >= 1024 && i < units.length - 1);
+  return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
 // ── Date/time formatting ─────────────────────────────────────────────────────
 // Helpers follow the app UI locale ('en' | 'ru' from i18n). Callers pass the
 // current `$locale`; we map it to a BCP-47 tag for Intl. Previously each screen
@@ -43,9 +57,9 @@ export function formatDate(iso: string | null | undefined, locale: string): stri
   return d ? d.toLocaleDateString(tag(locale)) : '';
 }
 
-/** Date + time, e.g. "05.07.2026, 14:30". Empty string for null/invalid. */
-export function formatDateTime(iso: string | null | undefined, locale: string): string {
-  const d = toDate(iso);
+/** Date + time, e.g. "05.07.2026, 14:30". Accepts ISO strings or epoch ms. Empty string for null/invalid. */
+export function formatDateTime(value: string | number | null | undefined, locale: string): string {
+  const d = toDate(value);
   return d ? d.toLocaleString(tag(locale)) : '';
 }
 

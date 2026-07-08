@@ -36,6 +36,10 @@ rusqlite = "0.39"
 base64 = "0.22"
 sha2 = "0.11"
 russh = "0.62"
+russh-sftp = "2"
+# CSPRNG for SSH key generation (already in the tree via russh)
+rand = { version = "0.10", features = ["thread_rng"] }
+tokio-util = "0.7"
 async-trait = "0.1.89"
 thiserror = "2.0.18"
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }

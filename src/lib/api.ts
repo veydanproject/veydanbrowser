@@ -11,6 +11,7 @@ import type {
   CreateWorkspaceRequest,
   DiffResult,
   ExportOptions,
+  FileEntry,
   HistoryFilter,
   MergeResult,
   Note,
@@ -27,12 +28,19 @@ import type {
   ProfileRawData,
   Proxy,
   ProxyCheckResult,
+  SftpSessionInfo,
   SshConnection,
   SshConnectionCreateInput,
   SshConnectionUpdateInput,
+  SshKey,
+  SshKeyGenerateInput,
+  SshKeyImportInput,
+  SshKeyUpdateInput,
   SshSessionInfo,
   TotpAddRequest,
   TotpCode,
+  TransferItemInput,
+  TransferKind,
   TotpEntry,
   TotpPreview,
   TotpUpdateRequest,
@@ -58,6 +66,12 @@ const devMocks: Record<string, unknown> = {
   workspace_list: [],
   profiles_list_by_workspace: [],
   workspace_column_list: [],
+  fs_home: '/home/dev',
+  fs_list: [
+    { name: 'projects', path: '/home/dev/projects', is_dir: true, is_symlink: false, size: 4096, mtime: Date.now(), mode: 0o40755, permissions: 'rwxr-xr-x', octal: '0755', owner: '1000', group: '1000' },
+    { name: 'readme.txt', path: '/home/dev/readme.txt', is_dir: false, is_symlink: false, size: 1234, mtime: Date.now(), mode: 0o100644, permissions: 'rw-r--r--', octal: '0644', owner: '1000', group: '1000' },
+  ],
+  sftp_session_list: [],
 };
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -244,6 +258,55 @@ export const api = {
     sessionList: () => call<SshSessionInfo[]>('ssh_session_list'),
     sessionRemove: (sessionId: string) => call<void>('ssh_session_remove', { sessionId }),
   },
+  sshKeys: {
+    list: () => call<SshKey[]>('ssh_key_list'),
+    get: (id: string) => call<SshKey>('ssh_key_get', { id }),
+    import: (input: SshKeyImportInput) => call<SshKey>('ssh_key_import', { input }),
+    generate: (input: SshKeyGenerateInput) => call<SshKey>('ssh_key_generate', { input }),
+    update: (id: string, input: SshKeyUpdateInput) =>
+      call<SshKey>('ssh_key_update', { id, input }),
+    delete: (id: string) => call<void>('ssh_key_delete', { id }),
+  },
+  sftp: {
+    connect: (connectionId: string) =>
+      call<SftpSessionInfo>('sftp_connect', { connectionId }),
+    disconnect: (connectionId: string) =>
+      call<void>('sftp_disconnect', { connectionId }),
+    sessionList: () => call<SftpSessionInfo[]>('sftp_session_list'),
+    home: (connectionId: string) => call<string>('sftp_home', { connectionId }),
+    list: (connectionId: string, path: string) =>
+      call<FileEntry[]>('sftp_list', { connectionId, path }),
+    stat: (connectionId: string, path: string) =>
+      call<FileEntry | null>('sftp_stat', { connectionId, path }),
+    respondPrompt: (connectionId: string, response: string) =>
+      call<void>('sftp_respond_prompt', { connectionId, response }),
+    transferStart: (kind: TransferKind, connectionId: string, items: TransferItemInput[]) =>
+      call<string>('sftp_transfer_start', { kind, connectionId, items }),
+    transferCancel: (transferId: string) =>
+      call<void>('sftp_transfer_cancel', { transferId }),
+    mkdir: (connectionId: string, path: string) =>
+      call<void>('sftp_mkdir', { connectionId, path }),
+    createFile: (connectionId: string, path: string) =>
+      call<void>('sftp_create_file', { connectionId, path }),
+    rename: (connectionId: string, from: string, to: string) =>
+      call<void>('sftp_rename', { connectionId, from, to }),
+    delete: (connectionId: string, path: string) =>
+      call<void>('sftp_delete', { connectionId, path }),
+    chmod: (connectionId: string, path: string, mode: number) =>
+      call<void>('sftp_chmod', { connectionId, path, mode }),
+  },
+
+  fs: {
+    home: () => call<string>('fs_home'),
+    list: (path: string) => call<FileEntry[]>('fs_list', { path }),
+    stat: (path: string) => call<FileEntry | null>('fs_stat', { path }),
+    mkdir: (path: string) => call<void>('fs_mkdir', { path }),
+    createFile: (path: string) => call<void>('fs_create_file', { path }),
+    rename: (from: string, to: string) => call<void>('fs_rename', { from, to }),
+    delete: (path: string) => call<void>('fs_delete', { path }),
+    chmod: (path: string, mode: number) => call<void>('fs_chmod', { path, mode }),
+  },
+
   system: {
     openUrl: (url: string) => call<void>('open_url', { url }),
   },

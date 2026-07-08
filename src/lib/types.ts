@@ -405,6 +405,7 @@ export interface SshConnection {
   password: string | null;
   private_key: string | null;
   key_passphrase: string | null;
+  ssh_key_id: string | null;
   requires_2fa: boolean;
   totp_entry_id: string | null;
   proxy_id: string | null;
@@ -429,6 +430,7 @@ export interface SshConnectionCreateInput {
   password?: string | null;
   private_key?: string | null;
   key_passphrase?: string | null;
+  ssh_key_id?: string | null;
   requires_2fa?: boolean;
   totp_entry_id?: string | null;
   proxy_id?: string | null;
@@ -450,6 +452,7 @@ export interface SshConnectionUpdateInput {
   password?: string | null;
   private_key?: string | null;
   key_passphrase?: string | null;
+  ssh_key_id?: string | null;
   requires_2fa?: boolean;
   totp_entry_id?: string | null;
   proxy_id?: string | null;
@@ -471,6 +474,97 @@ export interface SshSessionInfo {
   status: SshStatus;
   error: string | null;
   connected_at: string | null;
+}
+
+// ── SSH keys store ─────────────────────────────────────────────────────────────
+
+export interface SshKey {
+  id: string;
+  name: string;
+  algorithm: string;
+  bits: number | null;
+  comment: string | null;
+  private_key: string;
+  public_key: string;
+  passphrase: string | null;
+  fingerprint: string | null;
+  source: 'generated' | 'imported';
+  created_at: string;
+  updated_at: string;
+  usage_count: number;
+}
+
+export interface SshKeyImportInput {
+  name: string;
+  private_key: string;
+  passphrase?: string | null;
+}
+
+export interface SshKeyGenerateInput {
+  name: string;
+  algorithm: 'ed25519' | 'rsa' | 'ecdsa';
+  bits?: number | null;
+  comment?: string | null;
+  passphrase?: string | null;
+}
+
+export interface SshKeyUpdateInput {
+  name?: string;
+  comment?: string | null;
+}
+
+// ── File browser (SFTP + local) ───────────────────────────────────────────────
+
+/** Unified directory entry — same shape for local FS and remote SFTP. */
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  is_symlink: boolean;
+  size: number;
+  /** Epoch milliseconds. */
+  mtime: number | null;
+  mode: number;
+  /** "rwxr-xr-x" */
+  permissions: string;
+  /** "0644" */
+  octal: string;
+  owner: string | null;
+  group: string | null;
+}
+
+export interface SftpSessionInfo {
+  connection_id: string;
+  connection_name: string;
+  home: string;
+  connected_at: string;
+}
+
+export type TransferKind = 'download' | 'upload';
+
+export interface TransferItemInput {
+  src_path: string;
+  dst_path: string;
+  overwrite: boolean;
+}
+
+export interface TransferProgressEvent {
+  transfer_id: string;
+  kind: TransferKind;
+  current_file: string;
+  files_done: number;
+  files_total: number;
+  bytes_done: number;
+  bytes_total: number;
+}
+
+export interface TransferDoneEvent {
+  transfer_id: string;
+  kind: TransferKind;
+  error: string | null;
+  cancelled: boolean;
+  files_done: number;
+  files_skipped: number;
 }
 
 // ── Export / Import ───────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@
   import Modal from '$lib/Modal.svelte';
   import Drawer from '$lib/components/ui/Drawer.svelte';
   import SSHConnectionForm from '$lib/components/ssh/SSHConnectionForm.svelte';
+  import SshKeysTab from '$lib/components/ssh/keys/SshKeysTab.svelte';
   import ProxyPanel from '$lib/components/ProxyPanel.svelte';
   import { sshStore } from '$lib/store/ssh.svelte';
   import { proxiesStore } from '$lib/store/proxies.svelte';
@@ -20,6 +21,7 @@
 
   let loading = $state(false);
   let error = $state('');
+  let activeTab = $state<'connections' | 'keys'>('connections');
 
   let search = $state('');
   let filterAuth = $state('all');
@@ -139,10 +141,36 @@
       <h1>{$t('terminal_title')}</h1>
       <p class="page-sub">{$t('terminal_sub', { count: String(sshStore.connections.length) })}</p>
     </div>
-    <button class="btn btn-primary spacer" onclick={() => (panelConn = null)}>
-      <Icon name="plus" size={15} />{$t('terminal_add')}
+    {#if activeTab === 'connections'}
+      <button class="btn btn-primary spacer" onclick={() => (panelConn = null)}>
+        <Icon name="plus" size={15} />{$t('terminal_add')}
+      </button>
+    {/if}
+  </div>
+
+  <div class="tab-bar page-tabs">
+    <button
+      class="tab"
+      class:active={activeTab === 'connections'}
+      onclick={() => (activeTab = 'connections')}
+    >
+      <Icon name="terminal" size={12} /> {$t('ssh_keys_tab_connections')}
+      {#if sshStore.connections.length > 0}
+        <span class="tab-count">{sshStore.connections.length}</span>
+      {/if}
+    </button>
+    <button
+      class="tab"
+      class:active={activeTab === 'keys'}
+      onclick={() => (activeTab = 'keys')}
+    >
+      <Icon name="key" size={12} /> {$t('ssh_keys_tab_keys')}
     </button>
   </div>
+
+  {#if activeTab === 'keys'}
+    <SshKeysTab />
+  {:else}
 
   {#if error}<div class="error-msg" style="margin-bottom:1rem">{error}</div>{/if}
 
@@ -303,6 +331,8 @@
       </div>
     {/if}
   {/if}
+
+  {/if}
 </div>
 
 <Drawer
@@ -341,6 +371,9 @@
   /* панель фильтров — единые примитивы .filter-bar/.search-field/.filter-select/.count-badge из base.css */
 
   .page-title-group { display: flex; flex-direction: column; gap: 6px; }
+
+  /* Page-level tabs: connections | keys (base .tab-bar/.tab primitives) */
+  .page-tabs { margin-bottom: var(--sp-4); padding: 0; }
 
   .table-wrap {
     flex: 1; min-height: 0; overflow-y: auto;

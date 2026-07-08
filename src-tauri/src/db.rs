@@ -364,6 +364,40 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Stored SSH keys (referenced by ssh_connections.ssh_key_id)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ssh_keys (
+            id          TEXT PRIMARY KEY NOT NULL,
+            name        TEXT NOT NULL,
+            algorithm   TEXT NOT NULL,
+            bits        INTEGER,
+            comment     TEXT,
+            private_key TEXT NOT NULL,
+            public_key  TEXT NOT NULL,
+            passphrase  TEXT,
+            fingerprint TEXT,
+            source      TEXT NOT NULL DEFAULT 'imported',
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // NOTE: PRAGMA foreign_keys is not enabled, so ON DELETE SET NULL is
+    // documentation only — ssh_key_delete clears references explicitly.
+    add_column_if_not_exists(
+        pool,
+        "ssh_connections",
+        "ssh_key_id",
+        "TEXT REFERENCES ssh_keys(id) ON DELETE SET NULL",
+    )
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_ssh_conn_key ON ssh_connections(ssh_key_id)")
+        .execute(pool)
+        .await?;
+
     // Migrate existing rows: if old columns still exist, drop them gracefully
     // (SQLite doesn't support DROP COLUMN before 3.35, so we leave them; they just won't be used)
 

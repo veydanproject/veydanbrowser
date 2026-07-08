@@ -4,7 +4,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { api } from '$lib/api';
-  import type { SshConnection, SshConnectionCreateInput, SshConnectionUpdateInput, TotpEntry } from '$lib/types';
+  import type { SshConnection, SshConnectionCreateInput, SshConnectionUpdateInput, SshKey, TotpEntry } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/i18n';
 
@@ -27,6 +27,8 @@
   let proxies = $state<{ id: string; name: string; proxy_type: string }[]>([]);
   let workspaces = $state<{ id: string; name: string }[]>([]);
   let totpEntries = $state<TotpEntry[]>([]);
+  let sshKeys = $state<SshKey[]>([]);
+  let sshKeysLoaded = $state(false);
   let saving = $state(false);
   let error = $state('');
 
@@ -38,6 +40,8 @@
   let password = $state(untrack(() => connection?.password ?? ''));
   let privateKey = $state(untrack(() => connection?.private_key ?? ''));
   let keyPassphrase = $state(untrack(() => connection?.key_passphrase ?? ''));
+  let keySource = $state<'saved' | 'inline'>(untrack(() => (connection?.ssh_key_id ? 'saved' : 'inline')));
+  let sshKeyId = $state(untrack(() => connection?.ssh_key_id ?? ''));
   let requires2fa = $state(untrack(() => connection?.requires_2fa ?? false));
   let totpEntryId = $state(untrack(() => connection?.totp_entry_id ?? ''));
   let proxyId = $state(untrack(() => connection?.proxy_id ?? ''));
@@ -62,7 +66,21 @@
     api.totp.list().then((list) => {
       totpEntries = list;
     });
+    api.sshKeys.list().then((list) => {
+      sshKeys = list;
+      sshKeysLoaded = true;
+    });
   });
+
+  let selectedKey = $derived(sshKeys.find((k) => k.id === sshKeyId));
+  /** The connection references a key that no longer exists (deleted). */
+  let savedKeyMissing = $derived(
+    keySource === 'saved' && sshKeysLoaded && !!sshKeyId && !selectedKey
+  );
+
+  function keyOptionLabel(k: SshKey): string {
+    return k.bits ? `${k.name} — ${k.algorithm} ${k.bits}` : `${k.name} — ${k.algorithm}`;
+  }
 
   function toggleWorkspace(id: string) {
     if (selectedWorkspaceIds.includes(id)) {
@@ -77,6 +95,12 @@
       error = $t('ssh_error_required');
       return;
     }
+    const isKeyAuth = authType === 'key' || authType === 'key_password';
+    const useSavedKey = isKeyAuth && keySource === 'saved';
+    if (useSavedKey && (!sshKeyId || savedKeyMissing)) {
+      error = $t('ssh_key_error_select_required');
+      return;
+    }
     saving = true;
     error = '';
     try {
@@ -88,8 +112,10 @@
         username: username.trim(),
         auth_type: authType,
         password: password || null,
-        private_key: privateKey || null,
-        key_passphrase: keyPassphrase || null,
+        // Saved key: reference only — never persist stale inline material.
+        private_key: useSavedKey ? null : privateKey || null,
+        key_passphrase: useSavedKey ? null : keyPassphrase || null,
+        ssh_key_id: useSavedKey ? sshKeyId : null,
         requires_2fa: requires2fa,
         totp_entry_id: totpEntryId || null,
         proxy_id: proxyId || null,
@@ -160,14 +186,55 @@
 
   {#if authType === 'key' || authType === 'key_password'}
     <div class="form-group">
-      <label for="ssh-private-key">{$t('ssh_field_private_key')}</label>
-      <textarea id="ssh-private-key" bind:value={privateKey} rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;..."></textarea>
-    </div>
-    {#if authType === 'key_password'}
-      <div class="form-group">
-        <label for="ssh-key-passphrase">{$t('ssh_field_key_passphrase')}</label>
-        <input id="ssh-key-passphrase" type="password" bind:value={keyPassphrase} placeholder="••••••••" autocomplete="new-password" />
+      <span class="field-label">{$t('ssh_key_source_label')}</span>
+      <div class="seg">
+        <button
+          type="button"
+          class="seg-btn"
+          class:active={keySource === 'saved'}
+          onclick={() => (keySource = 'saved')}
+        >
+          <Icon name="key" size={12} /> {$t('ssh_key_source_saved')}
+        </button>
+        <button
+          type="button"
+          class="seg-btn"
+          class:active={keySource === 'inline'}
+          onclick={() => (keySource = 'inline')}
+        >
+          <Icon name="pencil" size={12} /> {$t('ssh_key_source_inline')}
+        </button>
       </div>
+    </div>
+
+    {#if keySource === 'saved'}
+      <div class="form-group">
+        <label for="ssh-saved-key">{$t('ssh_key_field_saved_key')}</label>
+        <select id="ssh-saved-key" bind:value={sshKeyId}>
+          <option value="">{$t('ssh_key_select_placeholder')}</option>
+          {#each sshKeys as k}
+            <option value={k.id}>{keyOptionLabel(k)}</option>
+          {/each}
+        </select>
+        {#if savedKeyMissing}
+          <span class="hint warn">{$t('ssh_key_missing_warning')}</span>
+        {:else if selectedKey?.passphrase}
+          <span class="hint">{$t('ssh_key_selected_passphrase_hint')}</span>
+        {:else if sshKeysLoaded && sshKeys.length === 0}
+          <span class="hint">{$t('ssh_key_none_hint')}</span>
+        {/if}
+      </div>
+    {:else}
+      <div class="form-group">
+        <label for="ssh-private-key">{$t('ssh_field_private_key')}</label>
+        <textarea id="ssh-private-key" bind:value={privateKey} rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;..."></textarea>
+      </div>
+      {#if authType === 'key_password'}
+        <div class="form-group">
+          <label for="ssh-key-passphrase">{$t('ssh_field_key_passphrase')}</label>
+          <input id="ssh-key-passphrase" type="password" bind:value={keyPassphrase} placeholder="••••••••" autocomplete="new-password" />
+        </div>
+      {/if}
     {/if}
     <div class="form-group">
       <label for="ssh-password-ki">{$t('ssh_field_password_ki')}</label>
@@ -330,6 +397,8 @@
   /* Workspace tag picker */
   .tag-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .hint { font-size: var(--fs-xs); color: var(--text-faint); text-transform: none; letter-spacing: 0; font-weight: var(--fw-normal); }
+  .hint.warn { color: var(--warn-text); }
+  .seg { align-self: flex-start; }
 
   .advanced { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }
   summary { padding: 0.7rem 1rem; cursor: pointer; font-size: var(--fs-sm); font-weight: var(--fw-semibold); color: var(--text-2); user-select: none; }

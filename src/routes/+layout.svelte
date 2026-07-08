@@ -132,6 +132,10 @@
         <Icon name="terminal" size={14} />
         {$t('nav_terminal')}
       </a>
+      <a href="/files" class="nav-link" class:active={isActive('/files')}>
+        <Icon name="folder" size={14} />
+        {$t('nav_files')}
+      </a>
       <a href="/notes" class="nav-link" class:active={isActive('/notes')}>
         <Icon name="file-text" size={14} />
         {$t('nav_notes')}

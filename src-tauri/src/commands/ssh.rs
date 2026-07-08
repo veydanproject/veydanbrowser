@@ -29,6 +29,7 @@ struct SshConnectionRow {
     password: Option<String>,
     private_key: Option<String>,
     key_passphrase: Option<String>,
+    ssh_key_id: Option<String>,
     requires_2fa: i64,
     totp_entry_id: Option<String>,
     proxy_id: Option<String>,
@@ -55,6 +56,7 @@ pub struct SshConnection {
     pub password: Option<String>,
     pub private_key: Option<String>,
     pub key_passphrase: Option<String>,
+    pub ssh_key_id: Option<String>,
     pub requires_2fa: bool,
     pub totp_entry_id: Option<String>,
     pub proxy_id: Option<String>,
@@ -82,6 +84,7 @@ impl From<SshConnectionRow> for SshConnection {
             password: r.password,
             private_key: r.private_key,
             key_passphrase: r.key_passphrase,
+            ssh_key_id: r.ssh_key_id,
             requires_2fa: r.requires_2fa != 0,
             totp_entry_id: r.totp_entry_id,
             proxy_id: r.proxy_id,
@@ -111,6 +114,7 @@ pub struct SshConnectionCreateInput {
     pub password: Option<String>,
     pub private_key: Option<String>,
     pub key_passphrase: Option<String>,
+    pub ssh_key_id: Option<String>,
     pub requires_2fa: Option<bool>,
     pub totp_entry_id: Option<String>,
     pub proxy_id: Option<String>,
@@ -133,6 +137,7 @@ pub struct SshConnectionUpdateInput {
     pub password: Option<String>,
     pub private_key: Option<String>,
     pub key_passphrase: Option<String>,
+    pub ssh_key_id: Option<String>,
     pub requires_2fa: Option<bool>,
     pub totp_entry_id: Option<String>,
     pub proxy_id: Option<String>,
@@ -215,7 +220,7 @@ struct KeyboardPromptItem {
 
 // ── russh Handler ──────────────────────────────────────────────────────────────
 
-struct TerminalHandler;
+pub(crate) struct TerminalHandler;
 
 impl client::Handler for TerminalHandler {
     type Error = russh::Error;
@@ -260,7 +265,8 @@ fn emit_data(app: &AppHandle, session_id: &str, data: &[u8]) {
 }
 
 /// Authenticate with the SSH server based on auth_type.
-async fn do_authenticate(
+/// Shared by the terminal (`run_session`) and the SFTP subsystem (`commands::sftp`).
+pub(crate) async fn do_authenticate(
     handle: &mut client::Handle<TerminalHandler>,
     app: &AppHandle,
     session_id: &str,
@@ -618,13 +624,13 @@ pub async fn ssh_connection_create(
     sqlx::query(
         "INSERT INTO ssh_connections (
             id, name, host, port, username, auth_type,
-            password, private_key, key_passphrase,
+            password, private_key, key_passphrase, ssh_key_id,
             requires_2fa, totp_entry_id, proxy_id,
             connect_timeout_sec, keepalive_sec, terminal_theme,
             default_cols, default_rows, created_at, updated_at
         ) VALUES (
             ?, ?, ?, ?, ?, ?,
-            ?, ?, ?,
+            ?, ?, ?, ?,
             ?, ?, ?,
             ?, ?, ?,
             ?, ?, ?, ?
@@ -639,6 +645,7 @@ pub async fn ssh_connection_create(
     .bind(&input.password)
     .bind(&input.private_key)
     .bind(&input.key_passphrase)
+    .bind(&input.ssh_key_id)
     .bind(input.requires_2fa.unwrap_or(false) as i64)
     .bind(&input.totp_entry_id)
     .bind(&input.proxy_id)
@@ -681,6 +688,7 @@ pub async fn ssh_connection_update(
             password            = ?,
             private_key         = ?,
             key_passphrase      = ?,
+            ssh_key_id          = ?,
             requires_2fa        = COALESCE(?, requires_2fa),
             totp_entry_id       = ?,
             proxy_id            = ?,
@@ -700,6 +708,7 @@ pub async fn ssh_connection_update(
     .bind(&input.password)
     .bind(&input.private_key)
     .bind(&input.key_passphrase)
+    .bind(&input.ssh_key_id)
     .bind(input.requires_2fa.map(|v| v as i64))
     .bind(&input.totp_entry_id)
     .bind(&input.proxy_id)
@@ -737,6 +746,39 @@ pub async fn ssh_connection_delete(
     Ok(())
 }
 
+/// Resolve a saved-key reference (`ssh_key_id`) into inline key material.
+/// Called at connect time only (terminal + SFTP), so `ssh_connection_get`
+/// keeps returning raw rows for the edit form.
+pub async fn resolve_key_material(
+    db: &sqlx::SqlitePool,
+    conn: &mut SshConnection,
+) -> Result<(), AppError> {
+    if conn.auth_type != "key" && conn.auth_type != "key_password" {
+        return Ok(());
+    }
+    let Some(key_id) = conn.ssh_key_id.clone() else {
+        return Ok(());
+    };
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT private_key, passphrase FROM ssh_keys WHERE id = ?")
+            .bind(&key_id)
+            .fetch_optional(db)
+            .await
+            .map_err(AppError::db)?;
+    let (private_key, passphrase) = row.ok_or_else(|| {
+        AppError::not_found(format!(
+            "Saved SSH key {key_id} no longer exists — edit the connection and pick another key"
+        ))
+    })?;
+    let has_passphrase = passphrase.as_deref().is_some_and(|p| !p.is_empty());
+    conn.private_key = Some(private_key);
+    conn.key_passphrase = passphrase;
+    // Normalize so do_authenticate applies the stored passphrase regardless of
+    // what auth_type the connection row says.
+    conn.auth_type = if has_passphrase { "key_password".into() } else { "key".into() };
+    Ok(())
+}
+
 // ── Session Commands ───────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -753,7 +795,8 @@ pub async fn ssh_connect(
     state: State<'_, AppState>,
     connection_id: String,
 ) -> CmdResult<String> {
-    let conn = ssh_connection_get(state.clone(), connection_id.clone()).await?;
+    let mut conn = ssh_connection_get(state.clone(), connection_id.clone()).await?;
+    resolve_key_material(&state.db, &mut conn).await?;
 
     let session_id = Uuid::new_v4().to_string();
     let (tx, rx) = mpsc::channel::<SshInputCommand>(64);
@@ -889,20 +932,21 @@ async fn http_connect_tunnel(
     Ok(stream)
 }
 
-async fn run_session(
-    app: &AppHandle,
-    session_id: &str,
+/// Establish the SSH transport for a connection: direct TCP, or tunneled
+/// through a SOCKS5 / SSH-jump / HTTP-CONNECT proxy.
+/// Shared by the terminal (`run_session`) and the SFTP subsystem (`commands::sftp`).
+///
+/// The returned `SharedSession` (if any) is the jump-host session — the caller
+/// must keep it alive for as long as the handle is used, or the tunnel closes.
+pub(crate) async fn establish_transport(
     conn: &SshConnection,
-    proxy: Option<crate::models::Proxy>,
-    db: sqlx::SqlitePool,
-    mut rx: mpsc::Receiver<SshInputCommand>,
-) -> anyhow::Result<()> {
-    let config = Arc::new(client::Config::default());
+    proxy: Option<&crate::models::Proxy>,
+    config: Arc<client::Config>,
+) -> anyhow::Result<(Option<crate::proxy::ssh::SharedSession>, client::Handle<TerminalHandler>)> {
     let host = conn.host.as_str();
     let port = conn.port as u16;
 
-    // _jump_session keeps the Arc alive for the duration of the session
-    let (_jump_session, mut handle): (Option<crate::proxy::ssh::SharedSession>, client::Handle<TerminalHandler>) = match proxy {
+    let result: (Option<crate::proxy::ssh::SharedSession>, client::Handle<TerminalHandler>) = match proxy {
         Some(ref p) if p.proxy_type == "socks5" => {
             let stream = crate::proxy::local::socks5_connect(
                 &p.host,
@@ -954,6 +998,23 @@ async fn run_session(
             (None, client::connect(config, (host, port), TerminalHandler).await?)
         }
     };
+
+    Ok(result)
+}
+
+async fn run_session(
+    app: &AppHandle,
+    session_id: &str,
+    conn: &SshConnection,
+    proxy: Option<crate::models::Proxy>,
+    db: sqlx::SqlitePool,
+    mut rx: mpsc::Receiver<SshInputCommand>,
+) -> anyhow::Result<()> {
+    let config = Arc::new(client::Config::default());
+
+    // _jump_session keeps the Arc alive for the duration of the session
+    let (_jump_session, mut handle) =
+        establish_transport(conn, proxy.as_ref(), config).await?;
 
     // Authenticate
     do_authenticate(

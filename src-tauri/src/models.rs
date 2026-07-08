@@ -182,6 +182,52 @@ pub struct Proxy {
     pub created_at: DateTime<Utc>,
 }
 
+/// A single directory entry, unified across the local filesystem (`commands::fs`)
+/// and remote SFTP listings (`commands::sftp`). Remote paths are POSIX strings.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    /// Absolute path of the entry (POSIX string for remote entries).
+    pub path: String,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    pub size: u64,
+    /// Modification time, epoch milliseconds.
+    pub mtime: Option<i64>,
+    /// Raw unix mode bits (file type + permissions).
+    pub mode: u32,
+    /// Symbolic permission string, e.g. "rwxr-xr-x".
+    pub permissions: String,
+    /// Octal permission string, e.g. "0644".
+    pub octal: String,
+    pub owner: Option<String>,
+    pub group: Option<String>,
+}
+
+/// "rwxr-xr-x"-style string from raw mode bits (setuid/setgid/sticky included).
+pub fn format_permissions(mode: u32) -> String {
+    let mut s = String::with_capacity(9);
+    let flags = [
+        (0o400, 'r'), (0o200, 'w'), (0o100, 'x'),
+        (0o040, 'r'), (0o020, 'w'), (0o010, 'x'),
+        (0o004, 'r'), (0o002, 'w'), (0o001, 'x'),
+    ];
+    for (bit, ch) in flags {
+        s.push(if mode & bit != 0 { ch } else { '-' });
+    }
+    // setuid / setgid / sticky replace the corresponding execute slot
+    let mut b: Vec<char> = s.chars().collect();
+    if mode & 0o4000 != 0 { b[2] = if mode & 0o100 != 0 { 's' } else { 'S' }; }
+    if mode & 0o2000 != 0 { b[5] = if mode & 0o010 != 0 { 's' } else { 'S' }; }
+    if mode & 0o1000 != 0 { b[8] = if mode & 0o001 != 0 { 't' } else { 'T' }; }
+    b.into_iter().collect()
+}
+
+/// "0644"-style octal string from raw mode bits (permission bits only).
+pub fn format_octal(mode: u32) -> String {
+    format!("{:04o}", mode & 0o7777)
+}
+
 #[cfg(test)]
 impl Profile {
     /// Baseline profile for unit tests — clone and override fields as needed.
@@ -431,4 +477,36 @@ pub struct ProfileExport {
     pub exported_at: String,
     pub profile: ProfileExportData,
     pub proxy: Option<ProxyExportData>,
+}
+
+#[cfg(test)]
+mod file_entry_tests {
+    use super::{format_octal, format_permissions};
+
+    #[test]
+    fn permissions_basic() {
+        assert_eq!(format_permissions(0o644), "rw-r--r--");
+        assert_eq!(format_permissions(0o755), "rwxr-xr-x");
+        assert_eq!(format_permissions(0o000), "---------");
+        // file-type bits must not affect the permission string
+        assert_eq!(format_permissions(0o100644), "rw-r--r--");
+        assert_eq!(format_permissions(0o040755), "rwxr-xr-x");
+    }
+
+    #[test]
+    fn permissions_special_bits() {
+        assert_eq!(format_permissions(0o4755), "rwsr-xr-x");
+        assert_eq!(format_permissions(0o4644), "rwSr--r--");
+        assert_eq!(format_permissions(0o2755), "rwxr-sr-x");
+        assert_eq!(format_permissions(0o1777), "rwxrwxrwt");
+        assert_eq!(format_permissions(0o1666), "rw-rw-rwT");
+    }
+
+    #[test]
+    fn octal_strips_type_bits() {
+        assert_eq!(format_octal(0o100644), "0644");
+        assert_eq!(format_octal(0o40755), "0755");
+        assert_eq!(format_octal(0o4755), "4755");
+        assert_eq!(format_octal(0), "0000");
+    }
 }
