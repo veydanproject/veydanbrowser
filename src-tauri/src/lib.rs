@@ -12,6 +12,10 @@ mod proxy;
 mod tray;
 
 use browser::launch::BrowserState;
+use commands::backup::{
+    backup_get_config, backup_list, backup_restore, backup_run_now, backup_set_config,
+    start_backup_scheduler, BackupManager,
+};
 use commands::settings::{tray_set_labels, tray_settings_get, tray_settings_set, window_minimize};
 use commands::camoufox::{
     camoufox_download, camoufox_download_cancel, camoufox_download_state, camoufox_latest_version,
@@ -80,6 +84,7 @@ pub struct AppState {
     pub notes_custom_dir: Arc<std::sync::RwLock<Option<PathBuf>>>,
     pub ssh_sessions: SshSessions,
     pub sftp_sessions: SftpSessions,
+    pub backup: Arc<BackupManager>,
     pub tray_settings: Arc<TraySettings>,
     pub tray_labels: Arc<Mutex<TrayLabels>>,
     pub tray: Arc<Mutex<Option<TrayIcon>>>,
@@ -202,6 +207,7 @@ pub fn run() {
                 notes_custom_dir: Arc::new(std::sync::RwLock::new(notes_custom_dir)),
                 ssh_sessions: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
                 sftp_sessions: Arc::new(commands::sftp::SftpState::default()),
+                backup: Arc::new(BackupManager::default()),
                 tray_settings: tray_settings.clone(),
                 tray_labels: Arc::new(Mutex::new(TrayLabels::default())),
                 tray: Arc::new(Mutex::new(None)),
@@ -211,6 +217,9 @@ pub fn run() {
                 let state = app.state::<AppState>();
                 state.notes_custom_dir.read().ok().and_then(|g| g.clone())
             });
+
+            // Scheduled backups: ticks every 60s, catches up missed runs on start.
+            start_backup_scheduler(app.handle().clone());
 
             // ── System tray ──
             let want_tray = tray_settings.minimize_to_tray.load(Ordering::Relaxed)
@@ -286,6 +295,12 @@ pub fn run() {
             tray_settings_set,
             tray_set_labels,
             window_minimize,
+            // Backup
+            backup_get_config,
+            backup_set_config,
+            backup_list,
+            backup_run_now,
+            backup_restore,
             // Profiles
             profiles_list,
             profile_get,

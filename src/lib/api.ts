@@ -313,6 +313,15 @@ export const api = {
     updateSupported: () => call<boolean>('update_supported'),
   },
 
+  backup: {
+    getConfig: () => call<BackupConfig>('backup_get_config'),
+    setConfig: (cfg: BackupConfig) => call<void>('backup_set_config', { cfg }),
+    list: () => call<BackupFileInfo[]>('backup_list'),
+    runNow: () => call<void>('backup_run_now'),
+    restore: (path: string, password: string) =>
+      call<void>('backup_restore', { path, password }),
+  },
+
   settings: {
     getTray: () => call<TraySettings>('tray_settings_get'),
     setTray: (s: TraySettings) =>
@@ -330,6 +339,25 @@ export interface TraySettings {
   minimize_to_tray: boolean;
   close_to_tray: boolean;
   start_hidden: boolean;
+}
+
+export interface BackupConfig {
+  dir: string | null;
+  password: string | null;
+  schedule_enabled: boolean;
+  schedule_mode: 'interval' | 'daily' | 'weekly';
+  interval_hours: number;
+  time: string;
+  weekday: number;
+  keep: number;
+  last_run: string | null;
+}
+
+export interface BackupFileInfo {
+  name: string;
+  path: string;
+  size: number;
+  modified: string;
 }
 
 export interface TrayLabels {

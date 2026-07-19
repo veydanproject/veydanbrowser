@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
+pub mod backup;
 pub mod camoufox;
 pub mod fs;
 pub mod notes;

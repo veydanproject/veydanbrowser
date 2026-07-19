@@ -8,10 +8,13 @@
   import { inspectorApp } from '$lib/inspector/inspector.svelte';
   import Icon from '$lib/Icon.svelte';
   import { api } from '$lib/api';
+  import type { BackupConfig, BackupFileInfo } from '$lib/api';
   import type { Locale } from '$lib/i18n';
   import type { CamoufoxStatus } from '$lib/types';
   import { formatError } from '$lib/utils';
   import { updaterStore } from '$lib/store/updater.svelte';
+  import CustomSelect from '$lib/components/CustomSelect.svelte';
+  import Dialog from '$lib/components/ui/Dialog.svelte';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -60,6 +63,125 @@
   let trayClose = $state(false);
   let trayStartHidden = $state(false);
 
+  // Backup
+  let backupCfg = $state<BackupConfig>({
+    dir: null,
+    password: null,
+    schedule_enabled: false,
+    schedule_mode: 'interval',
+    interval_hours: 24,
+    time: '03:00',
+    weekday: 0,
+    keep: 5,
+    last_run: null,
+  });
+  let backupList = $state<BackupFileInfo[]>([]);
+  let backupSaving = $state(false);
+  let backupSaved = $state(false);
+  let backupError = $state('');
+  let backupRunning = $state(false);
+  let backupPhase = $state('');
+  let backupProgress = $state(0);
+  let backupDone = $state('');
+  // Restore dialog
+  let restoreTarget = $state<BackupFileInfo | null>(null);
+  let restorePassword = $state('');
+  let restoreError = $state('');
+
+  const modeOptions = $derived([
+    { value: 'interval', label: $t('settings_backup_mode_interval') },
+    { value: 'daily', label: $t('settings_backup_mode_daily') },
+    { value: 'weekly', label: $t('settings_backup_mode_weekly') },
+  ]);
+  const weekdayOptions = $derived(
+    [0, 1, 2, 3, 4, 5, 6].map((d) => ({
+      value: String(d),
+      label: $t(`settings_backup_day_${d}` as any),
+    }))
+  );
+
+  function formatBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  async function loadBackup() {
+    try {
+      backupCfg = await api.backup.getConfig();
+    } catch {}
+    await refreshBackupList();
+  }
+
+  async function refreshBackupList() {
+    try {
+      backupList = await api.backup.list();
+    } catch {
+      backupList = [];
+    }
+  }
+
+  async function browseBackupDir() {
+    if (!isTauri) return;
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ directory: true, multiple: false, title: $t('settings_backup_folder') });
+      if (selected && typeof selected === 'string') {
+        backupCfg.dir = selected;
+      }
+    } catch {}
+  }
+
+  async function saveBackupConfig() {
+    backupSaving = true;
+    backupSaved = false;
+    backupError = '';
+    try {
+      await api.backup.setConfig($state.snapshot(backupCfg));
+      backupSaved = true;
+      setTimeout(() => (backupSaved = false), 2000);
+      await refreshBackupList();
+    } catch (e) {
+      backupError = formatError(e);
+    } finally {
+      backupSaving = false;
+    }
+  }
+
+  async function runBackupNow() {
+    backupError = '';
+    backupDone = '';
+    // Persist current config first so the backend uses the latest dir/password.
+    await saveBackupConfig();
+    if (backupError) return;
+    backupRunning = true;
+    backupProgress = 0;
+    backupPhase = '';
+    try {
+      await api.backup.runNow();
+    } catch (e) {
+      backupRunning = false;
+      backupError = formatError(e);
+    }
+  }
+
+  function openRestore(b: BackupFileInfo) {
+    restoreTarget = b;
+    restorePassword = backupCfg.password ?? '';
+    restoreError = '';
+  }
+
+  async function confirmRestore() {
+    if (!restoreTarget) return;
+    restoreError = '';
+    try {
+      // On success the app restarts, so this call never resolves.
+      await api.backup.restore(restoreTarget.path, restorePassword);
+    } catch (e) {
+      restoreError = formatError(e);
+    }
+  }
+
   async function saveTray() {
     if (!isTauri) return;
     try {
@@ -97,6 +219,9 @@
         trayStartHidden = tray.start_hidden;
       } catch {}
     }
+
+    // Load backup config + list
+    await loadBackup();
 
     // Restore state if download was already running
     const dlState = await api.camoufox.downloadState().catch(() => null);
@@ -140,6 +265,26 @@
         if (!e.payload.includes('cancelled')) {
           downloadError = e.payload;
         }
+      }));
+
+      // ── Backup events ──
+      unlisteners.push(await listen<{ phase: string; percent: number }>('backup://progress', (e) => {
+        backupRunning = true;
+        backupPhase = e.payload.phase;
+        backupProgress = e.payload.percent;
+      }));
+
+      unlisteners.push(await listen<string>('backup://done', async () => {
+        backupRunning = false;
+        backupProgress = 100;
+        backupDone = $t('settings_backup_done');
+        setTimeout(() => (backupDone = ''), 4000);
+        await Promise.all([refreshBackupList(), (async () => { backupCfg = await api.backup.getConfig().catch(() => backupCfg); })()]);
+      }));
+
+      unlisteners.push(await listen<string>('backup://error', (e) => {
+        backupRunning = false;
+        backupError = e.payload;
       }));
     }
   });
@@ -458,6 +603,157 @@
     {/if}
   </div>
 
+  <!-- Backup -->
+  <div class="card">
+    <div class="card-title">{$t('settings_backup_section')}</div>
+    <p class="muted">{$t('settings_backup_hint')}</p>
+
+    <!-- Destination folder -->
+    <div class="field">
+      <span class="field-label">{$t('settings_backup_folder')}</span>
+      <div class="dir-row">
+        <input
+          class="dir-input"
+          type="text"
+          bind:value={backupCfg.dir}
+          placeholder={$t('settings_backup_folder_placeholder')}
+          readonly={!isTauri}
+        />
+        {#if isTauri}
+          <button class="btn btn-ghost btn-sm btn-icon" onclick={browseBackupDir} title={$t('settings_backup_browse')}>
+            <Icon name="folder-open" size={14} />
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Password -->
+    <div class="field">
+      <span class="field-label">{$t('settings_backup_password')}</span>
+      <input
+        class="field-input"
+        type="password"
+        bind:value={backupCfg.password}
+        placeholder={$t('settings_backup_password_placeholder')}
+        autocomplete="off"
+      />
+      <p class="muted small">{$t('settings_backup_password_note')}</p>
+    </div>
+
+    <!-- Schedule -->
+    <div class="dev-tools-row">
+      <div class="dev-tools-info">
+        <span>{$t('settings_backup_schedule')}</span>
+        <span class="muted">{$t('settings_backup_schedule_hint')}</span>
+      </div>
+      <button
+        class="toggle"
+        class:on={backupCfg.schedule_enabled}
+        onclick={() => { backupCfg.schedule_enabled = !backupCfg.schedule_enabled; }}
+        aria-pressed={backupCfg.schedule_enabled}
+        aria-label={$t('settings_backup_schedule')}
+      ></button>
+    </div>
+
+    {#if backupCfg.schedule_enabled}
+      <div class="sched-grid">
+        <div class="field">
+          <span class="field-label">{$t('settings_backup_mode')}</span>
+          <CustomSelect
+            options={modeOptions}
+            value={backupCfg.schedule_mode}
+            onchange={(v) => (backupCfg.schedule_mode = (v as BackupConfig['schedule_mode']) ?? 'interval')}
+          />
+        </div>
+
+        {#if backupCfg.schedule_mode === 'interval'}
+          <div class="field">
+            <span class="field-label">{$t('settings_backup_interval_hours')}</span>
+            <input class="field-input" type="number" min="1" bind:value={backupCfg.interval_hours} />
+          </div>
+        {:else}
+          <div class="field">
+            <span class="field-label">{$t('settings_backup_time')}</span>
+            <input class="field-input" type="time" bind:value={backupCfg.time} />
+          </div>
+          {#if backupCfg.schedule_mode === 'weekly'}
+            <div class="field">
+              <span class="field-label">{$t('settings_backup_weekday')}</span>
+              <CustomSelect
+                options={weekdayOptions}
+                value={String(backupCfg.weekday)}
+                onchange={(v) => (backupCfg.weekday = Number(v ?? 0))}
+              />
+            </div>
+          {/if}
+        {/if}
+
+        <div class="field">
+          <span class="field-label">{$t('settings_backup_keep')}</span>
+          <input class="dir-input" type="number" min="0" bind:value={backupCfg.keep} />
+        </div>
+      </div>
+    {/if}
+
+    <div class="btn-row">
+      <button class="btn btn-primary btn-sm" disabled={backupSaving} onclick={saveBackupConfig}>
+        {backupSaving ? $t('settings_backup_saving') : $t('settings_backup_save')}
+      </button>
+      <button
+        class="btn btn-ghost btn-sm"
+        disabled={!isTauri || backupRunning || !backupCfg.dir || !backupCfg.password}
+        onclick={runBackupNow}
+      >
+        {backupRunning ? $t('settings_backup_running') : $t('settings_backup_run_now')}
+      </button>
+      {#if backupSaved}<span class="ok-msg">✓</span>{/if}
+    </div>
+
+    {#if backupRunning}
+      <div class="progress-wrap">
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {backupProgress}%"></div>
+        </div>
+        <span class="progress-label">{backupPhase} · {backupProgress}%</span>
+      </div>
+    {/if}
+    {#if backupDone}<p class="ok-msg">{backupDone}</p>{/if}
+    {#if backupError}<div class="error-msg">{backupError}</div>{/if}
+
+    <!-- Existing backups -->
+    <div class="field">
+      <span class="field-label">{$t('settings_backup_existing')}</span>
+      {#if backupList.length === 0}
+        <p class="muted small">{$t('settings_backup_none')}</p>
+      {:else}
+        <div class="backup-list">
+          {#each backupList as b (b.path)}
+            <div class="backup-item">
+              <div class="backup-meta">
+                <span class="backup-name">{b.name}</span>
+                <span class="muted small">{formatBytes(b.size)}</span>
+              </div>
+              {#if isTauri}
+                <button class="btn btn-ghost btn-sm" onclick={() => openRestore(b)}>
+                  {$t('settings_backup_restore')}
+                </button>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <div class="version-table">
+      <div class="version-row">
+        <span class="version-label">{$t('settings_backup_last_run')}</span>
+        <span class="version-value">
+          {backupCfg.last_run ? new Date(backupCfg.last_run).toLocaleString() : $t('settings_backup_never')}
+        </span>
+      </div>
+    </div>
+  </div>
+
   <!-- App updates -->
   <div class="card">
     <div class="card-title">{$t('settings_update_section')}</div>
@@ -572,6 +868,31 @@
     <div class="about-copyright">{$t('settings_about_copyright')}</div>
   </div>
 </div>
+
+{#if restoreTarget}
+  <Dialog open={true} onclose={() => (restoreTarget = null)} title={$t('settings_backup_restore_title')}>
+    <div class="restore-body">
+      <p class="backup-name">{restoreTarget.name}</p>
+      <p class="warn-msg">{$t('settings_backup_restore_warn')}</p>
+      <input
+        class="field-input"
+        type="password"
+        bind:value={restorePassword}
+        placeholder={$t('settings_backup_password')}
+        autocomplete="off"
+      />
+      {#if restoreError}<div class="error-msg">{restoreError}</div>{/if}
+    </div>
+    {#snippet footer()}
+      <button class="btn btn-ghost btn-sm" onclick={() => (restoreTarget = null)}>
+        {$t('settings_backup_cancel')}
+      </button>
+      <button class="btn btn-danger btn-sm" disabled={!restorePassword} onclick={confirmRestore}>
+        {$t('settings_backup_restore_confirm')}
+      </button>
+    {/snippet}
+  </Dialog>
+{/if}
 
 <style>
   /* max-width comes from global .page via --page-max (set inline) */
@@ -703,4 +1024,39 @@
   .dir-input:focus { border-color: var(--accent-border); }
   .btn-icon { width: 44px; height: 44px; justify-content: center; padding: 0; }
   .error-msg { font-size: var(--fs-sm); color: var(--danger-text); }
+
+  /* Backup section */
+  .field { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .field-label { font-size: var(--fs-sm); color: var(--text); font-weight: var(--fw-semibold); }
+  .field .dir-input { width: 100%; }
+
+  /* Standard form input (password / number / time) — matches CustomSelect box */
+  .field-input {
+    width: 100%; height: var(--control-h-lg);
+    background: var(--surface-3); border: 1px solid var(--border);
+    border-radius: var(--radius-field); padding: 0 var(--sp-3);
+    font-size: var(--fs-base); color: var(--text); font-family: inherit;
+    outline: none; transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+  }
+  .field-input:focus { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-bg); }
+
+  .sched-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--sp-3);
+  }
+
+  .backup-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .backup-item {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--surface-3); border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .backup-meta { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+  .backup-name {
+    font-size: var(--fs-sm); color: var(--text-body); font-family: var(--font-mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .restore-body { display: flex; flex-direction: column; gap: var(--sp-3); }
 </style>

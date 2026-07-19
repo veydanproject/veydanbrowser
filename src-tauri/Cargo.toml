@@ -48,6 +48,11 @@ totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 notify = "8"
 diffy = "0.5"
 zstd = "0.13"
+# Full-app backup: streaming tar + passphrase (scrypt) authenticated encryption.
+# age pinned to 0.11: 0.12 pulls post-quantum crates (ml-kem) that don't build
+# on this toolchain, and we only use the scrypt passphrase recipient anyway.
+tar = "0.4"
+age = { version = "0.11", default-features = false }
 
 # Linux-only: native GTK signal for reliable minimize-to-tray detection
 # (Tauri's WindowEvent::Resized / is_minimized() are unreliable on GTK/Wayland).
