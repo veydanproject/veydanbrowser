@@ -9,8 +9,10 @@ pub mod error;
 mod fingerprint;
 mod models;
 mod proxy;
+mod tray;
 
 use browser::launch::BrowserState;
+use commands::settings::{tray_set_labels, tray_settings_get, tray_settings_set, window_minimize};
 use commands::camoufox::{
     camoufox_download, camoufox_download_cancel, camoufox_download_state, camoufox_latest_version,
     camoufox_status, DownloadManager,
@@ -54,8 +56,21 @@ use commands::ssh_keys::{
 use commands::workspaces::*;
 use sqlx::{Pool, Sqlite};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tauri::Manager;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri::tray::TrayIcon;
+use tauri::{Listener, Manager};
+use tray::TrayLabels;
+
+/// Tray-behavior settings, kept as atomics for cheap access from the window
+/// event handler. Mirrors the `minimize_to_tray` / `close_to_tray` /
+/// `start_hidden` keys in `app_settings`.
+#[derive(Default)]
+pub struct TraySettings {
+    pub minimize_to_tray: AtomicBool,
+    pub close_to_tray: AtomicBool,
+    pub start_hidden: AtomicBool,
+}
 
 pub struct AppState {
     pub db: Pool<Sqlite>,
@@ -65,6 +80,22 @@ pub struct AppState {
     pub notes_custom_dir: Arc<std::sync::RwLock<Option<PathBuf>>>,
     pub ssh_sessions: SshSessions,
     pub sftp_sessions: SftpSessions,
+    pub tray_settings: Arc<TraySettings>,
+    pub tray_labels: Arc<Mutex<TrayLabels>>,
+    pub tray: Arc<Mutex<Option<TrayIcon>>>,
+}
+
+/// Read a boolean flag from `app_settings` (stored as "1"/"0"), defaulting to
+/// `false` when the key is absent.
+async fn read_bool_setting(db: &Pool<Sqlite>, key: &str) -> bool {
+    sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -149,6 +180,20 @@ pub fn run() {
             .flatten()
             .map(PathBuf::from);
 
+            // Load tray-behavior settings
+            let tray_settings = Arc::new(TraySettings::default());
+            tauri::async_runtime::block_on(async {
+                tray_settings
+                    .minimize_to_tray
+                    .store(read_bool_setting(&db, "minimize_to_tray").await, Ordering::Relaxed);
+                tray_settings
+                    .close_to_tray
+                    .store(read_bool_setting(&db, "close_to_tray").await, Ordering::Relaxed);
+                tray_settings
+                    .start_hidden
+                    .store(read_bool_setting(&db, "start_hidden").await, Ordering::Relaxed);
+            });
+
             app.manage(AppState {
                 db,
                 browser: Arc::new(BrowserState::default()),
@@ -157,11 +202,77 @@ pub fn run() {
                 notes_custom_dir: Arc::new(std::sync::RwLock::new(notes_custom_dir)),
                 ssh_sessions: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
                 sftp_sessions: Arc::new(commands::sftp::SftpState::default()),
+                tray_settings: tray_settings.clone(),
+                tray_labels: Arc::new(Mutex::new(TrayLabels::default())),
+                tray: Arc::new(Mutex::new(None)),
             });
 
             commands::notes::start_notes_watcher(app.handle().clone(), data_dir, {
                 let state = app.state::<AppState>();
                 state.notes_custom_dir.read().ok().and_then(|g| g.clone())
+            });
+
+            // ── System tray ──
+            let want_tray = tray_settings.minimize_to_tray.load(Ordering::Relaxed)
+                || tray_settings.close_to_tray.load(Ordering::Relaxed)
+                || tray_settings.start_hidden.load(Ordering::Relaxed);
+            if want_tray {
+                tray::apply_tray_async(app.handle(), true);
+            }
+            if tray_settings.start_hidden.load(Ordering::Relaxed) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+            // In minimize-to-tray mode the window is represented only by the
+            // tray icon — keep it out of the taskbar.
+            if tray_settings.minimize_to_tray.load(Ordering::Relaxed) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.set_skip_taskbar(true);
+                }
+            }
+
+            // Hide-on-close, gated by the live setting (cross-platform). Also
+            // handles minimize-to-tray on Windows/macOS via Resized. On Linux
+            // the minimize detection uses a native GTK signal instead (below),
+            // because WindowEvent::Resized / is_minimized() are unreliable there.
+            if let Some(win) = app.get_webview_window("main") {
+                let handle = app.handle().clone();
+                win.on_window_event(move |event| {
+                    let state = handle.state::<AppState>();
+                    match event {
+                        #[cfg(not(target_os = "linux"))]
+                        tauri::WindowEvent::Resized(_) => {
+                            if state.tray_settings.minimize_to_tray.load(Ordering::Relaxed) {
+                                if let Some(w) = handle.get_webview_window("main") {
+                                    if w.is_minimized().unwrap_or(false) {
+                                        let _ = w.unminimize();
+                                        let _ = w.hide();
+                                    }
+                                }
+                            }
+                        }
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
+                            if state.tray_settings.close_to_tray.load(Ordering::Relaxed) {
+                                api.prevent_close();
+                                if let Some(w) = handle.get_webview_window("main") {
+                                    // Hide → the window fully leaves the taskbar
+                                    // (tray-only). The dead-decoration-on-restore
+                                    // Wayland quirk is handled on show() by the
+                                    // tray's schedule_decoration_fix.
+                                    let _ = w.hide();
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            }
+
+            // Keep the tray's running-profiles submenu + tooltip in sync.
+            let tray_handle = app.handle().clone();
+            app.listen("profiles://running-changed", move |_| {
+                tray::refresh_tray_async(&tray_handle);
             });
 
             Ok(())
@@ -170,6 +281,11 @@ pub fn run() {
             fingerprint_presets,
             open_url,
             update_supported,
+            // Tray / UI settings
+            tray_settings_get,
+            tray_settings_set,
+            tray_set_labels,
+            window_minimize,
             // Profiles
             profiles_list,
             profile_get,

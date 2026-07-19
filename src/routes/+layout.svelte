@@ -7,9 +7,12 @@
   import '$lib/styles/tokens.css';
   import '$lib/styles/base.css';
   import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import type { Snippet } from 'svelte';
-  import { t } from '$lib/i18n';
+  import { t, locale } from '$lib/i18n';
+  import type { TrayLabels } from '$lib/api';
   import { theme, toggleTheme } from '$lib/theme';
   import Icon from '$lib/Icon.svelte';
   import { api } from '$lib/api';
@@ -26,6 +29,8 @@
   import { profilesStore } from '$lib/store/profiles.svelte';
   import UIInspector from '$lib/inspector/UIInspector.svelte';
   import { inspectorApp } from '$lib/inspector/inspector.svelte';
+  import WindowControls from '$lib/components/WindowControls.svelte';
+  import ResizeHandles from '$lib/components/ResizeHandles.svelte';
 
   let { children }: { children: Snippet } = $props();
 
@@ -44,10 +49,64 @@
     (runningProfiles.length > 0 ? ITEM_H : 0) // dock
   );
 
+  const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+  // Client-side decorations are used only on Linux (to dodge the KWin
+  // hide()/show() decoration bug). Windows/macOS keep their native window
+  // chrome, so the custom titlebar/controls/resize/frame render only here.
+  const isCsd =
+    isTauri && typeof navigator !== 'undefined' && /linux/i.test(navigator.userAgent);
+
+  // Custom-titlebar (CSD) dragging: cache the window so startDragging() fires
+  // synchronously inside the mousedown (Wayland needs the live grab).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let appWindow: any = null;
+  let maximized = $state(false);
+  const NON_DRAG = 'button, a, input, select, textarea, [data-no-drag]';
+
+  function onTitlebarMouseDown(e: MouseEvent) {
+    if (!isCsd || e.button !== 0 || !appWindow) return;
+    if ((e.target as HTMLElement).closest(NON_DRAG)) return;
+    appWindow.startDragging();
+  }
+  function onTitlebarDblClick(e: MouseEvent) {
+    if (!isCsd || !appWindow) return;
+    if ((e.target as HTMLElement).closest(NON_DRAG)) return;
+    appWindow.toggleMaximize();
+  }
+
   async function refreshRunning() {
     try {
       runningIds = await api.profiles.runningIds();
     } catch {}
+  }
+
+  // Build the tray menu strings for the active locale. Parametrized entries
+  // ({n}) are passed as raw templates — the backend fills in the count.
+  function buildTrayLabels(): TrayLabels {
+    const tt = get(t);
+    return {
+      show: tt('tray_show'),
+      hide: tt('tray_hide'),
+      quit: tt('tray_quit'),
+      running: tt('tray_running'),
+      stop_all: tt('tray_stop_all'),
+      no_running: tt('tray_no_running'),
+      launch_profile: tt('tray_launch_profile'),
+      no_profiles: tt('tray_no_profiles'),
+      section_workspaces: tt('nav_workspaces'),
+      section_proxies: tt('nav_proxies'),
+      section_terminal: tt('nav_terminal'),
+      section_files: tt('nav_files'),
+      section_notes: tt('nav_notes'),
+      password_generator: tt('tray_password_generator'),
+      tooltip: tt('tray_tooltip'),
+    };
+  }
+
+  function syncTrayLabels() {
+    if (!isTauri) return;
+    api.settings.setTrayLabels(buildTrayLabels()).catch(() => {});
   }
 
   function handleKeyBack(e: KeyboardEvent) {
@@ -74,6 +133,23 @@
       document.body.dataset.theme = val;
     });
 
+    // Cache the window handle for titlebar dragging (CSD) + track maximized so
+    // the rounded frame + shadow are dropped when the window fills the screen.
+    let unlistenMax: (() => void) | undefined;
+    if (isTauri) {
+      import('@tauri-apps/api/window')
+        .then(async ({ getCurrentWindow }) => {
+          appWindow = getCurrentWindow();
+          try {
+            maximized = await appWindow.isMaximized();
+            unlistenMax = await appWindow.onResized(async () => {
+              try { maximized = await appWindow.isMaximized(); } catch {}
+            });
+          } catch {}
+        })
+        .catch(() => {});
+    }
+
     // Preload profiles and TOTP for running indicator and badge resolution
     profilesStore.ensureLoaded();
     totpStore.ensureLoaded();
@@ -92,6 +168,25 @@
       runningIds = e.payload.running_ids;
     });
 
+    // ── System tray ──
+    // Push localized menu strings now and whenever the locale changes.
+    syncTrayLabels();
+    const unsubLocale = locale.subscribe(() => syncTrayLabels());
+
+    const trayUnlisteners = [
+      listen<string>('tray://navigate', (e) => goto(e.payload)),
+      listen<string>('tray://launch-profile', (e) => {
+        api.profiles.launch(e.payload).catch((err) => console.error(err));
+      }),
+      listen<string>('tray://stop-profile', (e) => {
+        api.profiles.stop(e.payload).catch((err) => console.error(err));
+      }),
+      listen('tray://stop-all', () => {
+        runningIds.forEach((id) => api.profiles.stop(id).catch(() => {}));
+      }),
+      listen('tray://open-pwgen', () => { pwgenOpen = true; }),
+    ];
+
     // Background update check: delayed so startup work (profiles/db) settles first
     updaterStore.init();
     const updateTimer = setTimeout(() => updaterStore.check(true), 5000);
@@ -103,6 +198,9 @@
       window.removeEventListener('keydown', handleKeyBack);
       window.removeEventListener('mouseup', handleMouseBack);
       unlisten.then((fn) => fn());
+      unsubLocale();
+      trayUnlisteners.forEach((p) => p.then((fn) => fn()));
+      unlistenMax?.();
     };
   });
 
@@ -116,8 +214,30 @@
   }
 </script>
 
-<div class="layout">
-  <header class="topbar">
+<div class="app-frame" class:csd={isCsd} class:maximized={maximized}>
+ <div class="layout">
+  {#if isCsd}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="titlebar" onmousedown={onTitlebarMouseDown} ondblclick={onTitlebarDblClick}>
+      <div class="titlebar-title">
+        <img src="/logo.png" alt="" class="titlebar-logo" />
+        <span>Veydan Browser</span>
+      </div>
+      <div class="titlebar-drag"></div>
+      <button
+        class="titlebar-btn"
+        class:active={isActive('/settings')}
+        onclick={() => goto('/settings')}
+        aria-label={$t('nav_settings')}
+        title={$t('nav_settings')}
+      >
+        <Icon name="settings" size={15} />
+      </button>
+      <WindowControls />
+    </div>
+  {/if}
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <header class="topbar" onmousedown={onTitlebarMouseDown} ondblclick={onTitlebarDblClick}>
    <div class="topbar-inner">
     <a href="/" class="topbar-brand">
       <span class="brand-tile">
@@ -147,13 +267,14 @@
         <Icon name="file-text" size={14} />
         {$t('nav_notes')}
       </a>
-      <a href="/settings" class="nav-link" class:active={isActive('/settings')}>
-        <Icon name="settings" size={14} />
-        {$t('nav_settings')}
-      </a>
     </nav>
 
     <div class="topbar-right">
+      {#if !isCsd}
+        <button class="theme-toggle" onclick={() => goto('/settings')} title={$t('nav_settings')}>
+          <Icon name="settings" size={15} />
+        </button>
+      {/if}
       <button class="theme-toggle" onclick={() => (totpOpen = !totpOpen)} title={$t('totp_title')}>
         <Icon name="shield" size={15} />
       </button>
@@ -207,8 +328,12 @@
       </div>
     </div>
   {/if}
+ </div>
 </div>
 
+{#if isCsd}
+  <ResizeHandles />
+{/if}
 <PasswordGenerator bind:open={pwgenOpen} />
 <TotpGenerator bind:open={totpOpen} context="global" />
 <UIInspector />
@@ -218,11 +343,95 @@
      (.btn, .icon-btn, .form-*, .page, .card, .badge, .tab, .empty-state,
      .spinner, …) live in $lib/styles/base.css. Both imported at top of script. */
 
+  /* ── Window frame (CSD) ──
+     The OS draws no decoration (decorations:false), so we render the frame
+     ourselves: the window is transparent and the app lives inside a rounded,
+     shadowed panel with a small transparent gutter for the drop shadow — a
+     native-looking framed window. The frame is dropped when maximized. */
+  :global(html),
+  :global(body) {
+    background: transparent !important;
+    overflow: hidden;
+  }
+
+  .app-frame {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+  }
+  /* CSD (Linux): rounded, shadowed panel with a gutter for the drop shadow. */
+  .app-frame.csd {
+    inset: var(--frame-gap, 9px);
+    border-radius: 11px;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px var(--border),
+      0 14px 44px rgba(0, 0, 0, 0.5);
+  }
+  .app-frame.csd.maximized {
+    inset: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  /* Dedicated titlebar strip (the window's own bar, above the app toolbar). */
+  .titlebar {
+    display: flex;
+    align-items: stretch;
+    height: 34px;
+    flex-shrink: 0;
+    padding-left: 12px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .titlebar-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78rem;
+    font-weight: var(--fw-semibold);
+    color: var(--text-2);
+    letter-spacing: 0.1px;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .titlebar-logo {
+    width: 15px;
+    height: 15px;
+    object-fit: contain;
+    opacity: 0.9;
+  }
+  /* Empty flexible middle — the primary drag area. */
+  .titlebar-drag {
+    flex: 1;
+  }
+
+  /* Settings gear in the titlebar (flat, full-height, like the window buttons) */
+  .titlebar-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: stretch;
+    width: 42px;
+    border: none;
+    background: transparent;
+    color: var(--text-soft);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .titlebar-btn:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  .titlebar-btn.active {
+    color: var(--accent-text);
+  }
+
   /* ── Layout ── */
   .layout {
     display: flex;
     flex-direction: column;
-    height: calc(100dvh - var(--inspector-bar-height, 0px));
+    height: calc(100% - var(--inspector-bar-height, 0px));
     margin-top: var(--inspector-bar-height, 0px);
   }
 

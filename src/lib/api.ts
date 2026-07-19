@@ -312,4 +312,40 @@ export const api = {
     openUrl: (url: string) => call<void>('open_url', { url }),
     updateSupported: () => call<boolean>('update_supported'),
   },
+
+  settings: {
+    getTray: () => call<TraySettings>('tray_settings_get'),
+    setTray: (s: TraySettings) =>
+      call<void>('tray_settings_set', {
+        minimizeToTray: s.minimize_to_tray,
+        closeToTray: s.close_to_tray,
+        startHidden: s.start_hidden,
+      }),
+    setTrayLabels: (labels: TrayLabels) => call<void>('tray_set_labels', { labels }),
+    windowMinimize: () => call<void>('window_minimize'),
+  },
 };
+
+export interface TraySettings {
+  minimize_to_tray: boolean;
+  close_to_tray: boolean;
+  start_hidden: boolean;
+}
+
+export interface TrayLabels {
+  show: string;
+  hide: string;
+  quit: string;
+  running: string;
+  stop_all: string;
+  no_running: string;
+  launch_profile: string;
+  no_profiles: string;
+  section_workspaces: string;
+  section_proxies: string;
+  section_terminal: string;
+  section_files: string;
+  section_notes: string;
+  password_generator: string;
+  tooltip: string;
+}

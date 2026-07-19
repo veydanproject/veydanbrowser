@@ -31,10 +31,12 @@
     "category": "Productivity",
     "linux": {
       "deb": {
-        "desktopTemplate": "linux/veydanbrowser.desktop"
+        "desktopTemplate": "linux/veydanbrowser.desktop",
+        "depends": ["libayatana-appindicator3-1"]
       },
       "rpm": {
-        "desktopTemplate": "linux/veydanbrowser.desktop"
+        "desktopTemplate": "linux/veydanbrowser.desktop",
+        "depends": ["libappindicator-gtk3"]
       }
     },
     "icon": [

@@ -708,6 +708,25 @@ const translations = {
     inspector_viewport: 'Viewport',
     inspector_hotkey_hint: 'Toggle with Ctrl+Shift+D',
     inspector_developer_tools: 'Developer Tools',
+
+    // System tray
+    settings_tray_section: 'System tray',
+    settings_tray_minimize: 'Minimize to tray',
+    settings_tray_minimize_hint: 'When you minimize the window, hide it to the system tray instead of the taskbar.',
+    settings_tray_close: 'Close to tray',
+    settings_tray_close_hint: 'Closing the window (×) hides it to the tray instead of quitting the app.',
+    settings_tray_start_hidden: 'Start hidden in tray',
+    settings_tray_start_hidden_hint: 'Launch the app straight into the tray without showing the window.',
+    tray_show: 'Show Veydan Browser',
+    tray_hide: 'Hide window',
+    tray_quit: 'Quit',
+    tray_running: 'Running profiles ({n})',
+    tray_stop_all: 'Stop all',
+    tray_no_running: 'No running profiles',
+    tray_launch_profile: 'Launch profile',
+    tray_no_profiles: 'No profiles',
+    tray_password_generator: 'Password generator',
+    tray_tooltip: 'Veydan Browser — {n} running',
   },
 
   ru: {
@@ -1412,6 +1431,25 @@ const translations = {
     inspector_viewport: 'Вьюпорт',
     inspector_hotkey_hint: 'Включить через Ctrl+Shift+D',
     inspector_developer_tools: 'Инструменты разработчика',
+
+    // System tray
+    settings_tray_section: 'Системный трей',
+    settings_tray_minimize: 'Сворачивать в трей',
+    settings_tray_minimize_hint: 'При сворачивании окна прятать его в системный трей вместо панели задач.',
+    settings_tray_close: 'Закрывать в трей',
+    settings_tray_close_hint: 'Закрытие окна (×) прячет его в трей, а не завершает приложение.',
+    settings_tray_start_hidden: 'Запускать свёрнутым в трей',
+    settings_tray_start_hidden_hint: 'Запускать приложение сразу в трее, не показывая окно.',
+    tray_show: 'Показать Veydan Browser',
+    tray_hide: 'Скрыть окно',
+    tray_quit: 'Выход',
+    tray_running: 'Запущенные профили ({n})',
+    tray_stop_all: 'Остановить все',
+    tray_no_running: 'Нет запущенных профилей',
+    tray_launch_profile: 'Запустить профиль',
+    tray_no_profiles: 'Нет профилей',
+    tray_password_generator: 'Генератор паролей',
+    tray_tooltip: 'Veydan Browser — запущено: {n}',
   },
 } as const;
 

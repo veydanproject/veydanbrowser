@@ -15,14 +15,17 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // Bind IPv4 loopback explicitly: on dual-stack hosts `false`/localhost binds
+    // only IPv6 (::1), and the WebKitGTK dev webview's HMR websocket resolves
+    // localhost to 127.0.0.1 — so hot reload never connects and edits don't show.
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
           host,
           port: 1421,
         }
-      : undefined,
+      : { protocol: "ws", host: "127.0.0.1", port: 1420 },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],

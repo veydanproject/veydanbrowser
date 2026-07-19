@@ -7,6 +7,7 @@ pub mod notes;
 pub mod password;
 pub mod profiles;
 pub mod proxies;
+pub mod settings;
 pub mod sftp;
 pub mod ssh;
 pub mod ssh_keys;

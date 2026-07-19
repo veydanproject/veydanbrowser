@@ -55,6 +55,24 @@
   let notesDirSaving = $state(false);
   let notesDirError = $state('');
 
+  // System tray
+  let trayMinimize = $state(false);
+  let trayClose = $state(false);
+  let trayStartHidden = $state(false);
+
+  async function saveTray() {
+    if (!isTauri) return;
+    try {
+      await api.settings.setTray({
+        minimize_to_tray: trayMinimize,
+        close_to_tray: trayClose,
+        start_hidden: trayStartHidden,
+      });
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
   onMount(async () => {
     camoufox = await api.camoufox.status().catch(() => null);
 
@@ -69,6 +87,16 @@
       notesDir = info.current;
       notesDirIsCustom = info.is_custom;
     } catch {}
+
+    // Load tray settings
+    if (isTauri) {
+      try {
+        const tray = await api.settings.getTray();
+        trayMinimize = tray.minimize_to_tray;
+        trayClose = tray.close_to_tray;
+        trayStartHidden = tray.start_hidden;
+      } catch {}
+    }
 
     // Restore state if download was already running
     const dlState = await api.camoufox.downloadState().catch(() => null);
@@ -347,6 +375,53 @@
     </div>
   </div>
 
+  <!-- System tray -->
+  <div class="card">
+    <div class="card-title">{$t('settings_tray_section')}</div>
+    <div class="dev-tools-row">
+      <div class="dev-tools-info">
+        <span>{$t('settings_tray_minimize')}</span>
+        <span class="muted">{$t('settings_tray_minimize_hint')}</span>
+      </div>
+      <button
+        class="toggle"
+        class:on={trayMinimize}
+        disabled={!isTauri}
+        onclick={() => { trayMinimize = !trayMinimize; saveTray(); }}
+        aria-pressed={trayMinimize}
+        aria-label={$t('settings_tray_minimize')}
+      ></button>
+    </div>
+    <div class="dev-tools-row">
+      <div class="dev-tools-info">
+        <span>{$t('settings_tray_close')}</span>
+        <span class="muted">{$t('settings_tray_close_hint')}</span>
+      </div>
+      <button
+        class="toggle"
+        class:on={trayClose}
+        disabled={!isTauri}
+        onclick={() => { trayClose = !trayClose; saveTray(); }}
+        aria-pressed={trayClose}
+        aria-label={$t('settings_tray_close')}
+      ></button>
+    </div>
+    <div class="dev-tools-row">
+      <div class="dev-tools-info">
+        <span>{$t('settings_tray_start_hidden')}</span>
+        <span class="muted">{$t('settings_tray_start_hidden_hint')}</span>
+      </div>
+      <button
+        class="toggle"
+        class:on={trayStartHidden}
+        disabled={!isTauri}
+        onclick={() => { trayStartHidden = !trayStartHidden; saveTray(); }}
+        aria-pressed={trayStartHidden}
+        aria-label={$t('settings_tray_start_hidden')}
+      ></button>
+    </div>
+  </div>
+
   <!-- Notes -->
   <div class="card">
     <div class="card-title">{$t('settings_notes_section')}</div>
@@ -585,6 +660,13 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--sp-4);
+  }
+
+  /* Separate stacked toggle rows within one card (e.g. the tray section) */
+  .dev-tools-row + .dev-tools-row {
+    margin-top: var(--sp-4);
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--border);
   }
 
   .dev-tools-info {

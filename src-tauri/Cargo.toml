@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.9", features = ["sqlite", "runtime-tokio", "chrono", "macros"] }
@@ -48,3 +48,12 @@ totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 notify = "8"
 diffy = "0.5"
 zstd = "0.13"
+
+# Linux-only: native GTK signal for reliable minimize-to-tray detection
+# (Tauri's WindowEvent::Resized / is_minimized() are unreliable on GTK/Wayland).
+# Pinned to the same version Tauri 2.11 pulls in so the gtk_window() type matches.
+[target.'cfg(target_os = "linux")'.dependencies]
+# Native StatusNotifierItem impl: unlike Tauri's libappindicator backend it
+# exposes separate left-click (Activate) and right-click (ContextMenu) handlers,
+# which KDE Plasma honors — used for the Linux tray so left-click opens the app.
+ksni = "0.3"
