@@ -5,6 +5,13 @@ use base64::Engine;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+/// Максимальный размер HTTP-заголовков (клиентских и ответа upstream на CONNECT).
+const MAX_HEADERS_SIZE: usize = 65536;
+/// Таймаут чтения HTTP-заголовков (от клиента и ответа upstream на CONNECT).
+const HEADERS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// Таймаут TCP-подключения к upstream.
+const UPSTREAM_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub enum Upstream {
     Http {
         host: String,
@@ -38,9 +45,18 @@ pub async fn spawn(upstream: Upstream) -> anyhow::Result<(u16, tokio::sync::ones
         loop {
             tokio::select! {
                 result = listener.accept() => {
-                    let Ok((client, _)) = result else { break };
-                    let up = std::sync::Arc::clone(&upstream);
-                    tokio::spawn(async move { let _ = handle(client, up).await; });
+                    match result {
+                        Ok((client, _)) => {
+                            let up = std::sync::Arc::clone(&upstream);
+                            tokio::spawn(async move { let _ = handle(client, up).await; });
+                        }
+                        Err(e) => {
+                            // Transient errors (ECONNABORTED, EMFILE, ...) must not
+                            // kill the listener — log, back off briefly and retry.
+                            eprintln!("local proxy: accept failed: {e}");
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        }
+                    }
                 }
                 _ = &mut stop_rx => break,
             }
@@ -91,9 +107,17 @@ async fn handle_http_upstream(
     let auth_b64 =
         base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", username, password));
     let auth_line = format!("Proxy-Authorization: Basic {}", auth_b64);
-    let modified = inject_after_first_line(&headers_str, &auth_line);
+    // Plain HTTP: форсируем Connection: close, чтобы клиент открывал новое
+    // соединение на каждый запрос — после первого запроса мы уходим в raw relay
+    // и не смогли бы добавить Proxy-Authorization в последующие запросы.
+    let request_head = if headers_str.starts_with("CONNECT ") {
+        headers_str.clone()
+    } else {
+        force_connection_close(&headers_str)
+    };
+    let modified = inject_after_first_line(&request_head, &auth_line);
 
-    let mut server = TcpStream::connect(format!("{}:{}", upstream_host, upstream_port)).await?;
+    let mut server = connect_upstream(upstream_host, upstream_port).await?;
     server.write_all(modified.as_bytes()).await?;
     server.write_all(b"\r\n\r\n").await?;
 
@@ -133,26 +157,21 @@ async fn handle_socks5_upstream(
         client
             .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
             .await?;
-        let (mut cr, mut cw) = client.into_split();
-        let (mut sr, mut sw) = server.into_split();
-        tokio::select! {
-            _ = tokio::io::copy(&mut cr, &mut sw) => {}
-            _ = tokio::io::copy(&mut sr, &mut cw) => {}
+        // Клиент мог прислать байты (например, TLS ClientHello) сразу за CONNECT
+        if !body.is_empty() {
+            server.write_all(&body).await?;
         }
+        let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
     } else {
-        // Plain HTTP: перепишем первую строку в relative path и форвардим
-        let relative = rewrite_to_relative(&headers_str);
+        // Plain HTTP: перепишем первую строку в relative path и форвардим.
+        // Connection: close — см. комментарий в handle_http_upstream.
+        let relative = force_connection_close(&rewrite_to_relative(&headers_str));
         server.write_all(relative.as_bytes()).await?;
         server.write_all(b"\r\n\r\n").await?;
         if !body.is_empty() {
             server.write_all(&body).await?;
         }
-        let (mut cr, mut cw) = client.into_split();
-        let (mut sr, mut sw) = server.into_split();
-        tokio::select! {
-            _ = tokio::io::copy(&mut cr, &mut sw) => {}
-            _ = tokio::io::copy(&mut sr, &mut cw) => {}
-        }
+        let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
     }
 
     Ok(())
@@ -167,7 +186,12 @@ pub async fn socks5_connect(
     username: Option<&str>,
     password: Option<&str>,
 ) -> anyhow::Result<TcpStream> {
-    let mut s = TcpStream::connect(format!("{}:{}", proxy_host, proxy_port)).await?;
+    anyhow::ensure!(
+        target_host.len() <= 255,
+        "SOCKS5: target host too long (max 255 bytes)"
+    );
+
+    let mut s = connect_upstream(proxy_host, proxy_port).await?;
 
     let has_auth = username.map(|u| !u.is_empty()).unwrap_or(false);
 
@@ -188,6 +212,10 @@ pub async fn socks5_connect(
             // username/password auth (RFC 1929)
             let user = username.unwrap_or("");
             let pass = password.unwrap_or("");
+            anyhow::ensure!(
+                user.len() <= 255 && pass.len() <= 255,
+                "SOCKS5: username/password too long (max 255 bytes)"
+            );
             let mut req = vec![0x01u8];
             req.push(user.len() as u8);
             req.extend_from_slice(user.as_bytes());
@@ -243,23 +271,40 @@ pub async fn socks5_connect(
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
+/// TCP-подключение к upstream с таймаутом.
+async fn connect_upstream(host: &str, port: u16) -> anyhow::Result<TcpStream> {
+    match tokio::time::timeout(
+        UPSTREAM_CONNECT_TIMEOUT,
+        TcpStream::connect(format!("{}:{}", host, port)),
+    )
+    .await
+    {
+        Ok(res) => Ok(res?),
+        Err(_) => anyhow::bail!("connect to upstream {}:{} timed out", host, port),
+    }
+}
+
 async fn read_http_headers(stream: &mut TcpStream) -> anyhow::Result<(String, Vec<u8>)> {
-    let mut buf = Vec::with_capacity(4096);
-    let header_end = loop {
-        let mut tmp = [0u8; 2048];
-        let n = stream.read(&mut tmp).await?;
-        if n == 0 {
-            anyhow::bail!("connection closed before headers");
-        }
-        buf.extend_from_slice(&tmp[..n]);
-        if let Some(pos) = find_header_end(&buf) {
-            break pos;
-        }
-        anyhow::ensure!(buf.len() <= 65536, "headers too large");
-    };
-    let headers = String::from_utf8_lossy(&buf[..header_end]).into_owned();
-    let body = buf[header_end + 4..].to_vec();
-    Ok((headers, body))
+    tokio::time::timeout(HEADERS_TIMEOUT, async {
+        let mut buf = Vec::with_capacity(4096);
+        let header_end = loop {
+            let mut tmp = [0u8; 2048];
+            let n = stream.read(&mut tmp).await?;
+            if n == 0 {
+                anyhow::bail!("connection closed before headers");
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if let Some(pos) = find_header_end(&buf) {
+                break pos;
+            }
+            anyhow::ensure!(buf.len() <= MAX_HEADERS_SIZE, "headers too large");
+        };
+        let headers = String::from_utf8_lossy(&buf[..header_end]).into_owned();
+        let body = buf[header_end + 4..].to_vec();
+        Ok((headers, body))
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out reading request headers"))?
 }
 
 async fn relay_after_connect(
@@ -270,41 +315,72 @@ async fn relay_after_connect(
     _is_http_upstream: bool,
 ) -> anyhow::Result<()> {
     if headers_str.starts_with("CONNECT ") {
-        // Читаем ответ прокси на CONNECT
+        // Читаем ответ прокси на CONNECT (с таймаутом и лимитом размера)
         let mut resp_buf = Vec::with_capacity(512);
-        loop {
-            let mut tmp = [0u8; 512];
-            let n = server.read(&mut tmp).await?;
-            if n == 0 {
-                break;
+        tokio::time::timeout(HEADERS_TIMEOUT, async {
+            loop {
+                let mut tmp = [0u8; 512];
+                let n = server.read(&mut tmp).await?;
+                if n == 0 {
+                    break;
+                }
+                resp_buf.extend_from_slice(&tmp[..n]);
+                if find_header_end(&resp_buf).is_some() {
+                    break;
+                }
+                anyhow::ensure!(
+                    resp_buf.len() <= MAX_HEADERS_SIZE,
+                    "upstream CONNECT response too large"
+                );
             }
-            resp_buf.extend_from_slice(&tmp[..n]);
-            if find_header_end(&resp_buf).is_some() {
-                break;
-            }
-        }
+            anyhow::Ok(())
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out reading upstream CONNECT response"))??;
         client.write_all(&resp_buf).await?;
-        if !String::from_utf8_lossy(&resp_buf).contains("200") {
+        if !connect_response_ok(&resp_buf) {
             return Ok(());
         }
-        let (mut cr, mut cw) = client.split();
-        let (mut sr, mut sw) = server.split();
-        tokio::select! {
-            _ = tokio::io::copy(&mut cr, &mut sw) => {}
-            _ = tokio::io::copy(&mut sr, &mut cw) => {}
+        // Клиент мог прислать байты (например, TLS ClientHello) сразу за CONNECT
+        if !body.is_empty() {
+            server.write_all(body).await?;
         }
+        let _ = tokio::io::copy_bidirectional(client, server).await;
     } else {
         if !body.is_empty() {
             server.write_all(body).await?;
         }
-        let (mut cr, mut cw) = client.split();
-        let (mut sr, mut sw) = server.split();
-        tokio::select! {
-            _ = tokio::io::copy(&mut cr, &mut sw) => {}
-            _ = tokio::io::copy(&mut sr, &mut cw) => {}
-        }
+        let _ = tokio::io::copy_bidirectional(client, server).await;
     }
     Ok(())
+}
+
+/// Проверяет статусную строку ответа на CONNECT: "HTTP/1.x 200 ...".
+fn connect_response_ok(resp: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(resp);
+    let first_line = text.lines().next().unwrap_or("");
+    if !first_line.starts_with("HTTP/1.") {
+        return false;
+    }
+    first_line
+        .split_whitespace()
+        .nth(1)
+        .map(|code| code == "200")
+        .unwrap_or(false)
+}
+
+/// Убирает Connection/Proxy-Connection заголовки и ставит `Connection: close`.
+/// Нужно для plain-HTTP: после первого запроса соединение уходит в raw relay,
+/// и последующие keep-alive запросы прошли бы мимо переписывания заголовков.
+fn force_connection_close(headers: &str) -> String {
+    let mut lines: Vec<&str> = headers.split("\r\n").collect();
+    lines.retain(|l| {
+        let lower = l.to_ascii_lowercase();
+        !(lower.starts_with("connection:") || lower.starts_with("proxy-connection:"))
+    });
+    let mut out = lines.join("\r\n");
+    out.push_str("\r\nConnection: close");
+    out
 }
 
 /// Вставляет строку после первой строки HTTP-запроса.
@@ -432,24 +508,33 @@ async fn handle_ssh_upstream(
         client
             .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
             .await?;
-        let (mut cr, mut cw) = client.into_split();
-        tokio::select! {
-            _ = tokio::io::copy(&mut cr, &mut ssh_w) => {}
-            _ = tokio::io::copy(&mut ssh_r, &mut cw) => {}
+        // Клиент мог прислать байты (например, TLS ClientHello) сразу за CONNECT
+        if !body.is_empty() {
+            ssh_w.write_all(&body).await?;
         }
     } else {
-        let relative = rewrite_to_relative(&headers_str);
+        // Connection: close — см. комментарий в handle_http_upstream.
+        let relative = force_connection_close(&rewrite_to_relative(&headers_str));
         ssh_w.write_all(relative.as_bytes()).await?;
         ssh_w.write_all(b"\r\n\r\n").await?;
         if !body.is_empty() {
             ssh_w.write_all(&body).await?;
         }
-        let (mut cr, mut cw) = client.into_split();
-        tokio::select! {
-            _ = tokio::io::copy(&mut cr, &mut ssh_w) => {}
-            _ = tokio::io::copy(&mut ssh_r, &mut cw) => {}
-        }
     }
+
+    // SSH-канал — не TcpStream, поэтому вместо copy_bidirectional гоняем оба
+    // направления параллельно и корректно закрываем каждую сторону на EOF,
+    // не обрывая встречное направление (half-close).
+    let (mut cr, mut cw) = client.into_split();
+    let client_to_ssh = async {
+        let _ = tokio::io::copy(&mut cr, &mut ssh_w).await;
+        let _ = ssh_w.shutdown().await;
+    };
+    let ssh_to_client = async {
+        let _ = tokio::io::copy(&mut ssh_r, &mut cw).await;
+        let _ = cw.shutdown().await;
+    };
+    tokio::join!(client_to_ssh, ssh_to_client);
 
     Ok(())
 }

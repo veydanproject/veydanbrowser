@@ -3,7 +3,6 @@
 
 import { api } from '$lib/api';
 import type { Note, NoteCreateInput, NoteFilter, NoteFolder, NoteListItem, NoteTag, NoteUpdateInput, SaveStatus } from '$lib/types';
-import { listen } from '@tauri-apps/api/event';
 
 const AUTOSAVE_DELAY_MS = 3000;
 const DRAFT_INTERVAL_MS = 1000;
@@ -285,6 +284,9 @@ class NotesStore {
   /** Listen to external file changes (file watcher events from Rust) */
   async startWatcher() {
     if (this._unlisten) return;
+    const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+    if (!isTauri) return;
+    const { listen } = await import('@tauri-apps/api/event');
     const unlisten = await listen<string>('notes://external-change', (event) => {
       const changedId = event.payload;
       // Ignore events caused by our own save (within 2s)

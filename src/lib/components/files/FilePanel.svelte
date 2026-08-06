@@ -12,8 +12,9 @@
   import ChmodDialog from './ChmodDialog.svelte';
   import { filesStore } from '$lib/store/sftp.svelte';
   import { sshStore } from '$lib/store/ssh.svelte';
+  import { api } from '$lib/api';
   import { t } from '$lib/i18n';
-  import { formatError } from '$lib/utils';
+  import { formatError, parseHostKeyMismatch } from '$lib/utils';
   import type { FileEntry } from '$lib/types';
 
   interface Props {
@@ -27,6 +28,28 @@
   let panel = $derived(filesStore.panels[index]);
   let isActive = $derived(filesStore.activePanel === index);
   let opError = $state<string | null>(null);
+
+  // TOFU: new fingerprint from a HOST_KEY_MISMATCH connect error (null = none)
+  let mismatchFingerprint = $derived(
+    panel.source.kind === 'remote' ? parseHostKeyMismatch(panel.error) : null
+  );
+  let trusting = $state(false);
+
+  /** Pin the new host key (user confirmed after a mismatch) and reconnect. */
+  async function trustHostKey() {
+    const fp = mismatchFingerprint;
+    if (!fp || panel.source.kind !== 'remote' || trusting) return;
+    const connectionId = panel.source.connectionId;
+    trusting = true;
+    try {
+      await run(async () => {
+        await api.ssh.connectionTrustFingerprint(connectionId, fp);
+        await filesStore.setSource(index, { kind: 'remote', connectionId });
+      });
+    } finally {
+      trusting = false;
+    }
+  }
 
   // ── Dialog / menu state ──────────────────────────────────────────────────
   let menu = $state<{ open: boolean; x: number; y: number; entry: FileEntry | null }>({
@@ -211,8 +234,19 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<section class="file-panel" class:focused={isActive} onclick={() => (filesStore.activePanel = index)}>
+<section
+  class="file-panel"
+  class:focused={isActive}
+  role="button"
+  tabindex="-1"
+  onclick={() => (filesStore.activePanel = index)}
+  onfocusin={() => (filesStore.activePanel = index)}
+  onkeydown={(e) => {
+    if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+      filesStore.activePanel = index;
+    }
+  }}
+>
   <div class="panel-source">
     <CustomSelect options={sourceOptions} value={sourceValue} onchange={onSourceChange} />
   </div>
@@ -277,6 +311,19 @@
 
   {#if opError}
     <div class="error-msg">{opError}</div>
+  {:else if mismatchFingerprint}
+    <!-- Host key changed (TOFU mismatch) — offer to trust the new fingerprint -->
+    <div class="error-msg hostkey-msg">
+      <div class="hostkey-title">
+        <Icon name="shield" size={13} />
+        {$t('ssh_hostkey_changed_title')}
+      </div>
+      <code class="hostkey-fp">{mismatchFingerprint}</code>
+      <div class="hostkey-hint">{$t('ssh_hostkey_changed_hint')}</div>
+      <button class="btn btn-primary btn-sm" onclick={trustHostKey} disabled={trusting}>
+        {trusting ? '…' : $t('ssh_hostkey_trust_btn')}
+      </button>
+    </div>
   {:else if panel.error}
     <div class="error-msg">{panel.error}</div>
   {/if}
@@ -377,5 +424,28 @@
     align-items: center;
     justify-content: center;
     color: var(--text-3);
+  }
+
+  /* Host-key mismatch (TOFU) block */
+  .hostkey-msg {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    align-items: flex-start;
+  }
+  .hostkey-title {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-weight: var(--fw-semibold);
+  }
+  .hostkey-fp {
+    font-family: var(--font-mono);
+    font-size: var(--fs-2xs);
+    word-break: break-all;
+  }
+  .hostkey-hint {
+    font-size: var(--fs-xs);
+    opacity: 0.85;
   }
 </style>

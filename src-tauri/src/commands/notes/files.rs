@@ -86,6 +86,62 @@ pub(crate) fn make_preview(content: &str) -> String {
     result.chars().take(120).collect()
 }
 
+/// Serialize a note title for its single-line frontmatter field.
+///
+/// Plain titles are written as-is (keeps existing note files byte-identical);
+/// titles that would corrupt the frontmatter structure — newlines (frontmatter
+/// terminator injection), quotes/backslashes, or leading/trailing whitespace
+/// (lost by the trimming parser) — are written as a double-quoted string with
+/// `\\` `\"` `\n` `\r` escapes. `decode_fm_title` is the exact inverse.
+pub(crate) fn encode_fm_title(title: &str) -> String {
+    let needs_quoting = title.contains(['\n', '\r', '"', '\\'])
+        || title.starts_with(char::is_whitespace)
+        || title.ends_with(char::is_whitespace);
+    if !needs_quoting {
+        return title.to_string();
+    }
+    let mut out = String::with_capacity(title.len() + 2);
+    out.push('"');
+    for c in title.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Inverse of `encode_fm_title`: unquotes + unescapes a quoted title value;
+/// unquoted values (all legacy notes) pass through unchanged.
+pub(crate) fn decode_fm_title(raw: &str) -> String {
+    let Some(inner) = raw
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .filter(|_| raw.len() >= 2)
+    else {
+        return raw.to_string();
+    };
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some(other) => out.push(other), // covers \\ and \"
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Write note file with frontmatter — atomic (tmp → fsync → rename)
 pub(crate) fn write_note_file(
     path: &PathBuf,
@@ -104,7 +160,7 @@ pub(crate) fn write_note_file(
 
     let frontmatter = format!(
         "---\nid: {}\ntitle: {}\nformat: {}\nbindings: {}\ntags:\n{}created_at: {}\nupdated_at: {}\n---\n",
-        row.id, row.title, row.format, bindings_json,
+        row.id, encode_fm_title(&row.title), row.format, bindings_json,
         tags_yaml, row.created_at, row.updated_at
     );
 
@@ -163,7 +219,13 @@ pub(crate) fn parse_note_file(raw: &str) -> (HashMap<String, String>, Vec<String
             if key == "tags" {
                 in_tags = true;
             } else {
-                kv.insert(key.trim().to_string(), val.trim().to_string());
+                let key = key.trim().to_string();
+                let val = if key == "title" {
+                    decode_fm_title(val.trim())
+                } else {
+                    val.trim().to_string()
+                };
+                kv.insert(key, val);
             }
         }
     }
@@ -196,6 +258,41 @@ pub(crate) fn row_to_list_item(row: NoteRow, tags: Vec<NoteTagInfo>, folder_ids:
         has_draft,
         preview: row.preview,
         snippet: None,
+    }
+}
+
+#[cfg(test)]
+mod title_escaping_tests {
+    use super::*;
+
+    #[test]
+    fn plain_titles_unchanged_and_legacy_parse_intact() {
+        assert_eq!(encode_fm_title("My note: draft #2"), "My note: draft #2");
+        // Legacy file with an unquoted title still parses to the same value.
+        let raw = "---\nid: n1\ntitle: My note: draft #2\nformat: md\n---\n\nbody";
+        let (kv, _, body) = parse_note_file(raw);
+        assert_eq!(kv.get("title").map(String::as_str), Some("My note: draft #2"));
+        assert_eq!(body, "body");
+    }
+
+    #[test]
+    fn hostile_titles_round_trip_without_breaking_frontmatter() {
+        for title in [
+            "line1\n---\ninjected: yes",
+            "quote \" and \\ backslash",
+            "  padded  ",
+            "---",
+        ] {
+            let encoded = encode_fm_title(title);
+            assert!(!encoded.contains('\n'), "encoded title must stay single-line");
+            let raw = format!(
+                "---\nid: n1\ntitle: {}\nformat: md\n---\n\nbody",
+                encoded
+            );
+            let (kv, _, body) = parse_note_file(&raw);
+            assert_eq!(kv.get("title").map(String::as_str), Some(title));
+            assert_eq!(body, "body", "frontmatter must terminate at the real ---");
+        }
     }
 }
 

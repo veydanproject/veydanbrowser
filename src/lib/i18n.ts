@@ -624,6 +624,9 @@ const translations = {
     ssh_terminal_closed: 'Connection closed',
     ssh_terminal_error: 'Error: {msg}',
     ssh_btn_reconnect: 'Reconnect',
+    ssh_hostkey_changed_title: 'SSH server host key changed — possible MITM attack',
+    ssh_hostkey_changed_hint: 'The server presented a new key fingerprint. Trust it only if you know why it changed (e.g. server reinstall).',
+    ssh_hostkey_trust_btn: 'Trust new key',
     ssh_bar_label: 'SSH',
     ssh_open_panel: 'Open SSH panel',
     panel_tab_ssh: 'SSH',
@@ -1388,6 +1391,9 @@ const translations = {
     ssh_terminal_closed: 'Соединение закрыто',
     ssh_terminal_error: 'Ошибка: {msg}',
     ssh_btn_reconnect: 'Переподключиться',
+    ssh_hostkey_changed_title: 'Ключ SSH-сервера изменился — возможна MITM-атака',
+    ssh_hostkey_changed_hint: 'Сервер предъявил новый fingerprint ключа. Доверяйте, только если знаете причину замены (например, переустановка сервера).',
+    ssh_hostkey_trust_btn: 'Доверять новому ключу',
     ssh_bar_label: 'SSH',
     ssh_open_panel: 'Открыть SSH панель',
     panel_tab_ssh: 'SSH',
@@ -1558,7 +1564,8 @@ export const t = derived(locale, ($locale) => {
     let text: string = translations[$locale][key] ?? translations.en[key] ?? key;
     if (vars) {
       for (const [k, v] of Object.entries(vars)) {
-        text = text.replace(`{${k}}`, v);
+        // split/join replaces ALL occurrences without regex-escaping concerns
+        text = text.split(`{${k}}`).join(v);
       }
     }
     return text;

@@ -370,7 +370,11 @@ async fn perform_backup(app: &AppHandle) -> Result<PathBuf, String> {
         rotate(&dir, cfg.keep as usize);
     }
     let now = Utc::now().to_rfc3339();
-    let _ = set_setting(&state.db, "backup_last_run", &now).await;
+    // If last_run can't be persisted the scheduler would re-run the backup on
+    // every tick — the backup itself succeeded, so just log the failure loudly.
+    if let Err(e) = set_setting(&state.db, "backup_last_run", &now).await {
+        eprintln!("backup: failed to persist backup_last_run: {e}");
+    }
 
     emit_progress(app, "done", 100);
     let _ = app.emit("backup://done", out_path.to_string_lossy().to_string());
@@ -669,7 +673,8 @@ fn is_due(cfg: &BackupConfig, last_run: Option<DateTime<Utc>>, now_local: DateTi
             let hours = cfg.interval_hours.max(1);
             match last_run {
                 None => true,
-                Some(lr) => Utc::now() - lr >= chrono::Duration::hours(hours),
+                // Derive "now" from the injected clock so tests control it.
+                Some(lr) => now_local.with_timezone(&Utc) - lr >= chrono::Duration::hours(hours),
             }
         }
         "daily" | "weekly" => {

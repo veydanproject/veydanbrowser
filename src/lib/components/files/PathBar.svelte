@@ -67,8 +67,17 @@
       spellcheck="false"
     />
   {:else}
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="crumbs" title={path} onclick={startEdit}>
+    <div
+      class="crumbs"
+      title={path}
+      role="button"
+      tabindex="0"
+      onclick={startEdit}
+      onkeydown={(e) => {
+        if (e.target !== e.currentTarget) return; // ignore keys bubbling from crumb buttons
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startEdit(); }
+      }}
+    >
       <button
         class="crumb crumb-root"
         onclick={(e) => { e.stopPropagation(); onnavigate('/'); }}

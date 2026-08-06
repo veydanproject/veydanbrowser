@@ -416,6 +416,8 @@ export interface SshConnection {
   terminal_theme: string | null;
   default_cols: number;
   default_rows: number;
+  /** SHA256 host-key fingerprint pinned on first successful connect (TOFU). */
+  server_fingerprint: string | null;
   last_connected_at: string | null;
   created_at: string;
   updated_at: string;

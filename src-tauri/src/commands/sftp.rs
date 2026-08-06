@@ -170,9 +170,14 @@ async fn connect_session(
     let result = do_connect(app, state, &conn, proxy.as_ref()).await;
 
     // Always clear any pending prompt sender for this connection.
-    if let Ok(mut prompts) = state.sftp_sessions.auth_prompts.lock() {
-        prompts.remove(connection_id);
-    }
+    // A poisoned lock is a real error — swallowing it would leave the sender
+    // registered and future prompts routed nowhere.
+    state
+        .sftp_sessions
+        .auth_prompts
+        .lock()
+        .map_err(|e| AppError::other(e.to_string()))?
+        .remove(connection_id);
 
     match result {
         Ok(sess) => {
@@ -218,7 +223,7 @@ async fn do_connect(
 
     let timeout = std::time::Duration::from_secs(conn.connect_timeout_sec.max(1) as u64);
 
-    let (jump, mut handle) = tokio::time::timeout(
+    let (jump, mut handle, received_fp) = tokio::time::timeout(
         timeout,
         establish_transport(conn, proxy, config),
     )
@@ -227,10 +232,15 @@ async fn do_connect(
 
     // Keyboard-interactive prompts are relayed to the frontend under a
     // synthetic session id; answers arrive through `sftp_respond_prompt`.
+    // Failing to register the sender must abort the connect — otherwise the
+    // user's prompt answer goes nowhere and auth waits out the 120s timeout.
     let (tx, mut rx) = mpsc::channel::<SshInputCommand>(8);
-    if let Ok(mut prompts) = state.sftp_sessions.auth_prompts.lock() {
-        prompts.insert(conn.id.clone(), tx);
-    }
+    state
+        .sftp_sessions
+        .auth_prompts
+        .lock()
+        .map_err(|e| anyhow::anyhow!("auth prompt registry lock poisoned: {e}"))?
+        .insert(conn.id.clone(), tx);
     let prompt_session_id = format!("sftp:{}", conn.id);
 
     do_authenticate(
@@ -248,6 +258,9 @@ async fn do_connect(
         &mut rx,
     )
     .await?;
+
+    // Pin the host key on first connect (TOFU) + stamp last_connected_at.
+    crate::commands::ssh::persist_connect_success(&state.db, conn, received_fp.as_deref()).await;
 
     let channel = handle.channel_open_session().await?;
     channel.request_subsystem(true, "sftp").await?;

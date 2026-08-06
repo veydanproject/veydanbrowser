@@ -181,6 +181,10 @@ async fn resolve_binary_and_config(
                 .ok_or("Camoufox not found. Please download it in Settings.")?;
 
             if let Some(install_dir) = bin.parent() {
+                // Serialize shared-install-dir mutations across concurrent
+                // launches: two launches must not both repack omni.ja (and
+                // clear startup caches) while a starting browser reads it.
+                let _guard = crate::commands::camoufox::INSTALL_DIR_LOCK.lock().await;
                 crate::commands::camoufox::ensure_omni_patched(install_dir, &state.app_data_dir);
             }
 
@@ -228,7 +232,12 @@ async fn resolve_binary_and_config(
             .map_err(err)?;
 
             if let Some(install_dir) = bin.parent() {
-                crate::commands::camoufox::patch_chrome_css(install_dir, &wcolor, &tcolor, &label);
+                // chrome.css is shared between all profiles — same lock as above.
+                let _guard = crate::commands::camoufox::INSTALL_DIR_LOCK.lock().await;
+                crate::commands::camoufox::patch_chrome_css(install_dir, &wcolor, &tcolor, &label)
+                    .unwrap_or_else(|e| {
+                        eprintln!("patch_chrome_css failed: {e}");
+                    });
             }
 
             let _ = effective_proxy; // proxy already encoded in user.js

@@ -247,6 +247,8 @@ export const api = {
     connectionUpdate: (id: string, input: SshConnectionUpdateInput) =>
       call<SshConnection>('ssh_connection_update', { id, input }),
     connectionDelete: (id: string) => call<void>('ssh_connection_delete', { id }),
+    connectionTrustFingerprint: (id: string, fingerprint: string) =>
+      call<void>('ssh_connection_trust_fingerprint', { id, fingerprint }),
     connect: (connectionId: string) =>
       call<string>('ssh_connect', { connectionId }),
     disconnect: (sessionId: string) => call<void>('ssh_disconnect', { sessionId }),

@@ -58,10 +58,11 @@ fn entry_for(path: &Path) -> Option<FileEntry> {
 
 #[tauri::command]
 pub async fn fs_home() -> CmdResult<String> {
-    std::env::var("HOME")
-        .ok()
-        .filter(|h| !h.is_empty())
-        .ok_or_else(|| AppError::other("HOME is not set"))
+    // HOME on unix; Windows sets USERPROFILE instead.
+    ["HOME", "USERPROFILE"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|h| !h.is_empty()))
+        .ok_or_else(|| AppError::other("Neither HOME nor USERPROFILE is set"))
 }
 
 /// Stat a single local path; `None` if it doesn't exist. Used for

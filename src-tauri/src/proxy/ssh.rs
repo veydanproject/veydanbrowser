@@ -12,7 +12,9 @@ pub enum SshAuth {
 }
 
 /// Computes SHA256 fingerprint of a public key, formatted as "SHA256:<base64>".
-fn compute_fingerprint(key: &PublicKey) -> String {
+/// Also used by `commands::ssh::TerminalHandler` so terminal/SFTP pins use the
+/// same format as proxy pins.
+pub(crate) fn compute_fingerprint(key: &PublicKey) -> String {
     use sha2::{Digest, Sha256};
     let raw = key.public_key_bytes();
     let hash = Sha256::digest(&raw);
@@ -80,26 +82,49 @@ impl SshSession {
         auth: SshAuth,
         known_fingerprint: Option<String>,
     ) -> anyhow::Result<SshConnectResult> {
+        const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
         let received_fingerprint: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let is_new = known_fingerprint.is_none();
 
-        let config = Arc::new(client::Config::default());
+        let config = Arc::new(client::Config {
+            // Не даём NAT/файрволам молча убивать простаивающую сессию
+            keepalive_interval: Some(std::time::Duration::from_secs(30)),
+            ..client::Config::default()
+        });
         let handler = SshHandler {
             known_fingerprint,
             received_fingerprint: Arc::clone(&received_fingerprint),
         };
-        let mut handle = client::connect(config, (host, port), handler).await?;
+        let mut handle =
+            match tokio::time::timeout(CONNECT_TIMEOUT, client::connect(config, (host, port), handler))
+                .await
+            {
+                Err(_) => anyhow::bail!("SSH connect to {host}:{port} timed out"),
+                Ok(Err(russh::Error::WrongServerSig)) => anyhow::bail!(
+                    "SSH host key verification failed: the server key fingerprint does not match \
+                     the one stored for this proxy. The server key may have changed, or the \
+                     connection may be intercepted (possible MITM). If you trust the new key, \
+                     re-confirm the fingerprint for this proxy."
+                ),
+                Ok(Err(e)) => return Err(e.into()),
+                Ok(Ok(h)) => h,
+            };
 
-        let result = match auth {
-            SshAuth::Password(pass) => handle.authenticate_password(username, pass).await?,
-            SshAuth::PrivateKey(pem) => {
-                let key = decode_secret_key(&pem, None)?;
-                let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
-                handle
-                    .authenticate_publickey(username, key_with_alg)
-                    .await?
+        let result = tokio::time::timeout(CONNECT_TIMEOUT, async {
+            match auth {
+                SshAuth::Password(pass) => {
+                    anyhow::Ok(handle.authenticate_password(username, pass).await?)
+                }
+                SshAuth::PrivateKey(pem) => {
+                    let key = decode_secret_key(&pem, None)?;
+                    let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+                    anyhow::Ok(handle.authenticate_publickey(username, key_with_alg).await?)
+                }
             }
-        };
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("SSH authentication to {host}:{port} timed out"))??;
 
         anyhow::ensure!(result.success(), "SSH authentication failed");
 

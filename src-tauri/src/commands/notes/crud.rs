@@ -251,9 +251,12 @@ pub async fn note_update(
 
     let _ = old_tags_list;
 
-    // Snapshot the previous content before overwriting (if content actually changed)
+    // Snapshot the previous content before overwriting (if content actually changed).
+    // A failed snapshot must not block the save itself, but don't lose it silently.
     if content != old_content {
-        let _ = maybe_snapshot(&id, &row.title, &old_content, "save", &state.db).await;
+        if let Err(e) = maybe_snapshot(&id, &row.title, &old_content, "save", &state.db).await {
+            eprintln!("notes: version snapshot failed for note {id}: {e}");
+        }
     }
 
     write_note_file(&file_path, &row, &tag_names, &content)?;
@@ -447,7 +450,20 @@ pub async fn note_search(
     filter: NoteFilter,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<Vec<NoteListItem>> {
-    let fts_query = format!("{}*", query.trim());
+    // FTS5 MATCH treats quotes, parens, NEAR/AND/OR etc. as query syntax, so
+    // raw user input can produce SQL errors. Wrap each whitespace-separated
+    // term in double quotes (doubling embedded quotes) so it matches literally;
+    // the trailing `*` keeps the last term a prefix search.
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut fts_query = trimmed
+        .split_whitespace()
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    fts_query.push('*');
 
     let matched: Vec<(String, String)> =
         sqlx::query_as("SELECT note_id, snippet(notes_fts, 2, '<mark>', '</mark>', '…', 12) FROM notes_fts WHERE notes_fts MATCH ? ORDER BY rank LIMIT 100")

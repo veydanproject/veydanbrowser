@@ -36,6 +36,8 @@ futures-util = "0.3"
 # native `sqlite3` link. Bump to 0.40 once sqlx moves to libsqlite3-sys 0.38.
 rusqlite = "0.39"
 base64 = "0.22"
+# Escape proxy credentials when building proxy URLs (already in the tree via reqwest/url)
+percent-encoding = "2"
 sha2 = "0.11"
 russh = "0.62"
 russh-sftp = "2"

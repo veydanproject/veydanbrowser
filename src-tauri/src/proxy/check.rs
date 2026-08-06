@@ -7,6 +7,8 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct IpApiResponse {
+    // ip-api.com returns the requester's IP in the `query` field
+    #[serde(rename = "query")]
     ip: Option<String>,
     #[serde(rename = "countryCode")]
     country_code: Option<String>,
@@ -27,7 +29,7 @@ pub async fn check_proxy(proxy: &Proxy) -> Result<ProxyCheckResult> {
         .build()?;
 
     let resp = client
-        .get("http://ip-api.com/json?fields=ip,countryCode,city")
+        .get("http://ip-api.com/json?fields=query,countryCode,city")
         .send()
         .await?
         .json::<IpApiResponse>()
@@ -72,7 +74,7 @@ async fn check_ssh(proxy: &Proxy) -> Result<ProxyCheckResult> {
     let stream = channel.into_stream();
     let (mut r, mut w) = tokio::io::split(stream);
 
-    w.write_all(b"GET /json?fields=ip,countryCode,city HTTP/1.0\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n").await?;
+    w.write_all(b"GET /json?fields=query,countryCode,city HTTP/1.0\r\nHost: ip-api.com\r\nConnection: close\r\n\r\n").await?;
 
     let mut response = Vec::new();
     let mut buf = [0u8; 4096];
@@ -119,6 +121,9 @@ pub fn build_proxy_url(proxy: &Proxy) -> String {
 
     match (&proxy.username, &proxy.password) {
         (Some(user), Some(pass)) if !user.is_empty() => {
+            use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+            let user = utf8_percent_encode(user, NON_ALPHANUMERIC);
+            let pass = utf8_percent_encode(pass, NON_ALPHANUMERIC);
             format!("{scheme}://{}:{}@{}:{}", user, pass, proxy.host, proxy.port)
         }
         _ => format!("{scheme}://{}:{}", proxy.host, proxy.port),

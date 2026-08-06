@@ -13,6 +13,22 @@ use tokio::sync::Mutex;
 
 const MOZLZ4_MAGIC: &[u8] = b"mozLz40\x00";
 
+/// Serializes mutations of the shared Camoufox install dir (omni.ja repack,
+/// chrome.css rewrite, policies.json strip, download extraction) so concurrent
+/// profile launches / downloads don't clobber each other's read-modify-write.
+/// Lock with `.lock().await` from async code and `.blocking_lock()` from
+/// `spawn_blocking` threads.
+pub static INSTALL_DIR_LOCK: Mutex<()> = Mutex::const_new(());
+
+/// Writes `data` to a temp file in the same directory and renames it over
+/// `path`, so readers (e.g. a browser that is starting up) never observe a
+/// partially written file.
+fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
+    let tmp = path.with_extension("tmp.new");
+    std::fs::write(&tmp, data).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("rename to {}: {e}", path.display()))
+}
+
 // ── Download state ─────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize, PartialEq, Debug)]
@@ -337,7 +353,7 @@ pub fn patch_policies_json(install_dir: &Path) -> bool {
         return false; // already stripped — nothing to do
     }
     match serde_json::to_string_pretty(&doc) {
-        Ok(out) => std::fs::write(&path, out).is_ok(),
+        Ok(out) => write_atomic(&path, out.as_bytes()).is_ok(),
         Err(_) => false,
     }
 }
@@ -370,7 +386,9 @@ pub fn clear_all_startup_caches(app_data_dir: &Path) {
 }
 
 /// Checks whether omni.ja has changed since the last patch (by mtime).
-/// If so, re-patches and clears caches. Idempotent.
+/// If so, re-patches and clears caches. Idempotent. Callers must hold
+/// `INSTALL_DIR_LOCK` — the mtime check + repack is a read-modify-write on the
+/// shared install dir and must not run concurrently with another launch.
 pub fn ensure_omni_patched(install_dir: &Path, app_data_dir: &Path) {
     // Always neutralize the SearchEngines enterprise policy first — it overrides every
     // engine we inject, and Camoufox re-ships it on each update. Idempotent (no-op once
@@ -438,16 +456,20 @@ fn build_stripe_bg(color_left: &str, color_right: &str, label: &str) -> String {
 
 /// Patches shared chrome.css in the Camoufox install dir.
 /// Applies structural fixes + full UI block + profile-specific color stripe.
-/// Idempotent — safe to call on every launch.
+/// Idempotent — safe to call on every launch. Callers must hold
+/// `INSTALL_DIR_LOCK` (the file is shared between all profiles).
 pub fn patch_chrome_css(
     install_dir: &std::path::Path,
     color_left: &str,
     color_right: &str,
     label: &str,
-) {
+) -> Result<(), String> {
     let css_path = install_dir.join("chrome.css");
-    let Ok(content) = std::fs::read_to_string(&css_path) else {
-        return;
+    let content = match std::fs::read_to_string(&css_path) {
+        Ok(c) => c,
+        // No chrome.css shipped — nothing to patch.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("read {}: {e}", css_path.display())),
     };
 
     // Remove any previous Veydan Browser block (idempotent cleanup)
@@ -594,7 +616,7 @@ html, :root {{ width: auto !important; height: 100% !important; }}
 "#
     ));
 
-    std::fs::write(&css_path, patched).ok();
+    write_atomic(&css_path, patched.as_bytes())
 }
 
 // ── Tauri commands ──────────────────────────────────────────────────────────
@@ -685,12 +707,20 @@ pub async fn camoufox_download(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
-    // Don't start if already downloading
+    // Don't start if already downloading. Claim the slot synchronously inside
+    // the same lock as the check — the first chunk may take seconds to arrive,
+    // and a second rapid invocation must not pass the guard in the meantime
+    // (both would write camoufox_download.tmp.zip concurrently).
     {
-        let current = state.download.state.lock().await;
+        let mut current = state.download.state.lock().await;
         if matches!(*current, DownloadState::Downloading { .. }) {
             return Err(AppError::other("Download already in progress"));
         }
+        *current = DownloadState::Downloading {
+            downloaded: 0,
+            total: 0,
+            percent: 0,
+        };
     }
 
     let app_data_dir = state.app_data_dir.clone();
@@ -711,13 +741,12 @@ pub async fn camoufox_download(
                 };
                 app.emit("camoufox://done", version).ok();
             }
-            Err(e) => {
-                let is_cancelled = e.contains("cancelled");
-                if is_cancelled {
-                    *dl_state.lock().await = DownloadState::Idle;
-                } else {
-                    *dl_state.lock().await = DownloadState::Failed { error: e.clone() };
-                }
+            Err(DownloadError::Cancelled) => {
+                *dl_state.lock().await = DownloadState::Idle;
+                app.emit("camoufox://error", "Download cancelled".to_string()).ok();
+            }
+            Err(DownloadError::Other(e)) => {
+                *dl_state.lock().await = DownloadState::Failed { error: e.clone() };
                 app.emit("camoufox://error", e).ok();
             }
         }
@@ -728,12 +757,26 @@ pub async fn camoufox_download(
 
 // ── Core download logic ─────────────────────────────────────────────────────
 
+/// Download failure. `Cancelled` is a first-class variant so cancellation is
+/// not detected by string matching on the error message.
+#[derive(Debug)]
+enum DownloadError {
+    Cancelled,
+    Other(String),
+}
+
+impl From<String> for DownloadError {
+    fn from(s: String) -> Self {
+        Self::Other(s)
+    }
+}
+
 async fn run_download(
     app: tauri::AppHandle,
     app_data_dir: PathBuf,
     dl_state: Arc<Mutex<DownloadState>>,
     mut cancel_rx: tokio::sync::oneshot::Receiver<()>,
-) -> Result<String, String> {
+) -> Result<String, DownloadError> {
     let client = reqwest::Client::builder()
         .user_agent("VeydanBrowser/1.0")
         .build()
@@ -822,12 +865,12 @@ async fn run_download(
                         *dl_state.lock().await = state_val.clone();
                         app.emit("camoufox://progress", state_val).ok();
                     }
-                    Some(Err(e)) => return Err(format!("Stream error: {e}")),
+                    Some(Err(e)) => return Err(format!("Stream error: {e}").into()),
                     None => break,
                 }
             }
             _ = &mut cancel_rx => {
-                return Err("Download cancelled".into());
+                return Err(DownloadError::Cancelled);
             }
         }
     }
@@ -857,6 +900,11 @@ fn extract_and_install(
     app_data_dir: &Path,
     version: &str,
 ) -> Result<(), String> {
+    // Runs on a spawn_blocking thread, so blocking_lock is safe here. Keeps a
+    // concurrently launching profile from patching/reading the install dir
+    // while it is being replaced.
+    let _guard = INSTALL_DIR_LOCK.blocking_lock();
+
     let dest_dir = app_data_dir.join("camoufox");
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
 
@@ -923,8 +971,11 @@ fn extract_and_install(
         ));
     }
 
-    patch_chrome_css(&dest_dir, "#6366f1", "#6366f1", "");
-    patch_omni_ja(&dest_dir).ok();
+    // Propagate patch failures — a silently unpatched omni.ja ships a browser
+    // with broken search/UI, which is far worse than a visible download error.
+    patch_chrome_css(&dest_dir, "#6366f1", "#6366f1", "")
+        .map_err(|e| format!("chrome.css patch failed: {e}"))?;
+    patch_omni_ja(&dest_dir).map_err(|e| format!("omni.ja patch failed: {e}"))?;
     patch_policies_json(&dest_dir);
 
     // Store mtime after initial patch so ensure_omni_patched skips on first launch

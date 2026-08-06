@@ -10,7 +10,7 @@ use russh::keys::{decode_secret_key, HashAlg, PrivateKeyWithHashAlg};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -38,6 +38,9 @@ struct SshConnectionRow {
     terminal_theme: Option<String>,
     default_cols: i64,
     default_rows: i64,
+    /// SHA256 fingerprint of the server host key, pinned on first successful
+    /// connection (TOFU) — same scheme as `proxies.server_fingerprint`.
+    server_fingerprint: Option<String>,
     last_connected_at: Option<String>,
     created_at: String,
     updated_at: String,
@@ -67,6 +70,7 @@ pub struct SshConnection {
     pub terminal_theme: Option<String>,
     pub default_cols: i64,
     pub default_rows: i64,
+    pub server_fingerprint: Option<String>,
     pub last_connected_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -95,6 +99,7 @@ impl From<SshConnectionRow> for SshConnection {
             terminal_theme: r.terminal_theme,
             default_cols: r.default_cols,
             default_rows: r.default_rows,
+            server_fingerprint: r.server_fingerprint,
             last_connected_at: r.last_connected_at,
             created_at: r.created_at,
             updated_at: r.updated_at,
@@ -220,16 +225,42 @@ struct KeyboardPromptItem {
 
 // ── russh Handler ──────────────────────────────────────────────────────────────
 
-pub(crate) struct TerminalHandler;
+/// Marker prefix of the host-key-mismatch error. The frontend greps for it
+/// (see `parseHostKeyMismatch` in src/lib/utils.ts) to show the
+/// "trust new host key" prompt instead of a plain error.
+pub(crate) const HOST_KEY_MISMATCH_MARKER: &str = "HOST_KEY_MISMATCH";
+
+/// Host-key verification for terminal + SFTP sessions (TOFU, mirrors
+/// `proxy::ssh::SshHandler`): first connection is accepted and the fingerprint
+/// is pinned after successful auth; a pinned fingerprint must match exactly.
+pub(crate) struct TerminalHandler {
+    /// Fingerprint stored in `ssh_connections.server_fingerprint` (None = first connection).
+    known_fingerprint: Option<String>,
+    /// Fingerprint received from the server during this handshake.
+    received_fingerprint: Arc<Mutex<Option<String>>>,
+}
 
 impl client::Handler for TerminalHandler {
     type Error = russh::Error;
 
     fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::PublicKey,
+        server_public_key: &russh::keys::PublicKey,
     ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
-        std::future::ready(Ok(true))
+        let fp = crate::proxy::ssh::compute_fingerprint(server_public_key);
+        if let Ok(mut slot) = self.received_fingerprint.lock() {
+            *slot = Some(fp.clone());
+        }
+
+        let result = match &self.known_fingerprint {
+            // First connection — accept; the caller pins it after successful auth
+            None => Ok(true),
+            Some(known) if known == &fp => Ok(true),
+            // Fingerprint mismatch — possible MITM, reject the handshake
+            Some(_) => Err(russh::Error::WrongServerSig),
+        };
+
+        std::future::ready(result)
     }
 }
 
@@ -558,7 +589,7 @@ pub async fn ssh_connection_list(
         "SELECT DISTINCT c.* FROM ssh_connections c
          JOIN ssh_connection_profiles p ON p.connection_id = c.id
          WHERE p.profile_id = ?1
-           AND (?2 IS NULL OR lower(c.name) LIKE lower(?2) OR lower(c.host) LIKE lower(?2) OR lower(c.username) LIKE lower(?2))
+           AND (?2 IS NULL OR lower(c.name) LIKE lower(?2) ESCAPE '\\' OR lower(c.host) LIKE lower(?2) ESCAPE '\\' OR lower(c.username) LIKE lower(?2) ESCAPE '\\')
          ORDER BY c.name"
     } else if workspace_id.is_some() {
         // Workspace context: global (no links) OR linked to this workspace
@@ -567,18 +598,22 @@ pub async fn ssh_connection_list(
            NOT EXISTS (SELECT 1 FROM ssh_connection_workspaces w WHERE w.connection_id = c.id)
            OR EXISTS (SELECT 1 FROM ssh_connection_workspaces w WHERE w.connection_id = c.id AND w.workspace_id = ?1)
          )
-         AND (?2 IS NULL OR lower(c.name) LIKE lower(?2) OR lower(c.host) LIKE lower(?2) OR lower(c.username) LIKE lower(?2))
+         AND (?2 IS NULL OR lower(c.name) LIKE lower(?2) ESCAPE '\\' OR lower(c.host) LIKE lower(?2) ESCAPE '\\' OR lower(c.username) LIKE lower(?2) ESCAPE '\\')
          ORDER BY c.name"
     } else {
         // Global: all connections
         "SELECT c.* FROM ssh_connections c
          WHERE ?1 IS NULL
-           AND (?2 IS NULL OR lower(c.name) LIKE lower(?2) OR lower(c.host) LIKE lower(?2) OR lower(c.username) LIKE lower(?2))
+           AND (?2 IS NULL OR lower(c.name) LIKE lower(?2) ESCAPE '\\' OR lower(c.host) LIKE lower(?2) ESCAPE '\\' OR lower(c.username) LIKE lower(?2) ESCAPE '\\')
          ORDER BY c.name"
     };
 
     let filter_param = profile_id.as_deref().or(workspace_id.as_deref());
-    let search_param = search.as_deref().map(|s| format!("%{}%", s));
+    // Escape LIKE wildcards so user input matches literally (paired with ESCAPE '\')
+    let search_param = search.as_deref().map(|s| {
+        let escaped = s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        format!("%{escaped}%")
+    });
 
     let rows = sqlx::query_as::<_, SshConnectionRow>(sql)
         .bind(filter_param)
@@ -613,6 +648,12 @@ pub async fn ssh_connection_get(
     Ok(conn)
 }
 
+/// `Some("")` → `None`: the frontend sends the empty string for "no value" on
+/// nullable fields (see the update-semantics comment on `ssh_connection_update`).
+fn none_if_empty(v: &Option<String>) -> Option<&str> {
+    v.as_deref().filter(|s| !s.is_empty())
+}
+
 #[tauri::command]
 pub async fn ssh_connection_create(
     state: State<'_, AppState>,
@@ -642,16 +683,16 @@ pub async fn ssh_connection_create(
     .bind(input.port.unwrap_or(22))
     .bind(&input.username)
     .bind(&input.auth_type)
-    .bind(&input.password)
-    .bind(&input.private_key)
-    .bind(&input.key_passphrase)
-    .bind(&input.ssh_key_id)
+    .bind(none_if_empty(&input.password))
+    .bind(none_if_empty(&input.private_key))
+    .bind(none_if_empty(&input.key_passphrase))
+    .bind(none_if_empty(&input.ssh_key_id))
     .bind(input.requires_2fa.unwrap_or(false) as i64)
-    .bind(&input.totp_entry_id)
-    .bind(&input.proxy_id)
+    .bind(none_if_empty(&input.totp_entry_id))
+    .bind(none_if_empty(&input.proxy_id))
     .bind(input.connect_timeout_sec.unwrap_or(15))
     .bind(input.keepalive_sec.unwrap_or(30))
-    .bind(&input.terminal_theme)
+    .bind(none_if_empty(&input.terminal_theme))
     .bind(input.default_cols.unwrap_or(120))
     .bind(input.default_rows.unwrap_or(32))
     .bind(&now)
@@ -670,6 +711,23 @@ pub async fn ssh_connection_create(
     ssh_connection_get(state, id).await
 }
 
+/// Partial update.
+///
+/// Semantics (must match what the frontend sends — see SSHConnectionForm.svelte
+/// and SshProfileTab.svelte):
+/// - Required scalars (name, host, port, username, auth_type, requires_2fa,
+///   connect_timeout_sec, keepalive_sec, default_cols, default_rows):
+///   `None` = keep the current value (COALESCE).
+/// - Nullable/clearable fields (password, private_key, key_passphrase,
+///   ssh_key_id, totp_entry_id, proxy_id, terminal_theme) are three-state:
+///   `None` (field omitted) = keep, `Some("")` = clear to NULL, `Some(v)` = set.
+///   The edit form always sends the full desired state, using `""` for
+///   "cleared / detached / no saved key"; partial callers (e.g. profile
+///   link/unlink sending only `profile_ids`) omit them entirely, so stored
+///   secrets can no longer be wiped by omission.
+/// - workspace_ids / profile_ids: `None` = keep links, `Some(list)` = replace.
+/// - server_fingerprint / last_connected_at are managed by the connect flow
+///   and `ssh_connection_trust_fingerprint`, never by this command.
 #[tauri::command]
 pub async fn ssh_connection_update(
     state: State<'_, AppState>,
@@ -685,16 +743,16 @@ pub async fn ssh_connection_update(
             port                = COALESCE(?, port),
             username            = COALESCE(?, username),
             auth_type           = COALESCE(?, auth_type),
-            password            = ?,
-            private_key         = ?,
-            key_passphrase      = ?,
-            ssh_key_id          = ?,
+            password            = CASE WHEN ? IS NULL THEN password       WHEN ? = '' THEN NULL ELSE ? END,
+            private_key         = CASE WHEN ? IS NULL THEN private_key    WHEN ? = '' THEN NULL ELSE ? END,
+            key_passphrase      = CASE WHEN ? IS NULL THEN key_passphrase WHEN ? = '' THEN NULL ELSE ? END,
+            ssh_key_id          = CASE WHEN ? IS NULL THEN ssh_key_id     WHEN ? = '' THEN NULL ELSE ? END,
             requires_2fa        = COALESCE(?, requires_2fa),
-            totp_entry_id       = ?,
-            proxy_id            = ?,
+            totp_entry_id       = CASE WHEN ? IS NULL THEN totp_entry_id  WHEN ? = '' THEN NULL ELSE ? END,
+            proxy_id            = CASE WHEN ? IS NULL THEN proxy_id       WHEN ? = '' THEN NULL ELSE ? END,
             connect_timeout_sec = COALESCE(?, connect_timeout_sec),
             keepalive_sec       = COALESCE(?, keepalive_sec),
-            terminal_theme      = CASE WHEN ? IS NOT NULL THEN ? ELSE terminal_theme END,
+            terminal_theme      = CASE WHEN ? IS NULL THEN terminal_theme WHEN ? = '' THEN NULL ELSE ? END,
             default_cols        = COALESCE(?, default_cols),
             default_rows        = COALESCE(?, default_rows),
             updated_at          = ?
@@ -705,16 +763,16 @@ pub async fn ssh_connection_update(
     .bind(input.port)
     .bind(&input.username)
     .bind(&input.auth_type)
-    .bind(&input.password)
-    .bind(&input.private_key)
-    .bind(&input.key_passphrase)
-    .bind(&input.ssh_key_id)
+    .bind(&input.password).bind(&input.password).bind(&input.password)
+    .bind(&input.private_key).bind(&input.private_key).bind(&input.private_key)
+    .bind(&input.key_passphrase).bind(&input.key_passphrase).bind(&input.key_passphrase)
+    .bind(&input.ssh_key_id).bind(&input.ssh_key_id).bind(&input.ssh_key_id)
     .bind(input.requires_2fa.map(|v| v as i64))
-    .bind(&input.totp_entry_id)
-    .bind(&input.proxy_id)
+    .bind(&input.totp_entry_id).bind(&input.totp_entry_id).bind(&input.totp_entry_id)
+    .bind(&input.proxy_id).bind(&input.proxy_id).bind(&input.proxy_id)
     .bind(input.connect_timeout_sec)
     .bind(input.keepalive_sec)
-    .bind(&input.terminal_theme).bind(&input.terminal_theme)
+    .bind(&input.terminal_theme).bind(&input.terminal_theme).bind(&input.terminal_theme)
     .bind(input.default_cols)
     .bind(input.default_rows)
     .bind(&now)
@@ -743,6 +801,27 @@ pub async fn ssh_connection_delete(
         .execute(&state.db)
         .await
         .map_err(AppError::db)?;
+    Ok(())
+}
+
+/// Save a trusted SSH server host-key fingerprint (the user confirmed the new
+/// fingerprint in UI after a `HOST_KEY_MISMATCH` error — TOFU re-pin, mirrors
+/// `proxy_trust_fingerprint`).
+#[tauri::command]
+pub async fn ssh_connection_trust_fingerprint(
+    state: State<'_, AppState>,
+    id: String,
+    fingerprint: String,
+) -> CmdResult<()> {
+    sqlx::query(
+        "UPDATE ssh_connections SET server_fingerprint = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&fingerprint)
+    .bind(Utc::now().to_rfc3339())
+    .bind(&id)
+    .execute(&state.db)
+    .await
+    .map_err(AppError::db)?;
     Ok(())
 }
 
@@ -837,7 +916,6 @@ pub async fn ssh_connect(
 
     let sessions_arc = state.ssh_sessions.clone();
     let db = state.db.clone();
-    let db_update = db.clone();
     let session_id_ret = session_id.clone();
 
     tokio::spawn(async move {
@@ -856,24 +934,17 @@ pub async fn ssh_connect(
             Err(e) => (SshStatus::Error, Some(e.to_string())),
         };
 
-        // Update session status
-        if let Ok(mut sessions) = sessions_arc.write() {
-            if let Some(s) = sessions.get_mut(&session_id) {
-                s.info.status = status.clone();
-                s.info.error = error.clone();
-            }
-        }
-
         emit_status(&app, &session_id, &conn.id, status, error);
 
-        // Update last_connected_at
-        let _ = sqlx::query(
-            "UPDATE ssh_connections SET last_connected_at = ? WHERE id = ?",
-        )
-        .bind(Utc::now().to_rfc3339())
-        .bind(&conn.id)
-        .execute(&db_update)
-        .await;
+        // Prune the finished session — the registry only holds live sessions.
+        // The frontend keeps its own copy of session info (updated via the
+        // status event above) for the disconnected banner / reconnect UX, and
+        // the terminal buffer lives entirely on the frontend side, so nothing
+        // needs `ssh_session_list` to keep returning dead sessions.
+        // (`ssh_session_remove` from the frontend then becomes a no-op.)
+        if let Ok(mut sessions) = sessions_arc.write() {
+            sessions.remove(&session_id);
+        }
     });
 
     Ok(session_id_ret)
@@ -938,68 +1009,139 @@ async fn http_connect_tunnel(
 ///
 /// The returned `SharedSession` (if any) is the jump-host session — the caller
 /// must keep it alive for as long as the handle is used, or the tunnel closes.
+///
+/// The last tuple element is the host-key fingerprint the *target* server
+/// presented (TOFU: pin it via `persist_connect_success` after auth succeeds).
+/// If a pinned fingerprint doesn't match, this fails with a
+/// `HOST_KEY_MISMATCH`-marked error the frontend recognizes.
 pub(crate) async fn establish_transport(
     conn: &SshConnection,
     proxy: Option<&crate::models::Proxy>,
     config: Arc<client::Config>,
-) -> anyhow::Result<(Option<crate::proxy::ssh::SharedSession>, client::Handle<TerminalHandler>)> {
+) -> anyhow::Result<(
+    Option<crate::proxy::ssh::SharedSession>,
+    client::Handle<TerminalHandler>,
+    Option<String>,
+)> {
     let host = conn.host.as_str();
     let port = conn.port as u16;
 
-    let result: (Option<crate::proxy::ssh::SharedSession>, client::Handle<TerminalHandler>) = match proxy {
-        Some(ref p) if p.proxy_type == "socks5" => {
-            let stream = crate::proxy::local::socks5_connect(
-                &p.host,
-                p.port as u16,
-                host,
-                port,
-                p.username.as_deref(),
-                p.password.as_deref(),
-            )
-            .await?;
-            (None, client::connect_stream(config, stream, TerminalHandler).await?)
-        }
-        Some(ref p) if p.proxy_type == "ssh" => {
-            let jump_auth = if let Some(ref key) = p.private_key {
-                crate::proxy::ssh::SshAuth::PrivateKey(key.clone())
-            } else {
-                crate::proxy::ssh::SshAuth::Password(
-                    p.password.clone().unwrap_or_default(),
-                )
-            };
-            let jump_result = crate::proxy::ssh::SshSession::connect(
-                &p.host,
-                p.port as u16,
-                p.username.as_deref().unwrap_or("root"),
-                jump_auth,
-                p.server_fingerprint.clone(),
-            )
-            .await?;
-            let channel = jump_result.session.open_channel(host, port).await?;
-            let stream = channel.into_stream();
-            // Keep the jump session Arc alive — dropping it would close the tunnel
-            let session_arc = jump_result.session.clone();
-            (Some(session_arc), client::connect_stream(config, stream, TerminalHandler).await?)
-        }
-        Some(ref p) if p.proxy_type == "http" || p.proxy_type == "https" => {
-            // HTTP CONNECT tunnel
-            let stream = http_connect_tunnel(
-                &p.host,
-                p.port as u16,
-                host,
-                port,
-                p.username.as_deref(),
-                p.password.as_deref(),
-            )
-            .await?;
-            (None, client::connect_stream(config, stream, TerminalHandler).await?)
-        }
-        _ => {
-            (None, client::connect(config, (host, port), TerminalHandler).await?)
-        }
+    let received: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let make_handler = || TerminalHandler {
+        known_fingerprint: conn.server_fingerprint.clone(),
+        received_fingerprint: Arc::clone(&received),
     };
 
-    Ok(result)
+    let result: anyhow::Result<(Option<crate::proxy::ssh::SharedSession>, client::Handle<TerminalHandler>)> = async {
+        Ok(match proxy {
+            Some(ref p) if p.proxy_type == "socks5" => {
+                let stream = crate::proxy::local::socks5_connect(
+                    &p.host,
+                    p.port as u16,
+                    host,
+                    port,
+                    p.username.as_deref(),
+                    p.password.as_deref(),
+                )
+                .await?;
+                (None, client::connect_stream(config, stream, make_handler()).await?)
+            }
+            Some(ref p) if p.proxy_type == "ssh" => {
+                let jump_auth = if let Some(ref key) = p.private_key {
+                    crate::proxy::ssh::SshAuth::PrivateKey(key.clone())
+                } else {
+                    crate::proxy::ssh::SshAuth::Password(
+                        p.password.clone().unwrap_or_default(),
+                    )
+                };
+                let jump_result = crate::proxy::ssh::SshSession::connect(
+                    &p.host,
+                    p.port as u16,
+                    p.username.as_deref().unwrap_or("root"),
+                    jump_auth,
+                    p.server_fingerprint.clone(),
+                )
+                .await?;
+                let channel = jump_result.session.open_channel(host, port).await?;
+                let stream = channel.into_stream();
+                // Keep the jump session Arc alive — dropping it would close the tunnel
+                let session_arc = jump_result.session.clone();
+                (Some(session_arc), client::connect_stream(config, stream, make_handler()).await?)
+            }
+            Some(ref p) if p.proxy_type == "http" || p.proxy_type == "https" => {
+                // HTTP CONNECT tunnel
+                let stream = http_connect_tunnel(
+                    &p.host,
+                    p.port as u16,
+                    host,
+                    port,
+                    p.username.as_deref(),
+                    p.password.as_deref(),
+                )
+                .await?;
+                (None, client::connect_stream(config, stream, make_handler()).await?)
+            }
+            _ => {
+                (None, client::connect(config, (host, port), make_handler()).await?)
+            }
+        })
+    }
+    .await;
+
+    let received_fp = received.lock().ok().and_then(|g| g.clone());
+    match result {
+        Ok((jump, handle)) => Ok((jump, handle, received_fp)),
+        Err(e) => {
+            // Distinguish a host-key mismatch from generic connect failures so
+            // the frontend can offer to trust the new fingerprint.
+            if let (Some(known), Some(recv)) =
+                (conn.server_fingerprint.as_deref(), received_fp.as_deref())
+            {
+                if known != recv {
+                    anyhow::bail!(
+                        "{HOST_KEY_MISMATCH_MARKER}:{recv}: SSH server host key changed \
+                         (pinned {known}, received {recv}) — possible man-in-the-middle attack. \
+                         Verify the server before trusting the new key."
+                    );
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Persist connection bookkeeping right after successful authentication:
+/// pin the host-key fingerprint on first connect (TOFU, mirrors
+/// `proxies.server_fingerprint`) and stamp `last_connected_at`.
+/// DB failures are logged, never fatal — the live session keeps working.
+pub(crate) async fn persist_connect_success(
+    db: &sqlx::SqlitePool,
+    conn: &SshConnection,
+    received_fp: Option<&str>,
+) {
+    if conn.server_fingerprint.is_none() {
+        if let Some(fp) = received_fp {
+            if let Err(e) = sqlx::query(
+                "UPDATE ssh_connections SET server_fingerprint = ? \
+                 WHERE id = ? AND server_fingerprint IS NULL",
+            )
+            .bind(fp)
+            .bind(&conn.id)
+            .execute(db)
+            .await
+            {
+                eprintln!("[ssh] failed to pin host-key fingerprint for {}: {e}", conn.id);
+            }
+        }
+    }
+    if let Err(e) = sqlx::query("UPDATE ssh_connections SET last_connected_at = ? WHERE id = ?")
+        .bind(Utc::now().to_rfc3339())
+        .bind(&conn.id)
+        .execute(db)
+        .await
+    {
+        eprintln!("[ssh] failed to update last_connected_at for {}: {e}", conn.id);
+    }
 }
 
 async fn run_session(
@@ -1013,7 +1155,7 @@ async fn run_session(
     let config = Arc::new(client::Config::default());
 
     // _jump_session keeps the Arc alive for the duration of the session
-    let (_jump_session, mut handle) =
+    let (_jump_session, mut handle, received_fp) =
         establish_transport(conn, proxy.as_ref(), config).await?;
 
     // Authenticate
@@ -1032,6 +1174,10 @@ async fn run_session(
         &mut rx,
     )
     .await?;
+
+    // Pin the host key (first connect) + stamp last_connected_at now that
+    // the server is authenticated — not when the session eventually ends.
+    persist_connect_success(&db, conn, received_fp.as_deref()).await;
 
     // Open shell channel
     let mut channel = handle.channel_open_session().await?;

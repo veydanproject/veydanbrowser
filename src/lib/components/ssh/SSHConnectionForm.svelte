@@ -105,20 +105,24 @@
     error = '';
     try {
       let conn: SshConnection;
+      // Nullable fields are three-state on the backend: omitted = keep,
+      // '' = clear, value = set. The form always sends the full desired
+      // state, so '' expresses "cleared / detached" explicitly (create
+      // normalizes '' to NULL).
       const base = {
         name: name.trim(),
         host: host.trim(),
         port,
         username: username.trim(),
         auth_type: authType,
-        password: password || null,
+        password: password,
         // Saved key: reference only — never persist stale inline material.
-        private_key: useSavedKey ? null : privateKey || null,
-        key_passphrase: useSavedKey ? null : keyPassphrase || null,
-        ssh_key_id: useSavedKey ? sshKeyId : null,
+        private_key: useSavedKey ? '' : privateKey,
+        key_passphrase: useSavedKey ? '' : keyPassphrase,
+        ssh_key_id: useSavedKey ? sshKeyId : '',
         requires_2fa: requires2fa,
-        totp_entry_id: totpEntryId || null,
-        proxy_id: proxyId || null,
+        totp_entry_id: totpEntryId,
+        proxy_id: proxyId,
         workspace_ids: selectedWorkspaceIds,
         profile_ids: selectedProfileIds,
         connect_timeout_sec: connectTimeout,

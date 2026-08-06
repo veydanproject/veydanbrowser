@@ -10,11 +10,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '$lib/api';
+  import type { Window } from '@tauri-apps/api/window';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let win: any = null;
+  let win: Window | null = null;
   let maximized = $state(false);
 
   onMount(() => {
@@ -22,12 +22,13 @@
     let unlisten: (() => void) | undefined;
     (async () => {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      win = getCurrentWindow();
+      const w = getCurrentWindow();
+      win = w;
       try {
-        maximized = await win.isMaximized();
-        unlisten = await win.onResized(async () => {
+        maximized = await w.isMaximized();
+        unlisten = await w.onResized(async () => {
           try {
-            maximized = await win.isMaximized();
+            maximized = await w.isMaximized();
           } catch {}
         });
       } catch {}

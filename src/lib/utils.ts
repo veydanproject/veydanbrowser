@@ -11,6 +11,18 @@ export function formatError(e: unknown): string {
 }
 
 /**
+ * Detects the HOST_KEY_MISMATCH marker emitted by the backend when an SSH
+ * server's pinned host key changed (terminal + SFTP connects). Returns the
+ * newly received fingerprint so the UI can offer to trust it, or null.
+ * Mirrors `HOST_KEY_MISMATCH_MARKER` in src-tauri/src/commands/ssh.rs.
+ */
+export function parseHostKeyMismatch(error: string | null | undefined): string | null {
+  if (!error) return null;
+  const m = /HOST_KEY_MISMATCH:(SHA256:[A-Za-z0-9+/=]+)/.exec(error);
+  return m ? m[1] : null;
+}
+
+/**
  * Label for a proxy in select dropdowns: the name plus the geo assigned by the
  * proxy check, e.g. "175.110.115.169:10525 (RU, Moscow)". Names usually already
  * contain host:port, so the URL is not repeated; without geo it's just the name.

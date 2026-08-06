@@ -51,8 +51,9 @@ use commands::fs::{
 };
 use commands::ssh::{
     ssh_connect, ssh_connection_create, ssh_connection_delete, ssh_connection_get,
-    ssh_connection_list, ssh_connection_update, ssh_disconnect, ssh_resize, ssh_send_data,
-    ssh_session_list, ssh_session_remove, ssh_respond_prompt, SshSessions,
+    ssh_connection_list, ssh_connection_trust_fingerprint, ssh_connection_update,
+    ssh_disconnect, ssh_resize, ssh_send_data, ssh_session_list, ssh_session_remove,
+    ssh_respond_prompt, SshSessions,
 };
 use commands::ssh_keys::{
     ssh_key_delete, ssh_key_generate, ssh_key_get, ssh_key_import, ssh_key_list, ssh_key_update,
@@ -407,6 +408,7 @@ pub fn run() {
             ssh_connection_create,
             ssh_connection_update,
             ssh_connection_delete,
+            ssh_connection_trust_fingerprint,
             ssh_connect,
             ssh_disconnect,
             ssh_send_data,
@@ -451,6 +453,9 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 let state = app.state::<AppState>();
+                // stop_all signals every browser and then awaits the monitor
+                // tasks (bounded) so the kills actually complete before the
+                // process exits — otherwise children would be orphaned.
                 tauri::async_runtime::block_on(browser::launch::stop_all(&state.browser));
             }
         });

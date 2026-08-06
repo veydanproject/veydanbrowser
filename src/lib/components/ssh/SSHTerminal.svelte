@@ -12,6 +12,7 @@
   import { api } from '$lib/api';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/i18n';
+  import { parseHostKeyMismatch } from '$lib/utils';
 
   interface KeyboardPromptItem {
     prompt: string;
@@ -54,6 +55,10 @@
   let isDragging = $state(false);
 
   let session = $derived(sshStore.sessionById(sessionId));
+
+  // TOFU: new fingerprint from a HOST_KEY_MISMATCH error (null = no mismatch)
+  let mismatchFingerprint = $derived(parseHostKeyMismatch(session?.error));
+  let trusting = $state(false);
 
   let drawerHeight = $derived(
     isMaximized ? `calc(100vh - 2.5rem)` : `${drawerVh}vh`
@@ -205,6 +210,21 @@
       onDisconnect?.();
     } catch {}
   }
+
+  /** Pin the new host key (user confirmed after a mismatch) and reconnect. */
+  async function trustAndReconnect() {
+    const s = session;
+    const fp = mismatchFingerprint;
+    if (!s || !fp || trusting) return;
+    trusting = true;
+    try {
+      await api.ssh.connectionTrustFingerprint(s.connection_id, fp);
+      await reconnect();
+    } catch {
+    } finally {
+      trusting = false;
+    }
+  }
 </script>
 
 <div class="terminal-drawer" class:hidden={!visible} class:dragging={isDragging} style="height:{drawerHeight}">
@@ -245,11 +265,26 @@
     </div>
 
     {#if session?.status === 'error' || session?.status === 'disconnected'}
-      <div class="disconnected-banner">
-        <Icon name="wifi-off" size={13} />
-        {session?.error ? $t('ssh_terminal_error', { msg: session.error }) : $t('ssh_terminal_closed')}
-        <button class="btn-primary btn-sm" onclick={reconnect}>{$t('ssh_btn_reconnect')}</button>
-      </div>
+      {#if mismatchFingerprint}
+        <!-- Host key changed (TOFU mismatch) — offer to trust the new fingerprint -->
+        <div class="disconnected-banner hostkey-banner">
+          <Icon name="shield" size={13} />
+          <span class="hostkey-text">
+            {$t('ssh_hostkey_changed_title')}
+            <code class="hostkey-fp">{mismatchFingerprint}</code>
+            {$t('ssh_hostkey_changed_hint')}
+          </span>
+          <button class="btn-primary btn-sm" onclick={trustAndReconnect} disabled={trusting}>
+            {trusting ? $t('ssh_connecting') : $t('ssh_hostkey_trust_btn')}
+          </button>
+        </div>
+      {:else}
+        <div class="disconnected-banner">
+          <Icon name="wifi-off" size={13} />
+          {session?.error ? $t('ssh_terminal_error', { msg: session.error }) : $t('ssh_terminal_closed')}
+          <button class="btn-primary btn-sm" onclick={reconnect}>{$t('ssh_btn_reconnect')}</button>
+        </div>
+      {/if}
     {/if}
 
     <div class="xterm-container" bind:this={termEl}></div>
@@ -418,7 +453,17 @@
     border-bottom: 1px solid var(--danger-border);
     flex-shrink: 0;
   }
-  .disconnected-banner .btn-primary { margin-left: auto; }
+  .disconnected-banner .btn-primary { margin-left: auto; flex-shrink: 0; }
+
+  .hostkey-banner { align-items: flex-start; }
+  .hostkey-text { flex: 1; min-width: 0; line-height: 1.5; }
+  .hostkey-fp {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--fs-2xs);
+    word-break: break-all;
+    opacity: 0.9;
+  }
 
   .xterm-container {
     flex: 1;

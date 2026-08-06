@@ -105,6 +105,21 @@ pub async fn profile_create(
         .and_then(|p| p.ok_or_else(|| AppError::not_found("Profile not found after create")))
 }
 
+/// Update a profile. Field contract (matches EditProfilePanel.svelte, which
+/// always submits the complete form state):
+///
+/// * NOT-NULL columns (`name`, `browser_type`, `fingerprint_preset`, `locale`,
+///   `languages`, `screen_width/height`, `webrtc_mode`, `geolocation_enabled`,
+///   `default_search_engine`, `history_enabled`) use COALESCE — omitting the
+///   field (null) keeps the stored value, so a partial request can never wipe
+///   them.
+/// * Nullable columns (`proxy_id`, `user_agent`, `platform`, `timezone`,
+///   `latitude`, `longitude`, `webgl_vendor`, `webgl_renderer`, `notes`) are
+///   bound raw on purpose: null *clears* the column. The UI relies on this —
+///   e.g. selecting "None" detaches the proxy (proxy_id: null), and every save
+///   resets `user_agent` to null so the effective UA follows the (possibly
+///   changed) fingerprint preset. Callers must therefore send the full state
+///   for these fields, not a partial diff.
 #[tauri::command]
 pub async fn profile_update(
     id: String,

@@ -143,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
         default_cols: 120,
         default_rows: 32,
         last_connected_at: None,
+        server_fingerprint: None,
         created_at: String::new(),
         updated_at: String::new(),
     };

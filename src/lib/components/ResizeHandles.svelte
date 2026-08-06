@@ -8,11 +8,14 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
+  import type { Window } from '@tauri-apps/api/window';
+
+  // Not exported by @tauri-apps/api/window — derive it from the method signature.
+  type ResizeDirection = Parameters<Window['startResizeDragging']>[0];
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let win: any = null;
+  let win: Window | null = null;
 
   onMount(() => {
     if (!isTauri) return;
@@ -22,7 +25,7 @@
     })();
   });
 
-  function resize(dir: string, e: MouseEvent) {
+  function resize(dir: ResizeDirection, e: MouseEvent) {
     if (e.button !== 0 || !win) return;
     e.preventDefault();
     // Fire-and-forget; must be initiated during the mousedown so the compositor

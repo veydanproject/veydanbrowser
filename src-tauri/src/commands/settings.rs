@@ -103,7 +103,11 @@ pub async fn tray_set_labels(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
-    *state.tray_labels.lock().unwrap() = labels;
+    // A poisoned lock would otherwise panic every future call; surface it as an error.
+    *state
+        .tray_labels
+        .lock()
+        .map_err(|e| AppError::other(e.to_string()))? = labels;
     tray::refresh_tray_async(&app);
     Ok(())
 }

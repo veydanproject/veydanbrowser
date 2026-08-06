@@ -332,6 +332,16 @@ mod tests {
     }
 }
 
+/// Update a proxy. Field contract (matches ProxyPanel.svelte, which pre-fills
+/// the edit form from the stored proxy and submits the complete state):
+///
+/// * `name`, `proxy_type`, `host`, `port`, `tags` are required and replaced.
+/// * `username`, `country`, `city` are bound raw: null clears the column
+///   (the UI sends the full state each save, so null means "no value").
+/// * Credentials (`password`, `private_key`) use COALESCE — null means "keep
+///   the stored secret", so a caller omitting them can never wipe credentials
+///   by accident. Clearing them intentionally still works: emptying the input
+///   in the UI submits an empty string, which overwrites the stored value.
 #[tauri::command]
 pub async fn proxy_update(
     id: String,
@@ -343,7 +353,9 @@ pub async fn proxy_update(
     sqlx::query(
         "UPDATE proxies SET
             name = ?, proxy_type = ?, host = ?, port = ?,
-            username = ?, password = ?, country = ?, city = ?, private_key = ?, tags = ?
+            username = ?, password = COALESCE(?, password),
+            country = ?, city = ?,
+            private_key = COALESCE(?, private_key), tags = ?
         WHERE id = ?",
     )
     .bind(&req.name)
@@ -403,15 +415,17 @@ pub async fn proxy_check(
         return Ok(result);
     }
 
+    let status = if result.ok { "active" } else { "error" };
     sqlx::query(
         "UPDATE proxies SET
-            status = 'active',
+            status = ?,
             last_ip = ?,
             last_check_at = datetime('now'),
             country = CASE WHEN (country IS NULL OR country = '') THEN ? ELSE country END,
             city    = CASE WHEN (city IS NULL OR city = '')       THEN ? ELSE city    END
         WHERE id = ?",
     )
+    .bind(status)
     .bind(&result.ip)
     .bind(&result.country)
     .bind(&result.city)

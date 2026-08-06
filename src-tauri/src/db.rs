@@ -398,6 +398,10 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // SHA256 fingerprint of the server host key, pinned on first successful
+    // connection (TOFU) — same scheme as proxies.server_fingerprint.
+    add_column_if_not_exists(pool, "ssh_connections", "server_fingerprint", "TEXT").await?;
+
     // Migrate existing rows: if old columns still exist, drop them gracefully
     // (SQLite doesn't support DROP COLUMN before 3.35, so we leave them; they just won't be used)
 

@@ -11,7 +11,7 @@
   import type { BackupConfig, BackupFileInfo } from '$lib/api';
   import type { Locale } from '$lib/i18n';
   import type { CamoufoxStatus } from '$lib/types';
-  import { formatError } from '$lib/utils';
+  import { formatError, formatBytes } from '$lib/utils';
   import { updaterStore } from '$lib/store/updater.svelte';
   import CustomSelect from '$lib/components/CustomSelect.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
@@ -99,12 +99,6 @@
       label: $t(`settings_backup_day_${d}` as any),
     }))
   );
-
-  function formatBytes(n: number): string {
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-    return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  }
 
   async function loadBackup() {
     try {

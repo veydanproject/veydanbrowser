@@ -26,6 +26,7 @@
   import { updaterStore } from '$lib/store/updater.svelte';
   import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import { listen } from '@tauri-apps/api/event';
+  import type { Window } from '@tauri-apps/api/window';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import UIInspector from '$lib/inspector/UIInspector.svelte';
   import { inspectorApp } from '$lib/inspector/inspector.svelte';
@@ -59,8 +60,7 @@
 
   // Custom-titlebar (CSD) dragging: cache the window so startDragging() fires
   // synchronously inside the mousedown (Wayland needs the live grab).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let appWindow: any = null;
+  let appWindow: Window | null = null;
   let maximized = $state(false);
   const NON_DRAG = 'button, a, input, select, textarea, [data-no-drag]';
 
@@ -139,11 +139,12 @@
     if (isTauri) {
       import('@tauri-apps/api/window')
         .then(async ({ getCurrentWindow }) => {
-          appWindow = getCurrentWindow();
+          const win = getCurrentWindow();
+          appWindow = win;
           try {
-            maximized = await appWindow.isMaximized();
-            unlistenMax = await appWindow.onResized(async () => {
-              try { maximized = await appWindow.isMaximized(); } catch {}
+            maximized = await win.isMaximized();
+            unlistenMax = await win.onResized(async () => {
+              try { maximized = await win.isMaximized(); } catch {}
             });
           } catch {}
         })
