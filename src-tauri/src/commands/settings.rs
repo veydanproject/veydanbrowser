@@ -67,9 +67,8 @@ pub async fn tray_settings_set(
 
     let want_tray = minimize_to_tray || close_to_tray || start_hidden;
     tray::apply_tray_async(&app, want_tray);
-    // In minimize-to-tray mode the window lives only in the tray, so drop its
-    // taskbar entry; restore it when the mode is off.
-    tray::apply_taskbar_async(&app, minimize_to_tray);
+    // Visible window stays in the taskbar; skip only while actually stashed.
+    tray::sync_taskbar_to_visibility(&app);
     Ok(())
 }
 
@@ -82,17 +81,17 @@ pub async fn window_minimize(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
     let to_tray = state.tray_settings.minimize_to_tray.load(Ordering::Relaxed);
-    let app2 = app.clone();
-    app.run_on_main_thread(move || {
-        if let Some(w) = app2.get_webview_window("main") {
-            if to_tray {
-                let _ = w.hide();
-            } else {
+    if to_tray {
+        tray::hide_to_tray(&app);
+    } else {
+        let app2 = app.clone();
+        app.run_on_main_thread(move || {
+            if let Some(w) = app2.get_webview_window("main") {
                 let _ = w.minimize();
             }
-        }
-    })
-    .map_err(AppError::other)?;
+        })
+        .map_err(AppError::other)?;
+    }
     Ok(())
 }
 

@@ -162,11 +162,7 @@ pub fn run() {
     tauri::Builder::default()
         // Must be first: second launch is closed here before other plugins run.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            tray::show_from_tray(app);
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -246,22 +242,13 @@ pub fn run() {
                 tray::apply_tray_async(app.handle(), true);
             }
             if tray_settings.start_hidden.load(Ordering::Relaxed) {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
-                }
-            }
-            // In minimize-to-tray mode the window is represented only by the
-            // tray icon — keep it out of the taskbar.
-            if tray_settings.minimize_to_tray.load(Ordering::Relaxed) {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.set_skip_taskbar(true);
-                }
+                tray::hide_to_tray(app.handle());
             }
 
-            // Hide-on-close, gated by the live setting (cross-platform). Also
-            // handles minimize-to-tray on Windows/macOS via Resized. On Linux
-            // the minimize detection uses a native GTK signal instead (below),
-            // because WindowEvent::Resized / is_minimized() are unreliable there.
+            // Hide-on-close / minimize-to-tray. skip_taskbar only while stashed.
+            // On Linux, OS minimize is handled by the custom titlebar button
+            // (window_minimize); WindowEvent::Resized / is_minimized() are
+            // unreliable on GTK/Wayland.
             if let Some(win) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 win.on_window_event(move |event| {
@@ -273,6 +260,7 @@ pub fn run() {
                                 if let Some(w) = handle.get_webview_window("main") {
                                     if w.is_minimized().unwrap_or(false) {
                                         let _ = w.unminimize();
+                                        let _ = w.set_skip_taskbar(true);
                                         let _ = w.hide();
                                     }
                                 }
@@ -281,13 +269,7 @@ pub fn run() {
                         tauri::WindowEvent::CloseRequested { api, .. } => {
                             if state.tray_settings.close_to_tray.load(Ordering::Relaxed) {
                                 api.prevent_close();
-                                if let Some(w) = handle.get_webview_window("main") {
-                                    // Hide → the window fully leaves the taskbar
-                                    // (tray-only). The dead-decoration-on-restore
-                                    // Wayland quirk is handled on show() by the
-                                    // tray's schedule_decoration_fix.
-                                    let _ = w.hide();
-                                }
+                                tray::hide_to_tray(&handle);
                             }
                         }
                         _ => {}

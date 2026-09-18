@@ -120,22 +120,34 @@ fn labels_of(app: &AppHandle) -> TrayLabels {
 
 // ── Window helpers (marshalled to the main thread; GTK-safe) ────────────────
 //
-// Stashing to the tray uses hide()/show() so the window fully leaves the
-// taskbar (only the tray represents it). The window uses client-side
-// decorations (decorations:false + a custom titlebar in the web UI), so the
-// old KWin server-side-decoration remap bug does not apply — the titlebar is
-// part of the webview content and comes back intact on show().
+// Stashing to the tray uses hide()+skip_taskbar so the window leaves the
+// taskbar only while hidden. A visible window stays in the taskbar even when
+// minimize-to-tray is enabled (otherwise Alt-Tab makes it look "gone").
+// Client-side decorations (decorations:false + custom titlebar) avoid the
+// old KWin hide()/show() decoration remap bug on Wayland.
+
+/// Restore taskbar entry, show and focus the main window.
+fn restore_window(w: &tauri::WebviewWindow) {
+    let _ = w.set_skip_taskbar(false);
+    if w.is_minimized().unwrap_or(false) {
+        let _ = w.unminimize();
+    }
+    let _ = w.show();
+    let _ = w.set_focus();
+}
+
+/// Hide to tray and drop the taskbar entry.
+fn stash_window(w: &tauri::WebviewWindow) {
+    let _ = w.set_skip_taskbar(true);
+    let _ = w.hide();
+}
 
 /// Bring the window back to the foreground.
 fn win_show(app: &AppHandle) {
     let a = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(w) = a.get_webview_window("main") {
-            if w.is_minimized().unwrap_or(false) {
-                let _ = w.unminimize();
-            }
-            let _ = w.show();
-            let _ = w.set_focus();
+            restore_window(&w);
         }
     });
 }
@@ -145,7 +157,7 @@ fn win_hide(app: &AppHandle) {
     let a = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(w) = a.get_webview_window("main") {
-            let _ = w.hide();
+            stash_window(&w);
         }
     });
 }
@@ -160,15 +172,24 @@ fn win_primary(app: &AppHandle) {
         if let Some(w) = a.get_webview_window("main") {
             let visible = w.is_visible().unwrap_or(false);
             if !visible {
-                let _ = w.show();
-                let _ = w.set_focus();
+                restore_window(&w);
             } else if w.is_focused().unwrap_or(false) {
-                let _ = w.hide();
+                stash_window(&w);
             } else {
                 let _ = w.set_focus();
             }
         }
     });
+}
+
+/// Hide main window to tray (skip taskbar). Safe from any thread.
+pub fn hide_to_tray(app: &AppHandle) {
+    win_hide(app);
+}
+
+/// Show main window and restore taskbar. Safe from any thread.
+pub fn show_from_tray(app: &AppHandle) {
+    win_show(app);
 }
 
 /// Dispatch a tray menu action id back to the frontend / window.
@@ -592,14 +613,13 @@ pub fn refresh_tray_async(app: &AppHandle) {
     imp::refresh(app);
 }
 
-/// Taskbar-visibility policy: when minimize-to-tray is on, the window is
-/// represented solely by the tray icon, so it is removed from the taskbar
-/// (restored when the mode is off). Effective on X11; native Wayland ignores
-/// the hint. Marshalled to the main thread (GTK-touching).
-pub fn apply_taskbar_async(app: &AppHandle, skip: bool) {
+/// Align skip_taskbar with current visibility (visible → in taskbar).
+/// Call after tray-setting changes so a still-open window is not orphaned.
+pub fn sync_taskbar_to_visibility(app: &AppHandle) {
     let a = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(w) = a.get_webview_window("main") {
+            let skip = !w.is_visible().unwrap_or(true);
             let _ = w.set_skip_taskbar(skip);
         }
     });
