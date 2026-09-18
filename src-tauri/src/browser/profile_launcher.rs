@@ -26,6 +26,86 @@ fn read_window_size_from_xulstore(firefox_profile_dir: &std::path::Path) -> Opti
     if w > 0 && h > 0 { Some((w, h)) } else { None }
 }
 
+const UI_STATE_PREF: &str = "user_pref(\"browser.uiCustomization.state\", \"";
+const TABSTRIP_WIDGETS: [&str; 2] = ["new-tab-button", "alltabs-button"];
+const BOOKMARKS_WIDGET: &str = "personal-bookmarks";
+
+/// Decodes a JS string literal body ("\\" and "\"" escapes) from prefs.js.
+fn unescape_pref(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(n) = chars.next() {
+                out.push(n);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn escape_pref(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Moves tab-strip and bookmarks widgets back from nav-bar if a previous
+/// Camoufox build pinned them there. Returns true if placements were changed.
+fn repair_placements(state: &mut serde_json::Value) -> bool {
+    let Some(placements) = state.get_mut("placements").and_then(|p| p.as_object_mut()) else {
+        return false;
+    };
+    let Some(nav_bar) = placements.get_mut("nav-bar").and_then(|v| v.as_array_mut()) else {
+        return false;
+    };
+    let misplaced = |id: &serde_json::Value| {
+        id.as_str()
+            .is_some_and(|s| TABSTRIP_WIDGETS.contains(&s) || s == BOOKMARKS_WIDGET)
+    };
+    if !nav_bar.iter().any(misplaced) {
+        return false;
+    }
+    nav_bar.retain(|id| !misplaced(id));
+    placements.insert(
+        "TabsToolbar".into(),
+        serde_json::json!(["tabbrowser-tabs", "new-tab-button", "alltabs-button"]),
+    );
+    placements.insert("PersonalToolbar".into(), serde_json::json!([BOOKMARKS_WIDGET]));
+    true
+}
+
+/// Fixes browser.uiCustomization.state in prefs.js before launch (browser is not running).
+fn repair_ui_customization_state(firefox_profile_dir: &std::path::Path) {
+    let prefs_path = firefox_profile_dir.join("prefs.js");
+    let Ok(content) = std::fs::read_to_string(&prefs_path) else {
+        return;
+    };
+    let Some(start) = content.find(UI_STATE_PREF) else {
+        return;
+    };
+    let value_start = start + UI_STATE_PREF.len();
+    let rest = &content[value_start..];
+    let line = rest.split('\n').next().unwrap_or(rest).trim_end_matches('\r');
+    let Some(raw) = line.strip_suffix("\");") else {
+        return;
+    };
+    let value_len = raw.len();
+    let Ok(mut state) = serde_json::from_str::<serde_json::Value>(&unescape_pref(raw)) else {
+        return;
+    };
+    if !repair_placements(&mut state) {
+        return;
+    }
+    let fixed = format!(
+        "{}{}{}",
+        &content[..value_start],
+        escape_pref(&state.to_string()),
+        &content[value_start + value_len..]
+    );
+    std::fs::write(&prefs_path, fixed).ok();
+}
+
 /// Core launch orchestrator: proxy setup → user.js → binary resolution → spawn.
 /// Does not touch the DB — callers handle DB reads and status updates.
 pub async fn launch_profile(
@@ -37,6 +117,7 @@ pub async fn launch_profile(
     let profile_path = PathBuf::from(&profile.profile_path);
     let firefox_profile_dir = profile_path.join("firefox-profile");
     std::fs::create_dir_all(&firefox_profile_dir).map_err(err)?;
+    repair_ui_customization_state(&firefox_profile_dir);
 
     let (effective_proxy, local_proxy_stop) = setup_proxy(proxy).await?;
 

@@ -112,9 +112,31 @@ const SEARCH_ENGINE_BLOCK: &str = r#"if (true) {
       ];
     }"#;
 
-/// Marker file that stores the mtime (seconds) of omni.ja after the last successful patch.
+/// Bump when the set of omni.ja patches changes so already-patched installs get re-patched.
+const OMNI_PATCH_VERSION: u32 = 2;
+
+/// Marker file storing "<omni.ja mtime secs>:<OMNI_PATCH_VERSION>" after the last successful patch.
 fn patch_marker_path(install_dir: &Path) -> PathBuf {
     install_dir.join(".rb_patch_mtime")
+}
+
+/// Reads the marker as (mtime, patch version). Legacy "<mtime>" format yields version 0.
+fn read_patch_marker(marker: &Path) -> (u64, u32) {
+    let text = std::fs::read_to_string(marker).unwrap_or_default();
+    let mut parts = text.trim().split(':');
+    let mtime = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let version = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (mtime, version)
+}
+
+/// Records the current omni.ja mtime and patch version after a successful patch.
+fn write_patch_marker(install_dir: &Path) {
+    let mtime = file_mtime_secs(&install_dir.join("omni.ja"));
+    std::fs::write(
+        patch_marker_path(install_dir),
+        format!("{mtime}:{OMNI_PATCH_VERSION}"),
+    )
+    .ok();
 }
 
 fn file_mtime_secs(path: &Path) -> u64 {
@@ -300,21 +322,49 @@ fn patch_toolkit_omni(install_dir: &Path) -> Result<(), String> {
     )
 }
 
-/// Clears search-config-overrides-v2.json in browser/omni.ja to prevent parse errors.
+/// Camoufox pin-addons hack: pins ANY widget to nav-bar before the web-extension check.
+/// On Firefox 152 `onAreaNodeRegistered` calls this for every widget of every toolbar,
+/// so new-tab-button / alltabs-button / personal-bookmarks end up in nav-bar on each start.
+const ADDONS_PIN_BROKEN: &str = "    inPanel = false;\n    this.pinToToolbar(aWidgetId, true);\n    if (!CustomizableUI.isWebExtensionWidget(aWidgetId)) {\n      return;\n    }\n";
+const ADDONS_PIN_FIXED: &str = "    if (!CustomizableUI.isWebExtensionWidget(aWidgetId)) {\n      return;\n    }\n    inPanel = false;\n    this.pinToToolbar(aWidgetId, true);\n";
+
+/// Patches browser/omni.ja:
+/// - clears search-config-overrides-v2.json to prevent parse errors;
+/// - moves the web-extension check before Camoufox's pin-to-toolbar hack in browser-addons.js.
 fn patch_browser_omni(install_dir: &Path) -> Result<(), String> {
     let omni_path = install_dir.join("browser").join("omni.ja");
     if !omni_path.exists() {
         return Ok(());
     }
 
-    let empty_overrides = br#"{"data":[],"timestamp":0}"#;
-    patch_zip_file(
-        &omni_path,
-        &[(
-            "defaults/settings/main/search-config-overrides-v2.json",
-            empty_overrides,
-        )],
-    )
+    use std::io::Read;
+    use zip::ZipArchive;
+
+    let addons_target = "chrome/browser/content/browser/browser-addons.js";
+    let src = std::fs::File::open(&omni_path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(src).map_err(|e| e.to_string())?;
+    let patched_addons = match archive.by_name(addons_target) {
+        Ok(mut entry) => {
+            let mut buf = Vec::new();
+            entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+            let text = String::from_utf8_lossy(&buf).into_owned();
+            // Not found = already patched or structure changed — leave untouched
+            text.contains(ADDONS_PIN_BROKEN)
+                .then(|| text.replace(ADDONS_PIN_BROKEN, ADDONS_PIN_FIXED))
+        }
+        Err(_) => None,
+    };
+    drop(archive);
+
+    let empty_overrides: &[u8] = br#"{"data":[],"timestamp":0}"#;
+    let mut replacements: Vec<(&str, &[u8])> = vec![(
+        "defaults/settings/main/search-config-overrides-v2.json",
+        empty_overrides,
+    )];
+    if let Some(addons) = &patched_addons {
+        replacements.push((addons_target, addons.as_bytes()));
+    }
+    patch_zip_file(&omni_path, &replacements)
 }
 
 /// Patches both omni.ja files. Safe to call even if already patched (mtime guard in ensure_omni_patched).
@@ -385,8 +435,8 @@ pub fn clear_all_startup_caches(app_data_dir: &Path) {
     }
 }
 
-/// Checks whether omni.ja has changed since the last patch (by mtime).
-/// If so, re-patches and clears caches. Idempotent. Callers must hold
+/// Checks whether omni.ja has changed since the last patch (by mtime) or the
+/// patch set version was bumped. If so, re-patches and clears caches. Idempotent. Callers must hold
 /// `INSTALL_DIR_LOCK` — the mtime check + repack is a read-modify-write on the
 /// shared install dir and must not run concurrently with another launch.
 pub fn ensure_omni_patched(install_dir: &Path, app_data_dir: &Path) {
@@ -405,17 +455,13 @@ pub fn ensure_omni_patched(install_dir: &Path, app_data_dir: &Path) {
     }
 
     let current_mtime = file_mtime_secs(&omni_path);
-    let marker = patch_marker_path(install_dir);
-    let stored_mtime: u64 = std::fs::read_to_string(&marker)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
+    let (stored_mtime, stored_version) = read_patch_marker(&patch_marker_path(install_dir));
 
-    if current_mtime == stored_mtime {
+    if current_mtime == stored_mtime && stored_version == OMNI_PATCH_VERSION {
         if policies_changed {
             clear_all_startup_caches(app_data_dir);
         }
-        return; // omni.ja unchanged since last patch — skip re-patching it
+        return; // omni.ja unchanged and patch set current — skip re-patching
     }
 
     if let Err(e) = patch_omni_ja(install_dir) {
@@ -426,14 +472,16 @@ pub fn ensure_omni_patched(install_dir: &Path, app_data_dir: &Path) {
         return;
     }
 
-    // Store mtime of the patched omni.ja
-    let new_mtime = file_mtime_secs(&omni_path);
-    std::fs::write(&marker, new_mtime.to_string()).ok();
+    write_patch_marker(install_dir);
 
     clear_all_startup_caches(app_data_dir);
 }
 
-fn build_stripe_bg(color_left: &str, color_right: &str, label: &str) -> String {
+/// Height of the profile color stripe above the tab strip (px).
+pub const STRIPE_HEIGHT: u32 = 14;
+
+/// Builds the #TabsToolbar background: gradient stripe with an optional SVG label.
+pub fn build_stripe_bg(color_left: &str, color_right: &str, label: &str) -> String {
     let gradient = format!("linear-gradient(to right, {color_left}, {color_right})");
     if label.is_empty() {
         return gradient;
@@ -443,9 +491,9 @@ fn build_stripe_bg(color_left: &str, color_right: &str, label: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;");
     let svg = format!(
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 10'>\
-         <text x='50' y='8' text-anchor='middle' fill='white' fill-opacity='0.8' \
-         font-size='7' font-family='system-ui,sans-serif'>{safe}</text></svg>"
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 {STRIPE_HEIGHT}'>\
+         <text x='50' y='11' text-anchor='middle' fill='white' fill-opacity='0.8' \
+         font-size='10' font-family='system-ui,sans-serif'>{safe}</text></svg>"
     );
     let encoded = svg
         .replace('<', "%3C")
@@ -506,6 +554,8 @@ pub fn patch_chrome_css(
         );
 
     let stripe_bg = build_stripe_bg(color_left, color_right, label);
+    let stripe_h = STRIPE_HEIGHT;
+    let stripe_pad = STRIPE_HEIGHT + 4;
 
     patched.push_str(&format!(
         r#"
@@ -550,10 +600,10 @@ pub fn patch_chrome_css(
 /* Profile color stripe + padding */
 #TabsToolbar {{
   background-image: {stripe_bg} !important;
-  background-size: 100% 10px !important;
+  background-size: 100% {stripe_h}px !important;
   background-position: top !important;
   background-repeat: no-repeat !important;
-  padding-block-start: 14px !important;
+  padding-block-start: {stripe_pad}px !important;
   padding-block-end: 0 !important;
   border-block-end: none !important;
 }}
@@ -978,10 +1028,8 @@ fn extract_and_install(
     patch_omni_ja(&dest_dir).map_err(|e| format!("omni.ja patch failed: {e}"))?;
     patch_policies_json(&dest_dir);
 
-    // Store mtime after initial patch so ensure_omni_patched skips on first launch
-    let omni_path = dest_dir.join("omni.ja");
-    let mtime = file_mtime_secs(&omni_path);
-    std::fs::write(patch_marker_path(&dest_dir), mtime.to_string()).ok();
+    // Store marker after initial patch so ensure_omni_patched skips on first launch
+    write_patch_marker(&dest_dir);
 
     std::fs::write(dest_dir.join("version.txt"), version).ok();
 

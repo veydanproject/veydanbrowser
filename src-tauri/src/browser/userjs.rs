@@ -190,38 +190,18 @@ fn apply_proxy_prefs(prefs: &mut Vec<String>, proxy: &Proxy) {
 /// All structural UI overrides live in the shared chrome.css (patch_chrome_css).
 /// userChrome.css is loaded after chrome.css so !important here wins over chrome.css.
 pub fn camoufox_user_chrome(color_left: &str, color_right: &str, label: &str) -> String {
+    use crate::commands::camoufox::{build_stripe_bg, STRIPE_HEIGHT};
     let stripe_bg = build_stripe_bg(color_left, color_right, label);
     format!(
         r#"/* Veydan Browser: per-profile color indicator — overrides chrome.css #TabsToolbar */
 #TabsToolbar {{
   background-image: {stripe_bg} !important;
-  background-size: 100% 10px !important;
+  background-size: 100% {STRIPE_HEIGHT}px !important;
   background-position: top !important;
   background-repeat: no-repeat !important;
 }}
 "#
     )
-}
-
-fn build_stripe_bg(color_left: &str, color_right: &str, label: &str) -> String {
-    let gradient = format!("linear-gradient(to right, {color_left}, {color_right})");
-    if label.is_empty() {
-        return gradient;
-    }
-    let safe = label
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;");
-    let svg = format!(
-        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 10'>\
-         <text x='50' y='8' text-anchor='middle' fill='white' fill-opacity='0.8' \
-         font-size='7' font-family='system-ui,sans-serif'>{safe}</text></svg>"
-    );
-    let encoded = svg
-        .replace('<', "%3C")
-        .replace('>', "%3E")
-        .replace('#', "%23");
-    format!("url(\"data:image/svg+xml,{encoded}\"), {gradient}")
 }
 
 fn pref_string(key: &str, value: &str) -> String {
