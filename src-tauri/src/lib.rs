@@ -89,6 +89,8 @@ pub struct AppState {
     pub tray_settings: Arc<TraySettings>,
     pub tray_labels: Arc<Mutex<TrayLabels>>,
     pub tray: Arc<Mutex<Option<TrayIcon>>>,
+    /// Notes dir watcher; dropped before a backup restore releases its handle.
+    pub notes_watcher: Arc<Mutex<Option<notify::RecommendedWatcher>>>,
 }
 
 /// Read a boolean flag from `app_settings` (stored as "1"/"0"), defaulting to
@@ -212,12 +214,18 @@ pub fn run() {
                 tray_settings: tray_settings.clone(),
                 tray_labels: Arc::new(Mutex::new(TrayLabels::default())),
                 tray: Arc::new(Mutex::new(None)),
+                notes_watcher: Arc::new(Mutex::new(None)),
             });
 
-            commands::notes::start_notes_watcher(app.handle().clone(), data_dir, {
+            {
                 let state = app.state::<AppState>();
-                state.notes_custom_dir.read().ok().and_then(|g| g.clone())
-            });
+                let custom_dir = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
+                let watcher =
+                    commands::notes::start_notes_watcher(app.handle().clone(), data_dir, custom_dir);
+                if let Ok(mut slot) = state.notes_watcher.lock() {
+                    *slot = watcher;
+                };
+            }
 
             // Scheduled backups: ticks every 60s, catches up missed runs on start.
             start_backup_scheduler(app.handle().clone());

@@ -296,14 +296,20 @@ pub async fn sync_notes_index(
 
 // ── File watcher ──────────────────────────────────────────────────────────────
 
-pub fn start_notes_watcher(app_handle: tauri::AppHandle, app_data_dir: PathBuf, custom_dir: Option<PathBuf>) {
+/// Starts watching the notes documents dir. The returned watcher owns the
+/// directory handle; dropping it stops the watch and ends the event thread.
+pub fn start_notes_watcher(
+    app_handle: tauri::AppHandle,
+    app_data_dir: PathBuf,
+    custom_dir: Option<PathBuf>,
+) -> Option<notify::RecommendedWatcher> {
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
     let (tx, rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
     let docs_dir = effective_docs_dir(&app_data_dir, custom_dir.as_ref());
 
     let Ok(mut watcher) = RecommendedWatcher::new(tx, Config::default()) else {
-        return;
+        return None;
     };
 
     if docs_dir.exists() {
@@ -311,7 +317,6 @@ pub fn start_notes_watcher(app_handle: tauri::AppHandle, app_data_dir: PathBuf, 
     }
 
     std::thread::spawn(move || {
-        let _watcher = watcher; // keep alive
         for res in rx {
             if let Ok(event) = res {
                 if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
@@ -329,5 +334,6 @@ pub fn start_notes_watcher(app_handle: tauri::AppHandle, app_data_dir: PathBuf, 
             }
         }
     });
+    Some(watcher)
 }
 

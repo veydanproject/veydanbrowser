@@ -559,15 +559,25 @@ pub async fn backup_restore(
     }
 
     // Release every handle on the live data before renaming it. Windows
-    // refuses to rename files still open by SQLite or a running browser.
+    // refuses to rename files/dirs still open by SQLite, a running browser
+    // or the notes directory watcher.
     emit_restore_progress(&app, "swapping", 98);
     crate::browser::launch::stop_all(&state.browser).await;
+    if let Ok(mut slot) = state.notes_watcher.lock() {
+        slot.take();
+    }
     state.db.close().await;
 
     // Swap top-level entries into place. Camoufox and other files stay put.
     // The pool is closed at this point, so we restart even on failure —
     // swap_in has already rolled the live data back.
-    if let Err(e) = swap_in(&data_dir, &staging, &manifest) {
+    let (data_dir2, staging2) = (data_dir.clone(), staging.clone());
+    let swap_res = tauri::async_runtime::spawn_blocking(move || {
+        swap_in(&data_dir2, &staging2, &manifest)
+    })
+    .await
+    .unwrap_or_else(|e| Err(e.to_string()));
+    if let Err(e) = swap_res {
         eprintln!("backup restore: swap failed, keeping current data: {e}");
     }
     let _ = std::fs::remove_dir_all(&staging);
@@ -744,7 +754,7 @@ fn swap_in(data_dir: &Path, staging: &Path, manifest: &Manifest) -> Result<(), S
     for name in entries {
         let live = data_dir.join(name);
         if live.exists() {
-            std::fs::rename(&live, old.join(name))
+            rename_retry(&live, &old.join(name))
                 .map_err(|e| rollback(format!("Cannot move {name}: {e}")))?;
         }
     }
@@ -752,7 +762,7 @@ fn swap_in(data_dir: &Path, staging: &Path, manifest: &Manifest) -> Result<(), S
     for name in entries {
         let staged = staging.join(name);
         if staged.exists() {
-            std::fs::rename(&staged, data_dir.join(name))
+            rename_retry(&staged, &data_dir.join(name))
                 .map_err(|e| rollback(format!("Cannot place {name}: {e}")))?;
         }
     }
@@ -771,6 +781,26 @@ fn swap_in(data_dir: &Path, staging: &Path, manifest: &Manifest) -> Result<(), S
     // Success — drop the safety copy.
     let _ = std::fs::remove_dir_all(&old);
     Ok(())
+}
+
+/// `fs::rename` with retries: on Windows a just-killed browser or an AV
+/// scanner can hold a handle for a moment and fail the rename with a
+/// sharing violation.
+fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    const ATTEMPTS: u32 = 15;
+    const DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt + 1 < ATTEMPTS => {
+                attempt += 1;
+                eprintln!("backup restore: rename {} failed ({e}), retry {attempt}", from.display());
+                std::thread::sleep(DELAY);
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
