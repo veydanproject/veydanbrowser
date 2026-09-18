@@ -91,8 +91,25 @@ export PKG_CONFIG_PATH="$PKG_DIR:$DEV_PREFIX/usr/share/pkgconfig:/usr/lib/x86_64
 export CFLAGS="-I$DEV_PREFIX/usr/include -I$DEV_PREFIX/usr/include/x86_64-linux-gnu"
 export CXXFLAGS="$CFLAGS"
 export RUSTFLAGS="-L $DEV_PREFIX/usr/lib/x86_64-linux-gnu -L /usr/lib/x86_64-linux-gnu"
+# Project-local compiler/linker/pkg-config extracted into the prefix
+export PATH="$DEV_PREFIX/usr/bin:$PATH"
+export GCC_EXEC_PREFIX="$DEV_PREFIX/usr/lib/gcc/"
 # Runtime: let the loader find the WebKit .so.0 we extracted into the prefix
 export LD_LIBRARY_PATH="$LIBDIR:$LD_LIBRARY_PATH"
+export XKB_CONFIG_ROOT="${XKB_CONFIG_ROOT:-$DEV_PREFIX/usr/share/X11/xkb}"
+export FONTCONFIG_PATH="${FONTCONFIG_PATH:-$DEV_PREFIX/etc/fonts}"
+export FONTCONFIG_FILE="${FONTCONFIG_FILE:-$DEV_PREFIX/etc/fonts/fonts.conf}"
+# WSL/WebKit: skip GPU compositing (EGL often aborts under WSLg)
+export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-1}"
+export WEBKIT_DISABLE_DMABUF_RENDERER="${WEBKIT_DISABLE_DMABUF_RENDERER:-1}"
+# Prefix Mesa: glvnd has no /usr/share/glvnd on this host, and WebKit aborts
+# if WAYLAND_DISPLAY points at WSLg's broken EGL.
+export __EGL_VENDOR_LIBRARY_DIRS="$DEV_PREFIX/usr/share/glvnd/egl_vendor.d"
+export LIBGL_DRIVERS_PATH="$LIBDIR/dri"
+export LIBGL_ALWAYS_SOFTWARE=1
+export GDK_BACKEND=x11
+export GSETTINGS_SCHEMA_DIR="$DEV_PREFIX/usr/share/glib-2.0/schemas"
+export XDG_DATA_DIRS="$DEV_PREFIX/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 # WebKit spawns helper binaries (WebKitNetworkProcess, WebKitWebProcess, …) from
 # a /usr path compiled into the library with no env override. We run the app in
 # a bubblewrap sandbox that bind-mounts our prefix copy onto that path — wired

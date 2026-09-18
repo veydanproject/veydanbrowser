@@ -15,6 +15,10 @@ LIBDIR="$SCRIPT_DIR/.dev-prefix/usr/lib/x86_64-linux-gnu"
 WK="$LIBDIR/webkit2gtk-4.1"
 SYS_WK="/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1"
 
+# WSLg sets WAYLAND_DISPLAY; WebKit then inits Wayland EGL and abort()s.
+export GDK_BACKEND=x11
+unset WAYLAND_DISPLAY
+
 # If the host already has WebKit installed at the system path, or bwrap isn't
 # available, just run the binary directly.
 if [ -e "$SYS_WK/WebKitNetworkProcess" ] || ! command -v bwrap >/dev/null 2>&1; then

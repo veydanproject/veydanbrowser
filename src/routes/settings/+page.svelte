@@ -87,6 +87,9 @@
   let restoreTarget = $state<BackupFileInfo | null>(null);
   let restorePassword = $state('');
   let restoreError = $state('');
+  let restoring = $state(false);
+  let restorePhase = $state('');
+  let restorePercent = $state(0);
 
   const modeOptions = $derived([
     { value: 'interval', label: $t('settings_backup_mode_interval') },
@@ -165,13 +168,22 @@
     restoreError = '';
   }
 
+  function closeRestore() {
+    if (restoring) return;
+    restoreTarget = null;
+  }
+
   async function confirmRestore() {
     if (!restoreTarget) return;
     restoreError = '';
+    restoring = true;
+    restorePhase = '';
+    restorePercent = 0;
     try {
       // On success the app restarts, so this call never resolves.
       await api.backup.restore(restoreTarget.path, restorePassword);
     } catch (e) {
+      restoring = false;
       restoreError = formatError(e);
     }
   }
@@ -274,6 +286,11 @@
         backupDone = $t('settings_backup_done');
         setTimeout(() => (backupDone = ''), 4000);
         await Promise.all([refreshBackupList(), (async () => { backupCfg = await api.backup.getConfig().catch(() => backupCfg); })()]);
+      }));
+
+      unlisteners.push(await listen<{ phase: string; percent: number }>('backup://restore-progress', (e) => {
+        restorePhase = e.payload.phase;
+        restorePercent = e.payload.percent;
       }));
 
       unlisteners.push(await listen<string>('backup://error', (e) => {
@@ -864,7 +881,7 @@
 </div>
 
 {#if restoreTarget}
-  <Dialog open={true} onclose={() => (restoreTarget = null)} title={$t('settings_backup_restore_title')}>
+  <Dialog open={true} onclose={closeRestore} title={$t('settings_backup_restore_title')}>
     <div class="restore-body">
       <p class="backup-name">{restoreTarget.name}</p>
       <p class="warn-msg">{$t('settings_backup_restore_warn')}</p>
@@ -874,15 +891,24 @@
         bind:value={restorePassword}
         placeholder={$t('settings_backup_password')}
         autocomplete="off"
+        disabled={restoring}
       />
+      {#if restoring}
+        <div class="progress-wrap">
+          <div class="progress-bar">
+            <div class="progress-fill" style="width: {restorePercent}%"></div>
+          </div>
+          <span class="progress-label">{restorePhase} · {restorePercent}%</span>
+        </div>
+      {/if}
       {#if restoreError}<div class="error-msg">{restoreError}</div>{/if}
     </div>
     {#snippet footer()}
-      <button class="btn btn-ghost btn-sm" onclick={() => (restoreTarget = null)}>
+      <button class="btn btn-ghost btn-sm" disabled={restoring} onclick={closeRestore}>
         {$t('settings_backup_cancel')}
       </button>
-      <button class="btn btn-danger btn-sm" disabled={!restorePassword} onclick={confirmRestore}>
-        {$t('settings_backup_restore_confirm')}
+      <button class="btn btn-danger btn-sm" disabled={!restorePassword || restoring} onclick={confirmRestore}>
+        {restoring ? $t('settings_backup_restoring') : $t('settings_backup_restore_confirm')}
       </button>
     {/snippet}
   </Dialog>

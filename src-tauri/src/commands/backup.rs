@@ -45,6 +45,8 @@ const CACHE_BLACKLIST: &[&str] = &[
 ];
 
 const FORMAT_VERSION: u32 = 1;
+/// Max scrypt log2(N) accepted on restore (age default is 18-22 on modern HW).
+const MAX_SCRYPT_WORK_FACTOR: u8 = 22;
 const FILE_PREFIX: &str = "veydan-backup-";
 const FILE_EXT: &str = "vbk";
 
@@ -515,9 +517,11 @@ pub async fn backup_restore(
         .join(uuid::Uuid::new_v4().to_string());
 
     // Decrypt + decompress + unpack into staging (blocking work).
+    emit_restore_progress(&app, "decrypting", 0);
     let staging2 = staging.clone();
+    let app2 = app.clone();
     let unpack_res = tauri::async_runtime::spawn_blocking(move || {
-        extract_archive(Path::new(&path), &password, &staging2)
+        extract_archive(Some(&app2), Path::new(&path), &password, &staging2)
     })
     .await
     .map_err(AppError::other)?;
@@ -546,30 +550,160 @@ pub async fn backup_restore(
         )));
     }
 
-    // Swap top-level entries into place. Camoufox and other files stay put.
-    if let Err(e) = swap_in(&data_dir, &staging, &manifest) {
+    // The source machine's data dir may differ from ours: rewrite stored
+    // absolute paths so profiles/notes resolve after the swap.
+    emit_restore_progress(&app, "remapping", 95);
+    if let Err(e) = remap_paths(&staging, &data_dir) {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(AppError::other(e));
     }
+
+    // Release every handle on the live data before renaming it. Windows
+    // refuses to rename files still open by SQLite or a running browser.
+    emit_restore_progress(&app, "swapping", 98);
+    crate::browser::launch::stop_all(&state.browser).await;
+    state.db.close().await;
+
+    // Swap top-level entries into place. Camoufox and other files stay put.
+    // The pool is closed at this point, so we restart even on failure —
+    // swap_in has already rolled the live data back.
+    if let Err(e) = swap_in(&data_dir, &staging, &manifest) {
+        eprintln!("backup restore: swap failed, keeping current data: {e}");
+    }
     let _ = std::fs::remove_dir_all(&staging);
+    emit_restore_progress(&app, "restarting", 100);
 
     // Relaunch so the app rebinds to the restored DB/profiles.
     // `restart()` diverges (-> !), so this is the function's tail expression.
     app.restart()
 }
 
-fn extract_archive(src: &Path, password: &str, dest: &Path) -> Result<(), String> {
+/// Rewrite absolute paths inside the staged DB to point at `data_dir`.
+/// Profiles always live at `profiles/<id>`; note files are matched by basename
+/// against the staged `notes/documents` (custom-dir notes are left untouched).
+fn remap_paths(staging: &Path, data_dir: &Path) -> Result<(), String> {
+    let conn = rusqlite::Connection::open(staging.join("profiles.db"))
+        .map_err(|e| format!("Cannot open restored DB: {e}"))?;
+
+    let profiles_dir = data_dir.join("profiles");
+    let mut stmt = conn
+        .prepare("SELECT id FROM profiles")
+        .map_err(|e| e.to_string())?;
+    let ids = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(stmt);
+    for id in ids {
+        let path = profiles_dir.join(&id).to_string_lossy().to_string();
+        conn.execute(
+            "UPDATE profiles SET profile_path = ?1 WHERE id = ?2",
+            rusqlite::params![path, id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let staged_docs = staging.join("notes").join("documents");
+    let docs_dir = data_dir.join("notes").join("documents");
+    let mut stmt = conn
+        .prepare("SELECT id, file_path FROM notes")
+        .map_err(|e| e.to_string())?;
+    let notes = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<(String, String)>, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(stmt);
+    for (id, file_path) in notes {
+        // Basename split on both separators: the backup may come from Windows.
+        let Some(name) = file_path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()) else {
+            continue;
+        };
+        if !staged_docs.join(name).is_file() {
+            continue;
+        }
+        let path = docs_dir.join(name).to_string_lossy().to_string();
+        conn.execute(
+            "UPDATE notes SET file_path = ?1 WHERE id = ?2",
+            rusqlite::params![path, id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn emit_restore_progress(app: &AppHandle, phase: &str, percent: u32) {
+    let _ = app.emit(
+        "backup://restore-progress",
+        Progress {
+            phase: phase.into(),
+            percent,
+        },
+    );
+}
+
+/// Decrypt + decompress + unpack `src` into `dest`, reporting extraction
+/// progress. `manifest.json` is the first tar entry, so its entry count gives
+/// the total. Extraction spans 5..95% (decrypt before, remap/swap after).
+fn extract_archive(
+    app: Option<&AppHandle>,
+    src: &Path,
+    password: &str,
+    dest: &Path,
+) -> Result<(), String> {
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
     let file = File::open(src).map_err(|e| e.to_string())?;
     let decryptor = age::Decryptor::new(file).map_err(|e| format!("Cannot read backup: {e}"))?;
-    let identity = age::scrypt::Identity::new(SecretString::from(password.to_owned()));
+    let mut identity = age::scrypt::Identity::new(SecretString::from(password.to_owned()));
+    // age caps the accepted work factor relative to *this* machine's speed;
+    // a backup made on a faster machine (or read by a debug build) would be
+    // rejected as ExcessiveWork. Use a fixed cap instead.
+    identity.set_max_work_factor(MAX_SCRYPT_WORK_FACTOR);
     let reader = decryptor
         .decrypt(std::iter::once(&identity as &dyn age::Identity))
-        .map_err(|_| "Wrong password or corrupt backup".to_string())?;
+        .map_err(|e| match e {
+            age::DecryptError::ExcessiveWork { .. } => {
+                "Backup encryption is too expensive to unwrap on this machine".to_string()
+            }
+            _ => "Wrong password or corrupt backup".to_string(),
+        })?;
     let zstd_reader = zstd::stream::read::Decoder::new(reader).map_err(|e| e.to_string())?;
     let mut archive = tar::Archive::new(zstd_reader);
-    // tar crate rejects `..` and absolute paths during unpack by default.
-    archive.unpack(dest).map_err(|e| e.to_string())?;
+
+    // manifest.json + profiles.db + entries; refined once the manifest is read.
+    let mut total = 2usize;
+    let mut done = 0usize;
+    let mut last_pct = 0u32;
+    for entry in archive.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        // `unpack_in` rejects `..` and absolute paths like `unpack` does.
+        let unpacked = entry.unpack_in(dest).map_err(|e| e.to_string())?;
+        done += 1;
+
+        if unpacked && done == 1 {
+            let is_manifest = entry
+                .path()
+                .map(|p| p.as_os_str() == "manifest.json")
+                .unwrap_or(false);
+            if is_manifest {
+                if let Some(m) = std::fs::read(dest.join("manifest.json"))
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Manifest>(&b).ok())
+                {
+                    total = m.entries.len() + 2;
+                }
+            }
+        }
+
+        if let Some(app) = app {
+            let pct = 5 + pct(done, total.max(done)) * 90 / 100;
+            if pct != last_pct {
+                last_pct = pct;
+                emit_restore_progress(app, "extracting", pct);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -590,17 +724,36 @@ fn swap_in(data_dir: &Path, staging: &Path, manifest: &Manifest) -> Result<(), S
             let _ = std::fs::rename(&live, old.join(sidecar));
         }
     }
+    // Undo a partial swap: anything saved in `old` goes back to its live path
+    // (dropping whatever staged entry may have been placed there meanwhile).
+    let rollback = |err: String| {
+        let all = ["profiles.db", "profiles", "notes", "profiles.db-wal", "profiles.db-shm"];
+        for name in all {
+            let saved = old.join(name);
+            if !saved.exists() {
+                continue;
+            }
+            let live = data_dir.join(name);
+            let _ = std::fs::remove_dir_all(&live);
+            let _ = std::fs::remove_file(&live);
+            let _ = std::fs::rename(&saved, &live);
+        }
+        let _ = std::fs::remove_dir_all(&old);
+        err
+    };
     for name in entries {
         let live = data_dir.join(name);
         if live.exists() {
-            std::fs::rename(&live, old.join(name)).map_err(|e| e.to_string())?;
+            std::fs::rename(&live, old.join(name))
+                .map_err(|e| rollback(format!("Cannot move {name}: {e}")))?;
         }
     }
     // Move staged → live (only what the backup actually contains).
     for name in entries {
         let staged = staging.join(name);
         if staged.exists() {
-            std::fs::rename(&staged, data_dir.join(name)).map_err(|e| e.to_string())?;
+            std::fs::rename(&staged, data_dir.join(name))
+                .map_err(|e| rollback(format!("Cannot place {name}: {e}")))?;
         }
     }
 
@@ -778,7 +931,7 @@ mod tests {
         assert!(out.exists() && std::fs::metadata(&out).unwrap().len() > 0);
 
         let dest = root.join("restored");
-        extract_archive(&out, "s3cret", &dest).expect("extract");
+        extract_archive(None, &out, "s3cret", &dest).expect("extract");
 
         assert_eq!(std::fs::read(dest.join("profiles.db")).unwrap(), b"SQLITE-SNAPSHOT-BYTES");
         assert_eq!(
@@ -804,7 +957,7 @@ mod tests {
         write_archive(None, &out, "right", b"{}", &db, &[]).unwrap();
 
         let dest = root.join("out");
-        let err = extract_archive(&out, "wrong", &dest);
+        let err = extract_archive(None, &out, "wrong", &dest);
         assert!(err.is_err(), "wrong password must fail");
         let _ = std::fs::remove_dir_all(&root);
     }

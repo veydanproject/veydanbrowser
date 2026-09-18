@@ -27,8 +27,8 @@ export default defineConfig(async () => ({
         }
       : { protocol: "ws", host: "127.0.0.1", port: 1420 },
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` and local toolchain dirs
+      ignored: ["**/src-tauri/**", "**/.dev-prefix/**", "**/.toolchains/**", "**/.pnpm-store/**"],
     },
   },
 }));
