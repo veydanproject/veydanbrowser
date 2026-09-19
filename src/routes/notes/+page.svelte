@@ -352,10 +352,10 @@
 {/if}
 
 <style>
-  /* width / centering / height come from global .page + .page--fill */
   .notes-page {
     overflow: hidden;
     gap: 0.875rem;
+    max-width: none;
   }
 
   /* Search now lives at the top of the sidebar (per redesign) */

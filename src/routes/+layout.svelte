@@ -219,6 +219,10 @@
   function getWorkspaceHref(p: Profile) {
     return p.workspace_id ? `/workspace/${p.workspace_id}` : '/';
   }
+
+  const notesFullWidth = $derived(
+    standaloneNotes || $page.url.pathname.startsWith('/notes')
+  );
 </script>
 
 <div class="app-frame" class:csd={isCsd} class:maximized={maximized}>
@@ -320,7 +324,7 @@
     <UpdateBanner />
   {/if}
 
-  <main class="content">
+  <main class="content" class:content--notes={notesFullWidth}>
     {@render children()}
   </main>
 
@@ -576,6 +580,10 @@
     padding: 1.5rem var(--rail-pad-x);
     background: var(--bg);
     min-height: 0;
+  }
+  .content--notes {
+    padding: 0.75rem;
+    scrollbar-gutter: auto;
   }
 
   /* ── SSH Terminal Slot ── */
