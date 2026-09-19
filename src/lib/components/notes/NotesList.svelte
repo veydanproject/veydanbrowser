@@ -47,6 +47,8 @@
       } else if (b.startsWith('profile:')) {
         const name = profileName?.(b.slice('profile:'.length));
         if (name) chips.push({ label: name, color: 'var(--accent)' });
+      } else if (b.startsWith('domain:')) {
+        chips.push({ label: b.slice('domain:'.length), color: 'var(--text-2)' });
       }
     }
     for (const t of n.tags) chips.push({ label: t.name, color: t.color });

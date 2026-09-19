@@ -8,11 +8,15 @@
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { api } from '$lib/api';
-  import type { NoteCreateInput, NoteFilter } from '$lib/types';
+  import type { NoteCreateInput } from '$lib/types';
+  import { toNoteFilter, templateNotes, type ActiveFilter } from '$lib/notes-filter';
+  import TemplateSelect from './TemplateSelect.svelte';
+  import NoteLockGate from './NoteLockGate.svelte';
   import Icon from '$lib/Icon.svelte';
   import NotesList from './NotesList.svelte';
   import NoteEditor from './NoteEditor.svelte';
   import NoteFilters from './NoteFilters.svelte';
+  import NoteTransferDialog, { type TransferMode } from './NoteTransferDialog.svelte';
   import { t } from '$lib/i18n';
 
   interface Props {
@@ -29,8 +33,9 @@
   let searching = $state(false);
   let showCreate = $state(false);
   let createTitle = $state('');
-  let createFormat = $state<string>('txt');
-  let activeFilter = $state<{ type: string; id?: string }>({ type: 'all' });
+  let createTemplate = $state('');
+  const hasTemplates = $derived(templateNotes(notesStore.list, notesStore.folders).length > 0);
+  let activeFilter = $state<ActiveFilter>({ type: 'all' });
   let sidebarVisible = $state(true);
 
   // Resizable columns
@@ -112,6 +117,7 @@
 
   onMount(() => {
     notesStore.ensureLoaded();
+    notesStore.refreshTrash();
     workspacesStore.ensureLoaded();
     profilesStore.ensureLoaded();
     notesStore.startWatcher();
@@ -124,13 +130,11 @@
       panelWidth = loadPanelWidth();
       untrack(() => notesStore.ensureLoaded());
       // Pre-set filter based on context
-      if (context === 'workspace' && contextId) {
-        activeFilter = { type: 'workspace', id: contextId };
-      } else if (context === 'profile' && contextId) {
-        activeFilter = { type: 'profile', id: contextId };
-      } else {
-        activeFilter = { type: 'all' };
-      }
+      const initial: ActiveFilter =
+        context === 'workspace' && contextId ? { type: 'workspace', id: contextId }
+        : context === 'profile' && contextId ? { type: 'profile', id: contextId }
+        : { type: 'all' };
+      untrack(() => void handleFilterChange(initial));
       // Open specific note if requested
       if (openNoteId && untrack(() => notesStore.activeNoteId) !== openNoteId) {
         void notesStore.openNote(openNoteId);
@@ -138,85 +142,55 @@
     }
   });
 
-  function hasBinding(bindings: string[], b: string): boolean {
-    return bindings.includes(b);
-  }
+  const isTrash = $derived(activeFilter.type === 'trash');
 
-  function isGlobal(bindings: string[]): boolean {
-    return !bindings.some(b => b.startsWith('workspace:') || b.startsWith('profile:'));
-  }
-
-  // Build NoteFilter from activeFilter state (used for search)
-  const noteFilter = $derived.by((): NoteFilter => {
-    switch (activeFilter.type) {
-      case 'workspace': return { binding: `workspace:${activeFilter.id}` };
-      case 'profile': return { binding: `profile:${activeFilter.id}` };
-      case 'tag': return { tag_name: activeFilter.id };
-      case 'pinned': return { pinned: true };
-      case 'archived': return { archived: true, include_deleted: false };
-      default: return {};
-    }
-  });
-
-  // Filtered + searched list
+  // Filtering happens on the backend (notesStore.view); only the 1-char
+  // search (too short for FTS) and trash search are applied locally.
   const displayList = $derived.by(() => {
-    let list = notesStore.list;
-
-    // Apply activeFilter
-    if (activeFilter.type !== 'all') {
-      if (activeFilter.type === 'global') list = list.filter((n) => isGlobal(n.bindings) && !n.archived);
-      else if (activeFilter.type === 'workspace') list = list.filter((n) => hasBinding(n.bindings, `workspace:${activeFilter.id}`) && !n.archived);
-      else if (activeFilter.type === 'profile') list = list.filter((n) => hasBinding(n.bindings, `profile:${activeFilter.id}`) && !n.archived);
-      else if (activeFilter.type === 'tag') list = list.filter((n) => n.tags.some((t) => t.name === activeFilter.id) && !n.archived);
-      else if (activeFilter.type === 'tag-group') list = list.filter((n) => n.tags.some((t) => t.name === activeFilter.id || t.name.startsWith(activeFilter.id + '/')) && !n.archived);
-      else if (activeFilter.type === 'folder') list = list.filter((n) => n.folder_ids.includes(activeFilter.id!) && !n.archived);
-      else if (activeFilter.type === 'pinned') list = list.filter((n) => n.pinned && !n.archived);
-      else if (activeFilter.type === 'archived') list = list.filter((n) => n.archived);
-    } else {
-      list = list.filter((n) => !n.archived);
-    }
-
-    // Локальный фильтр только для 1 символа (< 2 не вызывает API)
-    if (searchQuery.trim().length === 1) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(
-        (n) =>
-          n.title.toLowerCase().includes(q) ||
-          n.tags.some((t) => t.name.toLowerCase().includes(q))
-      );
-    }
-
-    return list;
+    const q = searchQuery.trim().toLowerCase();
+    const list = notesStore.view;
+    if (!q || (q.length >= 2 && !isTrash)) return list;
+    return list.filter(
+      (n) =>
+        n.title.toLowerCase().includes(q) ||
+        n.tags.some((t) => t.name.toLowerCase().includes(q))
+    );
   });
 
   async function handleSearch() {
-    if (!searchQuery.trim()) {
-      await notesStore.refresh();
-      return;
-    }
     searching = true;
     try {
-      const results = await api.notes.search(searchQuery, noteFilter);
-      // Merge results into display (search replaces local filter)
-      notesStore.list = results;
+      await notesStore.search(searchQuery);
     } catch {}
     finally { searching = false; }
   }
 
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
   function onSearchInput() {
+    if (isTrash) return;
     if (searchTimer) clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
-      if (searchQuery.trim().length >= 2) void handleSearch();
-      else void notesStore.refresh();
+      if (searchQuery.trim().length >= 2 || notesStore.searchQuery) void handleSearch();
     }, 350);
   }
 
-  async function handleFilterChange(f: { type: string; id?: string }) {
+  async function handleFilterChange(f: ActiveFilter) {
     activeFilter = f;
     searchQuery = '';
-    await notesStore.refresh();
+    // Smart views are applied by the effect below (also re-applied when edited)
+    if (f.type !== 'smart') await notesStore.setFilter(toNoteFilter(f));
+    if (f.type === 'trash') await notesStore.refreshTrash();
   }
+
+  $effect(() => {
+    if (activeFilter.type !== 'smart') return;
+    const view = notesStore.smartViews.find((v) => v.id === activeFilter.id);
+    if (!view) {
+      void handleFilterChange({ type: 'all' });
+      return;
+    }
+    void notesStore.setFilter(toNoteFilter(activeFilter, notesStore.smartViews));
+  });
 
   async function createNote() {
     if (!createTitle.trim()) return;
@@ -239,8 +213,8 @@
 
     const input: NoteCreateInput = {
       title: createTitle.trim(),
-      format: createFormat,
       bindings,
+      template_id: createTemplate || undefined,
     };
 
     try {
@@ -269,7 +243,28 @@
   function profileName(id: string): string {
     return profilesStore.list.find((p) => p.id === id)?.name ?? id;
   }
+
+  // ── Export / import ──────────────────────────────────────────────────────────
+  let transferMode = $state<TransferMode | null>(null);
+  let exportIds = $state<string[]>([]);
+
+  function openExport(ids: string[]) {
+    exportIds = ids;
+    transferMode = 'export';
+  }
+
+  function exportFolder(folderId: string) {
+    openExport(notesStore.list.filter((n) => n.folder_ids.includes(folderId)).map((n) => n.id));
+  }
+
+  const importBindings = $derived(
+    activeFilter.type === 'workspace' || activeFilter.type === 'profile'
+      ? [`${activeFilter.type}:${activeFilter.id}`]
+      : []
+  );
 </script>
+
+<NoteTransferDialog mode={transferMode} {exportIds} {importBindings} onclose={() => (transferMode = null)} />
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
@@ -312,6 +307,7 @@
         </div>
       </div>
 
+      <NoteLockGate>
       <!-- Body: sidebar + list + editor (same layout as the Notes screen) -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="panel-body" bind:this={panelBodyEl} class:is-dragging={dragging !== null}>
@@ -332,10 +328,12 @@
             </div>
             <NoteFilters
               notes={notesStore.list}
+              trashCount={notesStore.trash.length}
               allTags={notesStore.allTags}
               folders={notesStore.folders}
               {activeFilter}
               onfilter={handleFilterChange}
+              onexportfolder={exportFolder}
             />
             <div class="sidebar-footer">
               <button class="icon-btn" title={$t('notes_btn_sync')} onclick={() => api.notes.sync()}>
@@ -343,6 +341,12 @@
               </button>
               <button class="icon-btn" title={$t('notes_btn_open_folder')} onclick={() => api.notes.openFolder()}>
                 <Icon name="folder-open" size={14} />
+              </button>
+              <button class="icon-btn" title={$t('notes_btn_import')} onclick={() => { exportIds = []; transferMode = 'import'; }}>
+                <Icon name="upload" size={14} />
+              </button>
+              <button class="icon-btn" title={$t('notes_btn_export')} onclick={() => openExport(displayList.map((n) => n.id))}>
+                <Icon name="download" size={14} />
               </button>
               <button class="icon-btn" onclick={() => { sidebarVisible = false; }} title={$t('notes_btn_toggle_sidebar')}>
                 <Icon name="sidebar" size={14} />
@@ -420,6 +424,9 @@
               class="create-title"
               onkeydown={(e) => e.key === 'Enter' && createNote()}
             />
+            {#if hasTemplates}
+              <TemplateSelect class="create-title" bind:value={createTemplate} />
+            {/if}
             <div class="create-actions">
               <button class="btn btn-ghost" onclick={() => (showCreate = false)}>{$t('notes_btn_cancel')}</button>
               <button class="btn btn-primary" onclick={createNote} disabled={!createTitle.trim()}>
@@ -429,6 +436,7 @@
           </div>
         </div>
       {/if}
+      </NoteLockGate>
     </div>
   </div>
 {/if}

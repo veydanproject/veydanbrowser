@@ -10,6 +10,10 @@ source "$SCRIPT_DIR/build-env.sh"
 # Free port 1420 if a stale process holds it
 fuser -k 1420/tcp 2>/dev/null || true
 
+# Kill an orphaned dev instance; it holds the single-instance lock and the
+# new launch would silently exit after just poking the hidden old window.
+pkill -f "target/debug/veydanbrowser$" 2>/dev/null || true
+
 # --- Taskbar icon for the dev build (Wayland/KDE, GNOME, …) ------------------
 # Wayland compositors don't read a window's embedded icon like X11 did; they
 # resolve the taskbar icon purely by matching the window's app_id to an

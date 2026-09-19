@@ -9,6 +9,10 @@ use super::models::*;
 use super::tags::*;
 use super::index::*;
 use super::history::*;
+use super::attachments::remove_note_attachments;
+use super::filter::FilterContext;
+use super::links::{propagate_rename, reindex_links};
+use super::templates::{render_template, TemplateVars};
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -19,9 +23,6 @@ pub async fn note_list(
     filter: NoteFilter,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<Vec<NoteListItem>> {
-    let include_deleted = filter.include_deleted.unwrap_or(false);
-    let include_archived = filter.archived.unwrap_or(false);
-
     let rows = sqlx::query_as::<_, NoteRow>(
         "SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC",
     )
@@ -29,40 +30,27 @@ pub async fn note_list(
     .await
     .map_err(AppError::db)?;
 
-    let tags_map = fetch_all_note_tags_map(&state.db).await?;
-    let folder_ids_map = fetch_all_note_folder_ids_map(&state.db).await?;
-    let drafts_dir = drafts_dir(&state.app_data_dir);
+    let ctx = FilterContext::load(&filter, &state).await?;
+    Ok(list_items(rows, &filter, &ctx, &state.app_data_dir))
+}
 
-    let items: Vec<NoteListItem> = rows
-        .into_iter()
-        .filter(|r| {
-            if !include_deleted && r.deleted != 0 { return false; }
-            if !include_archived && r.archived != 0 { return false; }
-            if let Some(ref binding) = filter.binding {
-                let bindings: Vec<String> = serde_json::from_str(&r.bindings).unwrap_or_default();
-                if !bindings.contains(binding) { return false; }
-            }
-            if let Some(pinned) = filter.pinned {
-                if (r.pinned != 0) != pinned { return false; }
-            }
-            true
-        })
-        .filter(|r| {
-            if let Some(ref tag_name) = filter.tag_name {
-                let tags = tags_map.get(&r.id);
-                return tags.map(|v| v.iter().any(|t| &t.name == tag_name)).unwrap_or(false);
-            }
-            true
-        })
+/// Apply the filter and build list items from rows.
+fn list_items(
+    rows: Vec<NoteRow>,
+    filter: &NoteFilter,
+    ctx: &FilterContext,
+    app_data_dir: &std::path::PathBuf,
+) -> Vec<NoteListItem> {
+    let drafts = drafts_dir(app_data_dir);
+    rows.into_iter()
+        .filter(|r| ctx.matches(r, filter))
         .map(|r| {
-            let tags = tags_map.get(&r.id).cloned().unwrap_or_default();
-            let folder_ids = folder_ids_map.get(&r.id).cloned().unwrap_or_default();
-            let has_draft = drafts_dir.join(format!("{}.draft", r.id)).exists();
+            let tags = ctx.tags.get(&r.id).cloned().unwrap_or_default();
+            let folder_ids = ctx.folders.get(&r.id).cloned().unwrap_or_default();
+            let has_draft = drafts.join(format!("{}.draft", r.id)).exists();
             row_to_list_item(r, tags, folder_ids, has_draft)
         })
-        .collect();
-
-    Ok(items)
+        .collect()
 }
 
 #[tauri::command]
@@ -94,12 +82,14 @@ pub async fn note_get(
     Ok(Note {
         id: row.id,
         title: row.title,
+        base_dir: note_base_dir(&state.app_data_dir, &row.file_path),
         file_path: row.file_path,
         format: row.format,
         bindings,
         tags,
         pinned: row.pinned != 0,
         archived: row.archived != 0,
+        deleted: row.deleted != 0,
         doc_status: row.doc_status,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -109,28 +99,35 @@ pub async fn note_get(
     })
 }
 
-#[tauri::command]
-pub async fn note_create(
-    input: NoteCreateInput,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<Note> {
-    let now = Utc::now().to_rfc3339();
-    let id = Uuid::new_v4().to_string();
-    let format = input.format.as_deref().unwrap_or("md").to_string();
-    let content = input.content.as_deref().unwrap_or("").to_string();
-    let bindings_vec = input.bindings.clone().unwrap_or_default();
-    let bindings_json = serde_json::to_string(&bindings_vec).map_err(AppError::other)?;
+/// Fully specified note to persist (used by create and import).
+pub(crate) struct NewNote {
+    pub id: String,
+    pub title: String,
+    pub format: String,
+    pub bindings: Vec<String>,
+    pub tags: Vec<String>,
+    pub content: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
 
+/// Current documents directory (custom or default).
+pub(crate) fn current_docs_dir(state: &AppState) -> std::path::PathBuf {
     let custom_dir = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
-    let docs_dir = effective_docs_dir(&state.app_data_dir, custom_dir.as_ref());
-    let abs_path = docs_dir.join(format!("{}.txt", id));
+    effective_docs_dir(&state.app_data_dir, custom_dir.as_ref())
+}
+
+/// Write the note file, insert the DB row, index FTS and refresh the manifest.
+pub(crate) async fn insert_note(new: NewNote, state: &AppState) -> Result<Note, AppError> {
+    let bindings_json = serde_json::to_string(&new.bindings).map_err(AppError::other)?;
+    let abs_path = current_docs_dir(state).join(format!("{}.{}", new.id, new.format));
     let stored_path = abs_path.to_string_lossy().to_string();
 
     let row = NoteRow {
-        id: id.clone(),
-        title: input.title.clone(),
+        id: new.id.clone(),
+        title: new.title.clone(),
         file_path: stored_path.clone(),
-        format: format.clone(),
+        format: new.format.clone(),
         scope: "global".to_string(),
         workspace_id: None,
         profile_id: None,
@@ -140,8 +137,8 @@ pub async fn note_create(
         doc_status: "active".to_string(),
         version_base: None,
         fts_rowid: None,
-        created_at: now.clone(),
-        updated_at: now.clone(),
+        created_at: new.created_at.clone(),
+        updated_at: new.updated_at.clone(),
         file_mtime: None,
         content_hash: None,
         preview: String::new(),
@@ -149,63 +146,86 @@ pub async fn note_create(
         folder_id: None,
     };
 
-    let tag_names = input.tag_names.clone().unwrap_or_default();
-    write_note_file(&abs_path, &row, &tag_names, &content)?;
+    write_note_file(&abs_path, &row, &new.tags, &new.content)?;
 
-    let content_hash = compute_hash(&content);
-    let preview = make_preview(&content);
+    let content_hash = compute_hash(&new.content);
+    let preview = make_preview(&new.content);
 
     sqlx::query(
         "INSERT INTO notes (id, title, file_path, format, bindings, pinned, archived, deleted, doc_status, created_at, updated_at, content_hash, preview)
          VALUES (?, ?, ?, ?, ?, 0, 0, 0, 'active', ?, ?, ?, ?)",
     )
-    .bind(&id)
-    .bind(&input.title)
+    .bind(&new.id)
+    .bind(&new.title)
     .bind(&stored_path)
-    .bind(&format)
+    .bind(&new.format)
     .bind(&bindings_json)
-    .bind(&now)
-    .bind(&now)
+    .bind(&new.created_at)
+    .bind(&new.updated_at)
     .bind(&content_hash)
     .bind(&preview)
     .execute(&state.db)
     .await
     .map_err(AppError::db)?;
 
-    set_note_tag_links(&id, &tag_names, &state.db).await?;
+    set_note_tag_links(&new.id, &new.tags, &state.db).await?;
+    reindex_links(&new.id, &new.content, &state.db).await?;
 
-    // FTS
-    let tags_str = tag_names.join(" ");
-    let fts_rowid = fts_upsert(&id, &input.title, &content, &tag_names, None, &state.db).await?;
+    let fts_rowid = fts_upsert(&new.id, &new.title, &new.content, &new.tags, None, &state.db).await?;
     sqlx::query("UPDATE notes SET fts_rowid=? WHERE id=?")
         .bind(fts_rowid)
-        .bind(&id)
+        .bind(&new.id)
         .execute(&state.db)
         .await
         .map_err(AppError::db)?;
 
-    let _ = tags_str;
-
-    let tags = fetch_note_tags(&id, &state.db).await?;
-
+    let tags = fetch_note_tags(&new.id, &state.db).await?;
     rebuild_manifest(&state.db, &state.app_data_dir).await?;
 
     Ok(Note {
-        id,
-        title: input.title,
+        id: new.id,
+        title: new.title,
+        base_dir: note_base_dir(&state.app_data_dir, &stored_path),
         file_path: stored_path,
-        format,
-        bindings: bindings_vec,
+        format: new.format,
+        bindings: new.bindings,
         tags,
         pinned: false,
         archived: false,
+        deleted: false,
         doc_status: "active".to_string(),
-        created_at: now.clone(),
-        updated_at: now,
+        created_at: new.created_at,
+        updated_at: new.updated_at,
         content_hash: Some(content_hash),
-        content: Some(content),
+        content: Some(new.content),
         has_draft: false,
     })
+}
+
+#[tauri::command]
+pub async fn note_create(
+    input: NoteCreateInput,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Note> {
+    let now = Utc::now().to_rfc3339();
+    let bindings = input.bindings.unwrap_or_default();
+    let mut content = input.content.unwrap_or_default();
+    if let Some(template_id) = input.template_id.filter(|t| !t.is_empty()) {
+        let vars = TemplateVars::from_bindings(&input.title, &bindings, &state).await;
+        let rendered = render_template(&template_id, &vars, &state).await?;
+        content = if content.is_empty() { rendered } else { format!("{rendered}\n{content}") };
+    }
+    let new = NewNote {
+        id: Uuid::new_v4().to_string(),
+        title: input.title,
+        format: input.format.unwrap_or_else(|| "md".to_string()),
+        bindings,
+        tags: input.tag_names.unwrap_or_default(),
+        content,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    Ok(insert_note(new, &state).await?)
 }
 
 #[tauri::command]
@@ -214,6 +234,12 @@ pub async fn note_update(
     input: NoteUpdateInput,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<Note> {
+    Ok(update_note(&id, input, &state).await?)
+}
+
+/// Apply title/pinned/content changes: snapshot, rewrite file, reindex.
+pub(crate) async fn update_note(id: &str, input: NoteUpdateInput, state: &AppState) -> Result<Note, AppError> {
+    let id = id.to_string();
     let now = Utc::now().to_rfc3339();
 
     let mut row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
@@ -223,6 +249,7 @@ pub async fn note_update(
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found(format!("Note {id}")))?;
 
+    let old_title = row.title.clone();
     if let Some(title) = input.title {
         row.title = title;
     }
@@ -260,6 +287,10 @@ pub async fn note_update(
     }
 
     write_note_file(&file_path, &row, &tag_names, &content)?;
+    reindex_links(&id, &content, &state.db).await?;
+    if old_title != row.title {
+        propagate_rename(&id, &old_title, &row.title, state).await?;
+    }
 
     let fts_rowid = fts_upsert(&id, &row.title, &content, &tag_names, row.fts_rowid, &state.db).await?;
 
@@ -292,12 +323,14 @@ pub async fn note_update(
     Ok(Note {
         id: row.id,
         title: row.title,
+        base_dir: note_base_dir(&state.app_data_dir, &row.file_path),
         file_path: row.file_path,
         format: row.format,
         bindings,
         tags,
         pinned: row.pinned != 0,
         archived: row.archived != 0,
+        deleted: row.deleted != 0,
         doc_status: row.doc_status,
         created_at: row.created_at,
         updated_at: now,
@@ -327,9 +360,31 @@ pub async fn note_delete(
             if file_path.exists() {
                 let _ = std::fs::remove_file(&file_path);
             }
+            remove_note_attachments(&file_path, &id);
         }
 
+        // Sensitive leftovers: unsaved draft and the version history
+        let _ = std::fs::remove_file(draft_file_path(&state.app_data_dir, &id));
+        sqlx::query("DELETE FROM note_history WHERE note_id = ?")
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+
         sqlx::query("DELETE FROM note_tag_links WHERE note_id = ?")
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+
+        sqlx::query("DELETE FROM note_folder_links WHERE note_id = ?")
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+
+        sqlx::query("DELETE FROM note_links WHERE from_id = ? OR to_id = ?")
+            .bind(&id)
             .bind(&id)
             .execute(&state.db)
             .await
@@ -382,12 +437,33 @@ pub async fn note_restore(
     id: String,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
+    let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found(format!("Note {id}")))?;
+
     sqlx::query("UPDATE notes SET archived=0, deleted=0, doc_status='active', updated_at=? WHERE id=?")
         .bind(Utc::now().to_rfc3339())
         .bind(&id)
         .execute(&state.db)
         .await
         .map_err(AppError::db)?;
+
+    // Soft delete drops the FTS row; put it back when leaving the trash.
+    if row.deleted != 0 {
+        let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
+        let (_, tags_list, body) = read_note_file(&file_path).unwrap_or_default();
+        let fts_rowid = fts_upsert(&id, &row.title, &body, &tags_list, row.fts_rowid, &state.db).await?;
+        sqlx::query("UPDATE notes SET fts_rowid=? WHERE id=?")
+            .bind(fts_rowid)
+            .bind(&id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+        rebuild_manifest(&state.db, &state.app_data_dir).await?;
+    }
     Ok(())
 }
 
@@ -444,19 +520,14 @@ pub async fn note_set_tags(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn note_search(
-    query: String,
-    filter: NoteFilter,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<Vec<NoteListItem>> {
-    // FTS5 MATCH treats quotes, parens, NEAR/AND/OR etc. as query syntax, so
-    // raw user input can produce SQL errors. Wrap each whitespace-separated
-    // term in double quotes (doubling embedded quotes) so it matches literally;
-    // the trailing `*` keeps the last term a prefix search.
+/// FTS5 MATCH treats quotes, parens, NEAR/AND/OR etc. as query syntax, so raw
+/// user input can produce SQL errors. Wrap each whitespace-separated term in
+/// double quotes (doubling embedded quotes) so it matches literally; the
+/// trailing `*` keeps the last term a prefix search. `None` for blank input.
+pub(crate) fn fts_match_query(query: &str) -> Option<String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
-        return Ok(vec![]);
+        return None;
     }
     let mut fts_query = trimmed
         .split_whitespace()
@@ -464,6 +535,18 @@ pub async fn note_search(
         .collect::<Vec<_>>()
         .join(" ");
     fts_query.push('*');
+    Some(fts_query)
+}
+
+#[tauri::command]
+pub async fn note_search(
+    query: String,
+    filter: NoteFilter,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<NoteListItem>> {
+    let Some(fts_query) = fts_match_query(&query) else {
+        return Ok(vec![]);
+    };
 
     let matched: Vec<(String, String)> =
         sqlx::query_as("SELECT note_id, snippet(notes_fts, 2, '<mark>', '</mark>', '…', 12) FROM notes_fts WHERE notes_fts MATCH ? ORDER BY rank LIMIT 100")
@@ -481,7 +564,7 @@ pub async fn note_search(
     let ids: Vec<String> = matched.into_iter().map(|(id, _)| id).collect();
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT * FROM notes WHERE id IN ({}) AND deleted = 0 ORDER BY pinned DESC, updated_at DESC",
+        "SELECT * FROM notes WHERE id IN ({}) ORDER BY pinned DESC, updated_at DESC",
         placeholders
     );
 
@@ -490,31 +573,18 @@ pub async fn note_search(
     for id in &ids {
         q = q.bind(id);
     }
-
     let rows = q.fetch_all(&state.db).await.map_err(AppError::db)?;
-    let tags_map = fetch_all_note_tags_map(&state.db).await?;
-    let folder_ids_map = fetch_all_note_folder_ids_map(&state.db).await?;
-    let drafts_dir = drafts_dir(&state.app_data_dir);
 
-    let items = rows
-        .into_iter()
-        .filter(|r| {
-            if let Some(ref binding) = filter.binding {
-                let bindings: Vec<String> = serde_json::from_str(&r.bindings).unwrap_or_default();
-                if !bindings.contains(binding) { return false; }
-            }
-            true
-        })
-        .map(|r| {
-            let tags = tags_map.get(&r.id).cloned().unwrap_or_default();
-            let folder_ids = folder_ids_map.get(&r.id).cloned().unwrap_or_default();
-            let has_draft = drafts_dir.join(format!("{}.draft", r.id)).exists();
-            let mut item = row_to_list_item(r, tags, folder_ids, has_draft);
-            item.snippet = snippets_map.get(&item.id).cloned();
-            item
-        })
-        .collect();
-
+    // Archived notes are searchable only when the archive filter is active.
+    let mut filter = filter;
+    if filter.archived.is_none() {
+        filter.archived = Some(false);
+    }
+    let ctx = FilterContext::load(&filter, &state).await?;
+    let mut items = list_items(rows, &filter, &ctx, &state.app_data_dir);
+    for item in &mut items {
+        item.snippet = snippets_map.get(&item.id).cloned();
+    }
     Ok(items)
 }
 

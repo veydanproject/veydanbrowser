@@ -2,21 +2,31 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 import { api } from '$lib/api';
-import type { Note, NoteCreateInput, NoteFilter, NoteFolder, NoteListItem, NoteTag, NoteUpdateInput, SaveStatus } from '$lib/types';
+import type {
+  Note, NoteCreateInput, NoteFilter, NoteFolder, NoteListItem, NoteSmartView, NoteTag,
+  NoteUpdateInput, SaveStatus, SmartViewInput,
+} from '$lib/types';
 
 const AUTOSAVE_DELAY_MS = 3000;
 const DRAFT_INTERVAL_MS = 1000;
 
 class NotesStore {
+  /** All live notes (active + archived) for sidebar counts. Trashed notes live in `trash`. */
   list = $state<NoteListItem[]>([]);
+  /** Notes matching `filter` (backend-filtered) or the current search */
+  view = $state<NoteListItem[]>([]);
+  trash = $state<NoteListItem[]>([]);
   allTags = $state<NoteTag[]>([]);
   folders = $state<NoteFolder[]>([]);
+  smartViews = $state<NoteSmartView[]>([]);
   loading = $state(false);
   loaded = $state(false);
   private _promise: Promise<void> | null = null;
 
   // Editor state
   activeNoteId = $state<string | null>(null);
+  /** Note id requested from the browser extension popup */
+  openRequestId = $state<string | null>(null);
   activeNote = $state<Note | null>(null);
   saveStatus = $state<SaveStatus>('saved');
   externalChange = $state(false);
@@ -24,7 +34,7 @@ class NotesStore {
   private _ownSaveTs = 0;
 
   // Filter/navigation state
-  filter = $state<NoteFilter>({});
+  filter = $state<NoteFilter>({ archived: false });
   searchQuery = $state('');
 
   // Private autosave/draft state
@@ -44,15 +54,60 @@ class NotesStore {
   private async _load() {
     this.loading = true;
     try {
-      await Promise.all([this.refresh(), this.refreshTags(), this.refreshFolders()]);
+      await Promise.all([this.refresh(), this.refreshTags(), this.refreshFolders(), this.refreshSmartViews()]);
       this.loaded = true;
     } finally {
       this.loading = false;
     }
   }
 
+  /** Reload the full list and the filtered view (unless a search is active) */
   async refresh() {
-    this.list = await api.notes.list(this.filter);
+    const [list, view] = await Promise.all([
+      api.notes.list({}),
+      this.searchQuery ? api.notes.search(this.searchQuery, this.filter) : api.notes.list(this.filter),
+    ]);
+    this.list = list;
+    this.view = view;
+  }
+
+  /** Apply a new filter and reload the view */
+  async setFilter(filter: NoteFilter) {
+    this.filter = filter;
+    this.searchQuery = '';
+    this.view = await api.notes.list(filter);
+  }
+
+  async search(query: string) {
+    this.searchQuery = query.trim();
+    this.view = this.searchQuery
+      ? await api.notes.search(this.searchQuery, this.filter)
+      : await api.notes.list(this.filter);
+  }
+
+  async refreshSmartViews() {
+    this.smartViews = await api.notes.smartViewList();
+  }
+
+  async createSmartView(input: SmartViewInput): Promise<NoteSmartView> {
+    const view = await api.notes.smartViewCreate(input);
+    await this.refreshSmartViews();
+    return view;
+  }
+
+  async updateSmartView(id: string, input: SmartViewInput): Promise<NoteSmartView> {
+    const view = await api.notes.smartViewUpdate(id, input);
+    await this.refreshSmartViews();
+    return view;
+  }
+
+  async deleteSmartView(id: string): Promise<void> {
+    await api.notes.smartViewDelete(id);
+    await this.refreshSmartViews();
+  }
+
+  async refreshTrash() {
+    this.trash = await api.notes.list({ deleted: true });
   }
 
   async refreshTags() {
@@ -98,6 +153,8 @@ class NotesStore {
   }
 
   async addNoteBinding(noteId: string, binding: string): Promise<void> {
+    // Binding changes rewrite the note file; keep the watcher from flagging it as external.
+    this._ownSaveTs = Date.now();
     await api.notes.noteAddBinding(noteId, binding);
     await this.refresh();
     if (this.activeNoteId === noteId && this.activeNote && !this.activeNote.bindings.includes(binding)) {
@@ -106,6 +163,7 @@ class NotesStore {
   }
 
   async removeNoteBinding(noteId: string, binding: string): Promise<void> {
+    this._ownSaveTs = Date.now();
     await api.notes.noteRemoveBinding(noteId, binding);
     await this.refresh();
     if (this.activeNoteId === noteId && this.activeNote) {
@@ -148,7 +206,7 @@ class NotesStore {
       const input: Record<string, unknown> = {};
       if (pendingContent !== null) input.content = pendingContent;
       if (pendingTitle !== null) input.title = pendingTitle;
-      void api.notes.update(prevId, input).catch(() => {});
+      void api.notes.update(prevId, input).then((u) => this._patchListItem(u)).catch(() => {});
     }
 
     // Load new note content
@@ -230,20 +288,7 @@ class NotesStore {
         this.activeNote = updated;
         this.saveStatus = 'saved';
       }
-      // Patch list item in-place to keep NoteListItem-only fields (e.g. preview)
-      const idx = this.list.findIndex((n) => n.id === updated.id);
-      if (idx >= 0) {
-        this.list[idx] = {
-          ...this.list[idx],
-          title: updated.title,
-          updated_at: updated.updated_at,
-          pinned: updated.pinned,
-          archived: updated.archived,
-          tags: updated.tags,
-          has_draft: updated.has_draft,
-          preview: (updated as unknown as NoteListItem).preview ?? this.list[idx].preview,
-        };
-      }
+      this._patchListItem(updated);
     } catch {
       // Restore pending edits so a later autosave retries (unless newer edits arrived).
       if (this.activeNoteId === noteId) {
@@ -252,6 +297,31 @@ class NotesStore {
         this.saveStatus = 'failed';
       }
     }
+  }
+
+  /** Patch a saved note into `list`/`view` in place, keeping list-only fields (e.g. preview). */
+  private _patchListItem(updated: Note) {
+    const patch = (arr: NoteListItem[]) => {
+      const idx = arr.findIndex((n) => n.id === updated.id);
+      if (idx < 0) return;
+      arr[idx] = {
+        ...arr[idx],
+        title: updated.title,
+        updated_at: updated.updated_at,
+        pinned: updated.pinned,
+        archived: updated.archived,
+        tags: updated.tags,
+        has_draft: updated.has_draft,
+        preview: (updated as unknown as NoteListItem).preview ?? arr[idx].preview,
+      };
+    };
+    patch(this.list);
+    patch(this.view);
+  }
+
+  /** Explicit save (Ctrl+S) */
+  async save() {
+    await this._flushAutosave();
   }
 
   /** Force-save immediately (call before panel close / note switch) */
@@ -310,7 +380,14 @@ class NotesStore {
       // Always update list entry
       void this.refresh();
     });
-    this._unlisten = unlisten;
+    // Browser extension asked to show a note; the page resets its filter and opens it
+    const unlistenOpen = await listen<string>('notes://open', (event) => {
+      this.openRequestId = event.payload;
+    });
+    this._unlisten = () => {
+      unlisten();
+      unlistenOpen();
+    };
   }
 
   stopWatcher() {
@@ -326,23 +403,33 @@ class NotesStore {
     return note;
   }
 
+  /** Soft delete: move to trash */
   async deleteNote(id: string) {
     await api.notes.delete(id);
-    if (this.activeNoteId === id) {
-      this._clearEditorState();
-    }
-    this.list = this.list.filter((n) => n.id !== id);
+    await this._afterStatusChange(id);
+  }
+
+  /** Hard delete: remove file + DB row */
+  async deleteForever(id: string) {
+    await api.notes.delete(id, true);
+    await this._afterStatusChange(id);
   }
 
   async archiveNote(id: string) {
     await api.notes.archive(id);
-    this.list = this.list.filter((n) => n.id !== id);
-    if (this.activeNoteId === id) this._clearEditorState();
+    await this._afterStatusChange(id);
   }
 
+  /** Unarchive or restore from trash */
   async restoreNote(id: string) {
     await api.notes.restore(id);
-    await this.refresh();
+    await this._afterStatusChange(id);
+  }
+
+  /** Note left or entered archive/trash: close it if open, reload list, view and trash. */
+  private async _afterStatusChange(id: string) {
+    if (this.activeNoteId === id) this._clearEditorState();
+    await Promise.all([this.refresh(), this.refreshTrash()]);
   }
 
   async togglePin(id: string) {
@@ -354,6 +441,7 @@ class NotesStore {
   }
 
   async setTags(id: string, tagNames: string[]) {
+    this._ownSaveTs = Date.now();
     await api.notes.setTags(id, tagNames);
     await Promise.all([this.refresh(), this.refreshTags()]);
     if (this.activeNoteId === id && this.activeNote) {
@@ -410,6 +498,7 @@ class NotesStore {
     this.activeNoteId = null;
     this.activeNote = null;
     this._pendingContent = null;
+    this._pendingTitle = null;
     this.saveStatus = 'saved';
     this.externalChange = false;
   }

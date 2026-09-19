@@ -23,6 +23,8 @@
   import { updaterStore } from '$lib/store/updater.svelte';
   import CustomSelect from '$lib/components/CustomSelect.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
+  import NoteCaptureRules from '$lib/components/notes/NoteCaptureRules.svelte';
+  import NoteLockSettings from '$lib/components/notes/NoteLockSettings.svelte';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -71,6 +73,23 @@
   let latestCamoufox = $state<string | null>(null);
   let checkingUpdate = $state(false);
   let checkUpdateError = $state('');
+
+  // Quick capture shortcut
+  let quickShortcut = $state('');
+  let quickShortcutSaving = $state(false);
+  let quickShortcutError = $state('');
+
+  async function saveQuickShortcut() {
+    quickShortcutSaving = true;
+    quickShortcutError = '';
+    try {
+      quickShortcut = await api.notes.quickCaptureShortcutSet(quickShortcut);
+    } catch (e) {
+      quickShortcutError = `${$t('settings_quick_capture_invalid')}: ${formatError(e)}`;
+    } finally {
+      quickShortcutSaving = false;
+    }
+  }
 
   // Notes dir
   let notesDir = $state('');
@@ -234,6 +253,9 @@
       const info = await api.notes.getDir();
       notesDir = info.current;
       notesDirIsCustom = info.is_custom;
+    } catch {}
+    try {
+      quickShortcut = await api.notes.quickCaptureShortcutGet();
     } catch {}
 
     // Load tray settings
@@ -660,6 +682,43 @@
     {#if notesDirError}
       <div class="error-msg">{notesDirError}</div>
     {/if}
+  </div>
+
+  <!-- Browser capture rules -->
+  <div class="card">
+    <div class="card-title">{$t('settings_capture_section')}</div>
+    <p class="muted">{$t('settings_capture_hint')}</p>
+    <NoteCaptureRules />
+  </div>
+
+  <!-- Quick capture shortcut -->
+  <div class="card">
+    <div class="card-title">{$t('settings_quick_capture_section')}</div>
+    <p class="muted">{$t('settings_quick_capture_hint')}</p>
+    <div class="dir-row">
+      <input
+        class="dir-input"
+        type="text"
+        bind:value={quickShortcut}
+        placeholder="CmdOrCtrl+Shift+N"
+        readonly={!isTauri}
+      />
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary btn-sm" disabled={quickShortcutSaving || !isTauri} onclick={saveQuickShortcut}>
+        {quickShortcutSaving ? $t('settings_notes_saving') : $t('settings_notes_save')}
+      </button>
+    </div>
+    {#if quickShortcutError}
+      <div class="error-msg">{quickShortcutError}</div>
+    {/if}
+  </div>
+
+  <!-- Notes lock -->
+  <div class="card">
+    <div class="card-title">{$t('settings_lock_section')}</div>
+    <p class="muted">{$t('settings_lock_hint')}</p>
+    <NoteLockSettings />
   </div>
 
   <!-- Backup -->

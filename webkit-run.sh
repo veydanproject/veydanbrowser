@@ -27,7 +27,10 @@ fi
 
 # Make /usr/lib/x86_64-linux-gnu writable (tmpfs overlay over the host dir) so
 # bwrap can create the mount point, then bind our WebKit libexec dir onto it.
+# --die-with-parent: when the tauri CLI kills bwrap, the app dies too instead
+# of surviving as an orphan that holds the single-instance lock.
 exec bwrap \
+  --die-with-parent \
   --dev-bind / / \
   --overlay-src /usr/lib/x86_64-linux-gnu \
   --tmp-overlay /usr/lib/x86_64-linux-gnu \

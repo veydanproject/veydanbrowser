@@ -41,6 +41,14 @@ pub(crate) fn resolve_note_abs_path(app_data_dir: &PathBuf, file_path: &str) -> 
     if p.is_absolute() { p } else { app_data_dir.join(file_path) }
 }
 
+/// Absolute directory containing the note file (base for relative attachment links).
+pub(crate) fn note_base_dir(app_data_dir: &PathBuf, file_path: &str) -> String {
+    resolve_note_abs_path(app_data_dir, file_path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 pub(crate) fn compute_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
@@ -252,6 +260,7 @@ pub(crate) fn row_to_list_item(row: NoteRow, tags: Vec<NoteTagInfo>, folder_ids:
         folder_ids,
         pinned: row.pinned != 0,
         archived: row.archived != 0,
+        deleted: row.deleted != 0,
         doc_status: row.doc_status,
         created_at: row.created_at,
         updated_at: row.updated_at,

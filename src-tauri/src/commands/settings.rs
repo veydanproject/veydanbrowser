@@ -93,6 +93,38 @@ pub async fn window_minimize(
     Ok(())
 }
 
+const UI_LOCALE_KEY: &str = "ui_locale";
+
+/// Persist the UI language so non-frontend consumers (browser extension) can follow it.
+#[tauri::command]
+pub async fn app_locale_set(locale: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    let locale = match locale.as_str() {
+        "ru" => "ru",
+        _ => "en",
+    };
+    sqlx::query(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(UI_LOCALE_KEY)
+    .bind(locale)
+    .execute(&state.db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(())
+}
+
+/// Stored UI language, `en` when never set.
+pub async fn app_locale(db: &Pool<Sqlite>) -> String {
+    sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = ?")
+        .bind(UI_LOCALE_KEY)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "en".to_string())
+}
+
 /// Hand the tray the active locale's menu strings and refresh it.
 #[tauri::command]
 pub async fn tray_set_labels(

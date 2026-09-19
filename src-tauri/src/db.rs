@@ -263,6 +263,35 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Wiki links between notes, rebuilt from the body on save
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS note_links (
+            from_id TEXT NOT NULL,
+            to_id   TEXT NOT NULL,
+            PRIMARY KEY (from_id, to_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_note_links_to ON note_links(to_id)")
+        .execute(pool)
+        .await?;
+
+    // Saved filters: conditions is a NoteFilter JSON
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS note_smart_views (
+            id         TEXT PRIMARY KEY NOT NULL,
+            name       TEXT NOT NULL,
+            color      TEXT NOT NULL DEFAULT '#8b7bff',
+            conditions TEXT NOT NULL DEFAULT '{}',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Note version history (DAG: parent_id links versions into a tree)
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS note_history (

@@ -15,8 +15,14 @@ import type {
   HistoryFilter,
   MergeResult,
   Note,
+  NoteAttachment,
   NoteCreateInput,
   NoteFilter,
+  OrphanAttachment,
+  CaptureRule,
+  NoteSmartView,
+  NoteLockStatus,
+  SmartViewInput,
   NoteFolder,
   NoteHistoryEntry,
   NoteListItem,
@@ -54,15 +60,21 @@ import type {
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
-/** True inside the standalone notes Tauri window. */
-export function isNotesWindow(): boolean {
-  if (typeof window === 'undefined') return false;
+/** Label of the current Tauri window ('main' in the browser/dev mock). */
+export function windowLabel(): string {
+  if (typeof window === 'undefined') return 'main';
   const internals = (
     window as unknown as {
       __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };
     }
   ).__TAURI_INTERNALS__;
-  return internals?.metadata?.currentWindow?.label === 'notes';
+  return internals?.metadata?.currentWindow?.label ?? 'main';
+}
+
+/** True inside a secondary notes window (popout or quick capture): theme + chrome only. */
+export function isNotesWindow(): boolean {
+  const label = windowLabel();
+  return label === 'notes' || label === 'quick-capture';
 }
 
 const devMocks: Record<string, unknown> = {
@@ -237,6 +249,8 @@ export const api = {
     noteRemoveBinding: (noteId: string, binding: string) => call<void>('note_remove_binding', { noteId, binding }),
     getDir: () => call<{ current: string; is_custom: boolean }>('notes_get_dir'),
     setDir: (path: string | null) => call<{ current: string; is_custom: boolean }>('notes_set_dir', { path }),
+    captureRulesGet: () => call<CaptureRule[]>('notes_capture_rules_get'),
+    captureRulesSet: (rules: CaptureRule[]) => call<CaptureRule[]>('notes_capture_rules_set', { rules }),
     historyList: (noteId: string, filter?: HistoryFilter) =>
       call<NoteHistoryEntry[]>('note_history_list', { noteId, filter }),
     historyGet: (historyId: string) =>
@@ -248,6 +262,39 @@ export const api = {
     historyMerge: (noteId: string, historyId: string) =>
       call<MergeResult>('note_history_merge', { noteId, historyId }),
     openWindow: (title: string) => call<void>('note_open_window', { title }),
+    backlinks: (id: string) => call<NoteListItem[]>('note_backlinks', { id }),
+    related: (id: string) => call<NoteListItem[]>('note_related', { id }),
+    smartViewList: () => call<NoteSmartView[]>('note_smart_view_list'),
+    smartViewCreate: (input: SmartViewInput) => call<NoteSmartView>('note_smart_view_create', { input }),
+    smartViewUpdate: (id: string, input: SmartViewInput) => call<NoteSmartView>('note_smart_view_update', { id, input }),
+    smartViewDelete: (id: string) => call<void>('note_smart_view_delete', { id }),
+    openQuickCapture: () => call<void>('open_quick_capture'),
+    quickCaptureShortcutGet: () => call<string>('quick_capture_shortcut_get'),
+    quickCaptureShortcutSet: (accelerator: string) => call<string>('quick_capture_shortcut_set', { accelerator }),
+    attachmentAdd: async (noteId: string, fileName: string, data: Uint8Array) => {
+      // Raw body upload: metadata travels in headers
+      const { invoke } = await import('@tauri-apps/api/core');
+      return invoke<NoteAttachment>('note_attachment_add', data, {
+        headers: { 'x-note-id': noteId, 'x-file-name': encodeURIComponent(fileName) },
+      });
+    },
+    attachmentAddFromPath: (noteId: string, srcPath: string) =>
+      call<NoteAttachment>('note_attachment_add_from_path', { noteId, srcPath }),
+    attachmentList: (noteId: string) => call<NoteAttachment[]>('note_attachment_list', { noteId }),
+    attachmentDelete: (noteId: string, name: string) => call<void>('note_attachment_delete', { noteId, name }),
+    attachmentOpen: (noteId: string, name: string) => call<void>('note_attachment_open', { noteId, name }),
+    attachmentsGc: (del: boolean) => call<OrphanAttachment[]>('note_attachments_gc', { delete: del }),
+    export: (ids: string[], dest: string, asZip: boolean, password?: string) =>
+      call<{ count: number; path: string }>('note_export', { ids, dest, asZip, password: password ?? null }),
+    import: (paths: string[], bindings: string[], password?: string) =>
+      call<string[]>('note_import', { paths, bindings, password: password ?? null }),
+    lockStatus: () => call<NoteLockStatus>('notes_lock_status'),
+    lockSet: (password: string | null, current?: string) =>
+      call<NoteLockStatus>('notes_lock_set', { password, current: current ?? null }),
+    lockTimeoutSet: (minutes: number) => call<NoteLockStatus>('notes_lock_timeout_set', { minutes }),
+    lockUnlock: (password: string) => call<NoteLockStatus>('notes_lock_unlock', { password }),
+    lockNow: () => call<NoteLockStatus>('notes_lock_lock'),
+    lockTouch: () => call<void>('notes_lock_touch'),
   },
 
   ssh: {
@@ -345,6 +392,7 @@ export const api = {
         startHidden: s.start_hidden,
       }),
     setTrayLabels: (labels: TrayLabels) => call<void>('tray_set_labels', { labels }),
+    setLocale: (locale: string) => call<void>('app_locale_set', { locale }),
     windowMinimize: () => call<void>('window_minimize'),
   },
 };
@@ -389,5 +437,6 @@ export interface TrayLabels {
   section_files: string;
   section_notes: string;
   password_generator: string;
+  quick_capture: string;
   tooltip: string;
 }

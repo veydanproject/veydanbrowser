@@ -44,8 +44,14 @@ pub struct TrayLabels {
     pub section_files: String,
     pub section_notes: String,
     pub password_generator: String,
+    #[serde(default = "default_quick_capture_label")]
+    pub quick_capture: String,
     /// "Veydan Browser — {n} running" — `{n}` is replaced with the live count.
     pub tooltip: String,
+}
+
+fn default_quick_capture_label() -> String {
+    "Quick note".into()
 }
 
 impl Default for TrayLabels {
@@ -65,6 +71,7 @@ impl Default for TrayLabels {
             section_files: "Files".into(),
             section_notes: "Notes".into(),
             password_generator: "Password generator".into(),
+            quick_capture: default_quick_capture_label(),
             tooltip: "Veydan Browser — {n} running".into(),
         }
     }
@@ -205,6 +212,7 @@ fn dispatch(app: &AppHandle, id: &str) {
             win_show(app);
             let _ = app.emit("tray://open-pwgen", ());
         }
+        "quick_capture" => crate::commands::notes::show_quick_capture(app),
         other => {
             if let Some(pid) = other.strip_prefix("stop:") {
                 let _ = app.emit("tray://stop-profile", pid.to_string());
@@ -374,6 +382,7 @@ mod imp {
                 nav(&l.section_notes, "/notes"),
                 MenuItem::Separator,
                 item(l.password_generator.clone(), |t| dispatch(&t.app, "pwgen")),
+                item(l.quick_capture.clone(), |t| dispatch(&t.app, "quick_capture")),
                 MenuItem::Separator,
                 item(l.quit.clone(), |t| t.app.exit(0)),
             ]
@@ -432,7 +441,13 @@ mod imp {
             };
             match tray.spawn().await {
                 Ok(handle) => *TRAY.lock().unwrap() = Some(handle),
-                Err(e) => eprintln!("tray: ksni spawn failed: {e}"),
+                Err(e) => {
+                    eprintln!("tray: ksni spawn failed: {e}");
+                    // Hide-on-close would stash the window with no way to restore it
+                    let state = app.state::<AppState>();
+                    state.tray_settings.close_to_tray.store(false, std::sync::atomic::Ordering::Relaxed);
+                    state.tray_settings.minimize_to_tray.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
             }
         });
     }
@@ -516,6 +531,7 @@ mod imp {
             .item(&MenuItemBuilder::with_id("nav:/notes", &labels.section_notes).build(app)?)
             .separator()
             .item(&MenuItemBuilder::with_id("pwgen", &labels.password_generator).build(app)?)
+            .item(&MenuItemBuilder::with_id("quick_capture", &labels.quick_capture).build(app)?)
             .separator()
             .item(&MenuItemBuilder::with_id("quit", &labels.quit).build(app)?)
             .build()

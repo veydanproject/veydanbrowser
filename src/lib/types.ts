@@ -313,6 +313,7 @@ export interface NoteListItem {
   folder_ids: string[];
   pinned: boolean;
   archived: boolean;
+  deleted: boolean;
   doc_status: NoteDocStatus;
   created_at: string;
   updated_at: string;
@@ -323,8 +324,32 @@ export interface NoteListItem {
 
 export interface Note extends NoteListItem {
   file_path: string;
+  /** Absolute dir of the note file; relative attachment links resolve against it */
+  base_dir: string;
   content_hash: string | null;
   content: string | null;
+}
+
+export interface NoteAttachment {
+  name: string;
+  /** `attachments/{note_id}/{name}` — relative to the note file */
+  rel_path: string;
+  size: number;
+  is_image: boolean;
+}
+
+export interface OrphanAttachment {
+  note_id: string;
+  name: string;
+  size: number;
+}
+
+/** Browser capture: domain -> folder / tags */
+export interface CaptureRule {
+  domain: string;
+  folder_id: string | null;
+  tags: string[];
+  template_id?: string | null;
 }
 
 export interface NoteCreateInput {
@@ -334,6 +359,8 @@ export interface NoteCreateInput {
   bindings?: string[];
   tag_names?: string[];
   content?: string;
+  /** Note from the Templates folder whose rendered body becomes the content */
+  template_id?: string;
 }
 
 export interface NoteUpdateInput {
@@ -342,14 +369,49 @@ export interface NoteUpdateInput {
   pinned?: boolean;
 }
 
+/** List filter; also the persisted condition set of a smart view */
 export interface NoteFilter {
   /** Filter notes that contain this binding, e.g. "workspace:id" or "profile:id" */
   binding?: string;
   tag_name?: string;
+  /** Folder and all of its descendants */
   folder_id?: string;
   pinned?: boolean;
+  /** undefined = any, true/false = only that state */
   archived?: boolean;
-  include_deleted?: boolean;
+  /** true = trash only; otherwise live notes */
+  deleted?: boolean;
+  /** Tag `name` or any `name/...` sub-tag */
+  tag_prefix?: string;
+  /** Notes without workspace/profile bindings */
+  global_only?: boolean;
+  bindings_any?: string[];
+  tags_any?: string[];
+  tags_all?: string[];
+  updated_within_days?: number;
+  has_attachments?: boolean;
+  has_open_tasks?: boolean;
+}
+
+export interface NoteLockStatus {
+  enabled: boolean;
+  locked: boolean;
+  /** Inactivity minutes before auto-lock; 0 disables auto-lock */
+  timeout_min: number;
+}
+
+export interface NoteSmartView {
+  id: string;
+  name: string;
+  color: string;
+  conditions: NoteFilter;
+  sort_order: number;
+}
+
+export interface SmartViewInput {
+  name: string;
+  color?: string;
+  conditions: NoteFilter;
 }
 
 // ── Note History ──────────────────────────────────────────────────────────────

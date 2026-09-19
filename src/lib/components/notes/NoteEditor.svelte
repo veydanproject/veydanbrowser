@@ -6,14 +6,22 @@
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { api } from '$lib/api';
-  import type { NoteTag, NoteFolder, Note } from '$lib/types';
+  import type { NoteTag, NoteFolder, Note, NoteAttachment } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import NoteTagsInput from './NoteTagsInput.svelte';
   import NoteHistoryPanel from './NoteHistoryPanel.svelte';
   import NoteHistoryMerge from './NoteHistoryMerge.svelte';
+  import NoteToolbar, { type EditorMode } from './NoteToolbar.svelte';
+  import NotePreview from './NotePreview.svelte';
+  import NoteFindBar from './NoteFindBar.svelte';
+  import NoteAttachments from './NoteAttachments.svelte';
+  import NoteLinks from './NoteLinks.svelte';
+  import WikiLinkPicker from './WikiLinkPicker.svelte';
+  import { applyAction, shiftIndent, continueList, type EditAction, type EditResult } from '$lib/markdown-edit';
+  import { wordCount } from '$lib/markdown';
   import { t, locale } from '$lib/i18n';
   import { relTime } from '$lib/utils';
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
 
   interface Props {
     allTags: NoteTag[];
@@ -46,6 +54,203 @@
   let showDeleteConfirm = $state(false);
   let showHistory = $state(false);
   let mergeHistoryId = $state<string | null>(null);
+
+  // ── Markdown editing: mode, toolbar actions, hotkeys, find/replace ──────────
+  const MODE_KEY = 'notes-editor-mode';
+  function loadMode(): EditorMode {
+    try {
+      const v = localStorage.getItem(MODE_KEY);
+      if (v === 'edit' || v === 'split' || v === 'preview') return v;
+    } catch {}
+    return 'edit';
+  }
+  let mode = $state<EditorMode>(loadMode());
+  let findOpen = $state(false);
+  let findBar: NoteFindBar | null = $state(null);
+
+  function setMode(m: EditorMode) {
+    mode = m;
+    try { localStorage.setItem(MODE_KEY, m); } catch {}
+  }
+
+  const showEditor = $derived(mode !== 'preview');
+  const showPreview = $derived(mode !== 'edit');
+  const readonly = $derived(note?.deleted ?? false);
+  const stats = $derived({ words: wordCount(contentValue), chars: contentValue.length });
+
+  /** Apply a text transformation, restore selection, and schedule autosave. */
+  function applyEdit(r: EditResult) {
+    contentValue = r.text;
+    notesStore.onContentChange(r.text);
+    tick().then(() => {
+      if (!textareaEl) return;
+      textareaEl.focus();
+      textareaEl.setSelectionRange(r.selStart, r.selEnd);
+    });
+  }
+
+  function runAction(action: EditAction) {
+    if (readonly) return;
+    if (mode === 'preview') setMode('split');
+    const start = textareaEl?.selectionStart ?? contentValue.length;
+    const end = textareaEl?.selectionEnd ?? contentValue.length;
+    applyEdit(applyAction(contentValue, start, end, action));
+  }
+
+  function onEditorKeydown(e: KeyboardEvent) {
+    const ta = e.currentTarget as HTMLTextAreaElement;
+    const { selectionStart: s, selectionEnd: en } = ta;
+    const mod = e.ctrlKey || e.metaKey;
+
+    if (wikiOpen && onWikiKeydown(e)) return;
+    if (mod && !e.shiftKey && !e.altKey) {
+      const key = e.key.toLowerCase();
+      const hotkeys: Record<string, EditAction> = { b: 'bold', i: 'italic', k: 'link' };
+      if (hotkeys[key]) { e.preventDefault(); runAction(hotkeys[key]); return; }
+      if (key === 'f') { e.preventDefault(); findOpen = true; findBar?.focus(); return; }
+      if (key === 's') { e.preventDefault(); void notesStore.save(); return; }
+    }
+    if (readonly) return;
+    // Shift+Tab may arrive with a different `key` on WebKitGTK; `code` is stable
+    if (e.key === 'Tab' || e.code === 'Tab') {
+      e.preventDefault();
+      applyEdit(shiftIndent(contentValue, s, en, e.shiftKey));
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !mod && s === en) {
+      const r = continueList(contentValue, s);
+      if (r) { e.preventDefault(); applyEdit(r); }
+    }
+  }
+
+  function onPreviewChange(content: string) {
+    contentValue = content;
+    notesStore.onContentChange(content);
+  }
+
+  // ── Wiki links: `[[` autocomplete, preview navigation, backlinks panel ──────
+  let wikiOpen = $state(false);
+  let wikiQuery = $state('');
+  let wikiIndex = $state(0);
+  let wikiStart = 0;
+  let wikiPicker: WikiLinkPicker | null = $state(null);
+  let linksOpen = $state(false);
+  let linksVersion = $state(0);
+
+  /** Track an unclosed `[[` immediately before the caret. */
+  function updateWikiState() {
+    const pos = textareaEl?.selectionStart ?? contentValue.length;
+    const before = contentValue.slice(0, pos);
+    const open = before.lastIndexOf('[[');
+    if (open < 0 || before.indexOf(']]', open) >= 0 || before.slice(open).includes('\n')) {
+      wikiOpen = false;
+      return;
+    }
+    wikiStart = open;
+    wikiQuery = before.slice(open + 2);
+    wikiIndex = 0;
+    wikiOpen = true;
+  }
+
+  /** Replace the partial `[[query` with a completed link. */
+  function pickWikiLink(title: string) {
+    const pos = textareaEl?.selectionStart ?? contentValue.length;
+    const link = `[[${title}]]`;
+    const rest = contentValue.slice(pos);
+    const skip = rest.startsWith(']]') ? 2 : 0;
+    const text = contentValue.slice(0, wikiStart) + link + rest.slice(skip);
+    wikiOpen = false;
+    const caret = wikiStart + link.length;
+    applyEdit({ text, selStart: caret, selEnd: caret });
+  }
+
+  function onWikiKeydown(e: KeyboardEvent): boolean {
+    const count = wikiPicker?.rowCount() ?? 0;
+    if (e.key === 'Escape') { wikiOpen = false; return true; }
+    if (e.key === 'ArrowDown' && count) { e.preventDefault(); wikiIndex = (wikiIndex + 1) % count; return true; }
+    if (e.key === 'ArrowUp' && count) { e.preventDefault(); wikiIndex = (wikiIndex - 1 + count) % count; return true; }
+    if ((e.key === 'Enter' || e.key === 'Tab') && count) {
+      const title = wikiPicker?.pickAt(wikiIndex);
+      if (title) { e.preventDefault(); pickWikiLink(title); return true; }
+    }
+    return false;
+  }
+
+  /** Open a linked note by id or title; create it when nothing matches. */
+  async function openWikiLink(target: string) {
+    const key = target.trim().toLowerCase();
+    const find = () =>
+      notesStore.list.find((n) => n.id === target) ?? notesStore.list.find((n) => n.title.toLowerCase() === key);
+    let hit = find();
+    if (!hit) {
+      // The list may lag behind a rename; reload before deciding to create
+      await notesStore.refresh();
+      hit = find();
+    }
+    if (hit) { await notesStore.openNote(hit.id); return; }
+    if (readonly || !target.trim()) return;
+    const created = await notesStore.createNote({ title: target.trim(), bindings: note?.bindings ?? [] });
+    await notesStore.openNote(created.id);
+  }
+
+  $effect(() => {
+    if (saveStatus !== 'saved') return;
+    // untrack: reading linksVersion here would make the effect depend on itself
+    untrack(() => linksVersion++);
+  });
+
+  // ── Attachments: paste, OS drag-and-drop, panel ──────────────────────────────
+  let attachments = $state<NoteAttachment[]>([]);
+  let attachmentsOpen = $state(false);
+
+  async function loadAttachments() {
+    attachments = note ? await api.notes.attachmentList(note.id) : [];
+  }
+
+  $effect(() => {
+    if (note?.id) void loadAttachments();
+  });
+
+  /** Insert a Markdown link to the attachment at the cursor. */
+  function insertAttachmentLink(a: NoteAttachment) {
+    const rel = a.rel_path.split('/').map(encodeURIComponent).join('/');
+    const link = `${a.is_image ? '!' : ''}[${a.name}](${rel})`;
+    const pos = textareaEl?.selectionStart ?? contentValue.length;
+    const before = contentValue.slice(0, pos);
+    const pad = before.length && !before.endsWith('\n') ? '\n' : '';
+    const snippet = `${pad}${link}\n`;
+    applyEdit({ text: before + snippet + contentValue.slice(pos), selStart: pos + snippet.length, selEnd: pos + snippet.length });
+  }
+
+  async function uploadFiles(files: File[]) {
+    if (!note || readonly) return;
+    for (const f of files) {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const name = f.name || `pasted-${Date.now()}.${f.type.split('/')[1] ?? 'bin'}`;
+      insertAttachmentLink(await api.notes.attachmentAdd(note.id, name, bytes));
+    }
+    await loadAttachments();
+  }
+
+  function onPaste(e: ClipboardEvent) {
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void uploadFiles(files);
+  }
+
+  function onDragOver(e: DragEvent) {
+    if (readonly || !e.dataTransfer?.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }
+
+  function onDrop(e: DragEvent) {
+    e.preventDefault();
+    if (readonly) return;
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length) void uploadFiles(files);
+  }
 
   // Resizable history panel
   function loadHistWidth(): number {
@@ -123,6 +328,8 @@
       } else if (b.startsWith('profile:')) {
         const pr = profilesStore.list.find(p => p.id === b.slice('profile:'.length));
         if (pr) chips.push({ label: pr.name, color: 'var(--accent)', onremove: () => notesStore.removeNoteBinding(note!.id, b) });
+      } else if (b.startsWith('domain:')) {
+        chips.push({ label: b.slice('domain:'.length), color: 'var(--text-2)', onremove: () => notesStore.removeNoteBinding(note!.id, b) });
       }
     }
 
@@ -131,9 +338,9 @@
 
   const formatUpdatedAt = (iso: string): string => relTime(iso, $locale);
 
-  async function confirmDelete() {
+  async function confirmDeleteForever() {
     if (!note) return;
-    await notesStore.deleteNote(note.id);
+    await notesStore.deleteForever(note.id);
     showDeleteConfirm = false;
   }
 
@@ -164,6 +371,7 @@
 
   function onBodyChange() {
     notesStore.onContentChange(contentValue);
+    updateWikiState();
   }
 
   const saveLabel: Record<string, string> = {
@@ -256,6 +464,23 @@
         </span>
         <button
           class="icon-action"
+          class:active={attachmentsOpen}
+          onclick={() => (attachmentsOpen = !attachmentsOpen)}
+          title={$t('note_att_title')}
+        >
+          <Icon name="paperclip" size={13} />
+          {#if attachments.length > 0}<span class="att-count">{attachments.length}</span>{/if}
+        </button>
+        <button
+          class="icon-action"
+          class:active={linksOpen}
+          onclick={() => (linksOpen = !linksOpen)}
+          title={$t('note_links_title')}
+        >
+          <Icon name="link" size={13} />
+        </button>
+        <button
+          class="icon-action"
           class:active={showHistory}
           onclick={() => { showHistory = !showHistory; mergeHistoryId = null; }}
           title="История версий"
@@ -266,14 +491,66 @@
     </div>
 
     <div class="note-content">
-      <textarea
-        bind:this={textareaEl}
-        bind:value={contentValue}
-        class="editor-body"
-        placeholder={$t('note_content_placeholder')}
-        oninput={onBodyChange}
-        spellcheck="false"
-      ></textarea>
+      <NoteToolbar
+        {mode}
+        {findOpen}
+        disabled={readonly}
+        onaction={runAction}
+        onmode={setMode}
+        ontogglefind={() => (findOpen = !findOpen)}
+      />
+      {#if findOpen}
+        <NoteFindBar
+          bind:this={findBar}
+          textarea={textareaEl}
+          content={contentValue}
+          {readonly}
+          onreplace={onPreviewChange}
+          onclose={() => { findOpen = false; textareaEl?.focus(); }}
+        />
+      {/if}
+      <div class="panes" class:split={mode === 'split'} ondragover={onDragOver} ondrop={onDrop}>
+        {#if showEditor}
+          <textarea
+            bind:this={textareaEl}
+            bind:value={contentValue}
+            class="editor-body"
+            placeholder={$t('note_content_placeholder')}
+            oninput={onBodyChange}
+            onkeydown={onEditorKeydown}
+            onpaste={onPaste}
+            onblur={() => (wikiOpen = false)}
+            {readonly}
+            spellcheck="false"
+          ></textarea>
+          {#if wikiOpen}
+            <WikiLinkPicker
+              bind:this={wikiPicker}
+              query={wikiQuery}
+              notes={notesStore.list}
+              excludeId={note.id}
+              index={wikiIndex}
+              onpick={pickWikiLink}
+            />
+          {/if}
+        {/if}
+        {#if showPreview}
+          <NotePreview content={contentValue} baseDir={note.base_dir} {readonly} onchange={onPreviewChange} onwikilink={openWikiLink} />
+        {/if}
+      </div>
+      {#if linksOpen}
+        <NoteLinks noteId={note.id} version={linksVersion} onopen={(id) => notesStore.openNote(id)} />
+      {/if}
+      {#if attachmentsOpen}
+        <NoteAttachments
+          noteId={note.id}
+          {attachments}
+          {readonly}
+          oninsert={insertAttachmentLink}
+          onchanged={loadAttachments}
+          onpick={uploadFiles}
+        />
+      {/if}
     </div>
 
     <div class="editor-footer">
@@ -282,37 +559,65 @@
         {#if note.bindings.length > 0}
           · {note.bindings.some(b => b.startsWith('profile:')) ? 'profile' : 'workspace'}
         {/if}
+        · {$t('note_stats', { w: String(stats.words), c: String(stats.chars) })}
       </span>
       <div class="footer-actions">
-        <button
-          class="icon-action"
-          onclick={() => note && notesStore.togglePin(note.id)}
-          title={note.pinned ? $t('note_btn_unpin') : $t('note_btn_pin')}
-          class:active={note.pinned}
-        >
-          <Icon name="pin" size={13} />
-        </button>
-        <button
-          class="icon-action"
-          onclick={() => note && notesStore.archiveNote(note.id)}
-          title={$t('note_btn_archive')}
-        >
-          <Icon name="archive" size={13} />
-        </button>
-        <button
-          class="icon-action"
-          onclick={() => note && api.notes.openExternal(note.id)}
-          title={$t('note_btn_open_external')}
-        >
-          <Icon name="external-link" size={13} />
-        </button>
-        <button
-          class="icon-action icon-danger"
-          onclick={() => (showDeleteConfirm = true)}
-          title={$t('note_btn_delete')}
-        >
-          <Icon name="trash-2" size={13} />
-        </button>
+        {#if note.deleted}
+          <button
+            class="icon-action"
+            onclick={() => note && notesStore.restoreNote(note.id)}
+            title={$t('note_btn_restore')}
+          >
+            <Icon name="rotate-ccw" size={13} />
+          </button>
+          <button
+            class="icon-action icon-danger"
+            onclick={() => (showDeleteConfirm = true)}
+            title={$t('note_btn_delete_forever')}
+          >
+            <Icon name="trash-2" size={13} />
+          </button>
+        {:else}
+          <button
+            class="icon-action"
+            onclick={() => note && notesStore.togglePin(note.id)}
+            title={note.pinned ? $t('note_btn_unpin') : $t('note_btn_pin')}
+            class:active={note.pinned}
+          >
+            <Icon name="pin" size={13} />
+          </button>
+          {#if note.archived}
+            <button
+              class="icon-action active"
+              onclick={() => note && notesStore.restoreNote(note.id)}
+              title={$t('note_btn_unarchive')}
+            >
+              <Icon name="archive" size={13} />
+            </button>
+          {:else}
+            <button
+              class="icon-action"
+              onclick={() => note && notesStore.archiveNote(note.id)}
+              title={$t('note_btn_archive')}
+            >
+              <Icon name="archive" size={13} />
+            </button>
+          {/if}
+          <button
+            class="icon-action"
+            onclick={() => note && api.notes.openExternal(note.id)}
+            title={$t('note_btn_open_external')}
+          >
+            <Icon name="external-link" size={13} />
+          </button>
+          <button
+            class="icon-action icon-danger"
+            onclick={() => note && notesStore.deleteNote(note.id)}
+            title={$t('note_btn_delete')}
+          >
+            <Icon name="trash-2" size={13} />
+          </button>
+        {/if}
       </div>
     </div>
 
@@ -326,7 +631,7 @@
           </p>
           <div class="delete-actions">
             <button class="btn btn-ghost btn-sm" onclick={() => (showDeleteConfirm = false)}>{$t('notes_btn_cancel')}</button>
-            <button class="btn btn-danger btn-sm" onclick={confirmDelete}>{$t('note_delete_confirm')}</button>
+            <button class="btn btn-danger btn-sm" onclick={confirmDeleteForever}>{$t('note_delete_confirm')}</button>
           </div>
         </div>
       </div>
@@ -527,52 +832,6 @@
     animation: spin 1s linear infinite;
   }
 
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 0.1rem;
-    padding: 0.3rem var(--sp-3);
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-    flex-shrink: 0;
-    flex-wrap: wrap;
-  }
-  .tb-btn {
-    background: none;
-    border: none;
-    border-radius: 4px;
-    padding: 0.2rem 0.45rem;
-    cursor: pointer;
-    color: var(--text-2);
-    font-size: var(--fs-sm);
-    line-height: 1;
-    transition: background 0.12s, color 0.12s;
-    min-width: 1.8rem;
-    text-align: center;
-  }
-  .tb-btn:hover { background: var(--surface-2); color: var(--text); }
-  .tb-sep {
-    width: 1px;
-    height: 1.1rem;
-    background: var(--border);
-    margin: 0 0.2rem;
-    flex-shrink: 0;
-  }
-  .tb-spacer { flex: 1; }
-  .tb-mode-toggle {
-    font-size: var(--fs-2xs);
-    padding: 0.2rem 0.6rem;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    color: var(--text-2);
-  }
-  .tb-mode-toggle.active {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-  .tb-mode-toggle:hover { background: var(--surface-2); color: var(--text); }
-
   .note-content {
     flex: 1;
     display: flex;
@@ -583,6 +842,15 @@
     border-radius: var(--radius);
     background: var(--surface);
   }
+
+  .panes {
+    position: relative;
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+  .panes > :global(*) { flex: 1; min-width: 0; }
+  .panes.split > :global(* + *) { border-left: 1px solid var(--border); }
 
   .editor-body {
     flex: 1;
@@ -633,6 +901,11 @@
   }
 
   .icon-action:hover { color: var(--text); background: var(--surface); }
+  .att-count {
+    font-size: var(--fs-2xs);
+    font-family: var(--font-mono);
+    margin-left: 2px;
+  }
   .icon-action.active { color: var(--accent); }
   .icon-danger:hover { color: var(--danger-text) !important; }
 

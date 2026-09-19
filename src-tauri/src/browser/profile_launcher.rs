@@ -29,6 +29,8 @@ fn read_window_size_from_xulstore(firefox_profile_dir: &std::path::Path) -> Opti
 const UI_STATE_PREF: &str = "user_pref(\"browser.uiCustomization.state\", \"";
 const TABSTRIP_WIDGETS: [&str; 2] = ["new-tab-button", "alltabs-button"];
 const BOOKMARKS_WIDGET: &str = "personal-bookmarks";
+/// CustomizableUI id of the extension's browser_action: add-on id with non [a-z0-9_-] replaced by `_`.
+const NOTES_WIDGET: &str = "notes_veydan_net-browser-action";
 
 /// Decodes a JS string literal body ("\\" and "\"" escapes) from prefs.js.
 fn unescape_pref(raw: &str) -> String {
@@ -75,6 +77,28 @@ fn repair_placements(state: &mut serde_json::Value) -> bool {
     true
 }
 
+/// Pins the notes extension button to nav-bar (before the extensions menu) so it is
+/// visible right away instead of hidden in the unified extensions panel.
+/// Returns true if placements were changed.
+fn pin_notes_widget(state: &mut serde_json::Value) -> bool {
+    let Some(nav_bar) = state
+        .get_mut("placements")
+        .and_then(|p| p.get_mut("nav-bar"))
+        .and_then(|v| v.as_array_mut())
+    else {
+        return false;
+    };
+    let widget = serde_json::Value::String(NOTES_WIDGET.to_string());
+    if nav_bar.contains(&widget) {
+        return false;
+    }
+    match nav_bar.iter().position(|id| id.as_str() == Some("unified-extensions-button")) {
+        Some(pos) => nav_bar.insert(pos, widget),
+        None => nav_bar.push(widget),
+    }
+    true
+}
+
 /// Fixes browser.uiCustomization.state in prefs.js before launch (browser is not running).
 fn repair_ui_customization_state(firefox_profile_dir: &std::path::Path) {
     let prefs_path = firefox_profile_dir.join("prefs.js");
@@ -94,7 +118,8 @@ fn repair_ui_customization_state(firefox_profile_dir: &std::path::Path) {
     let Ok(mut state) = serde_json::from_str::<serde_json::Value>(&unescape_pref(raw)) else {
         return;
     };
-    if !repair_placements(&mut state) {
+    let changed = repair_placements(&mut state);
+    if !(pin_notes_widget(&mut state) || changed) {
         return;
     }
     let fixed = format!(
@@ -123,6 +148,11 @@ pub async fn launch_profile(
 
     let user_js_content = userjs::generate(profile, effective_proxy.as_ref());
     std::fs::write(firefox_profile_dir.join("user.js"), user_js_content).map_err(err)?;
+
+    // Notes capture extension, carries this profile's id and the app UI language
+    let locale = crate::commands::settings::app_locale(&state.db).await;
+    crate::capture::extension::install_extension(&firefox_profile_dir, &profile.id, &locale)
+        .unwrap_or_else(|e| eprintln!("install_extension failed: {e}"));
 
     if profile.browser_type == "camoufox" {
         let app_name = crate::commands::camoufox::resolve_binary(&state.app_data_dir)

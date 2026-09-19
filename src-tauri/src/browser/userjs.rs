@@ -141,6 +141,11 @@ pub fn generate(profile: &Profile, proxy: Option<&Proxy>) -> String {
         prefs.push(pref_int("network.proxy.socks_port", 0));
     }
 
+    // Sideloaded unsigned notes extension (firefox-profile/extensions/*.xpi)
+    prefs.push(pref_bool("xpinstall.signatures.required", false));
+    prefs.push(pref_int("extensions.autoDisableScopes", 0));
+    prefs.push(pref_int("extensions.enabledScopes", 5));
+
     prefs.join("\n")
 }
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 mod browser;
+pub mod capture;
 // Public so integration smoke examples (examples/*.rs) can exercise command internals.
 pub mod commands;
 mod db;
@@ -16,7 +17,7 @@ use commands::backup::{
     backup_get_config, backup_list, backup_restore, backup_run_now, backup_set_config,
     start_backup_scheduler, BackupManager,
 };
-use commands::settings::{tray_set_labels, tray_settings_get, tray_settings_set, window_minimize};
+use commands::settings::{app_locale_set, tray_set_labels, tray_settings_get, tray_settings_set, window_minimize};
 use commands::camoufox::{
     camoufox_download, camoufox_download_cancel, camoufox_download_state, camoufox_latest_version,
     camoufox_status, DownloadManager,
@@ -27,9 +28,16 @@ use commands::notes::{
     note_set_tags, note_sync, note_tag_list, note_tag_create, note_tag_delete, note_tag_update,
     note_folder_list, note_folder_create, note_folder_update, note_folder_delete,
     note_add_folder, note_remove_folder, note_add_binding, note_remove_binding,
-    note_update, notes_get_dir, notes_set_dir, note_open_window,
+    note_update, notes_get_dir, notes_set_dir, notes_capture_rules_get, notes_capture_rules_set,
+    note_open_window, note_smart_view_create, note_smart_view_delete, note_smart_view_list,
+    note_smart_view_update, open_quick_capture, quick_capture_shortcut_get, quick_capture_shortcut_set,
+    note_backlinks, note_related,
+    notes_lock_status, notes_lock_set, notes_lock_timeout_set, notes_lock_unlock, notes_lock_lock, notes_lock_touch,
     note_history_list, note_history_get, note_history_diff,
     note_history_restore, note_history_merge,
+    note_attachment_add, note_attachment_add_from_path, note_attachment_list,
+    note_attachment_delete, note_attachment_open, note_attachments_gc,
+    note_export, note_import,
 };
 use commands::password::{
     pwgen_history_add, pwgen_history_clear, pwgen_history_list, pwgen_history_trim,
@@ -91,6 +99,7 @@ pub struct AppState {
     pub tray: Arc<Mutex<Option<TrayIcon>>>,
     /// Notes dir watcher; dropped before a backup restore releases its handle.
     pub notes_watcher: Arc<Mutex<Option<notify::RecommendedWatcher>>>,
+    pub notes_lock: commands::notes::NotesLock,
 }
 
 /// Read a boolean flag from `app_settings` (stored as "1"/"0"), defaulting to
@@ -159,6 +168,11 @@ fn update_supported() -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Started by the browser as the extension's native messaging host: no UI, just relay.
+    if capture::is_host_invocation() {
+        capture::host::run();
+        return;
+    }
     tauri::Builder::default()
         // Must be first: second launch is closed here before other plugins run.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -168,6 +182,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let data_dir = app_data_dir.join("VeydanBrowser");
@@ -219,17 +234,32 @@ pub fn run() {
                 tray_labels: Arc::new(Mutex::new(TrayLabels::default())),
                 tray: Arc::new(Mutex::new(None)),
                 notes_watcher: Arc::new(Mutex::new(None)),
+                notes_lock: commands::notes::NotesLock::default(),
             });
+            commands::notes::start_auto_lock(app.handle().clone());
+
+            // Browser capture bridge: local socket + native messaging manifest
+            capture::server::start(app.handle().clone());
+            if let Err(e) = capture::extension::register_native_host(&data_dir) {
+                eprintln!("capture: native host registration failed: {e}");
+            }
 
             {
                 let state = app.state::<AppState>();
                 let custom_dir = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
+                // Attachments are served through the asset protocol from both dirs.
+                commands::notes::allow_asset_dir(app.handle(), &data_dir.join("notes").join("documents"));
+                if let Some(ref custom) = custom_dir {
+                    commands::notes::allow_asset_dir(app.handle(), custom);
+                }
                 let watcher =
                     commands::notes::start_notes_watcher(app.handle().clone(), data_dir, custom_dir);
                 if let Ok(mut slot) = state.notes_watcher.lock() {
                     *slot = watcher;
                 };
             }
+
+            commands::notes::register_quick_capture_shortcut(app.handle());
 
             // Scheduled backups: ticks every 60s, catches up missed runs on start.
             start_backup_scheduler(app.handle().clone());
@@ -293,6 +323,7 @@ pub fn run() {
             tray_settings_get,
             tray_settings_set,
             tray_set_labels,
+            app_locale_set,
             window_minimize,
             // Backup
             backup_get_config,
@@ -395,12 +426,37 @@ pub fn run() {
             note_remove_binding,
             notes_get_dir,
             notes_set_dir,
+            notes_capture_rules_get,
+            notes_capture_rules_set,
+            note_smart_view_list,
+            note_smart_view_create,
+            note_smart_view_update,
+            note_smart_view_delete,
+            open_quick_capture,
+            quick_capture_shortcut_get,
+            quick_capture_shortcut_set,
+            note_backlinks,
+            note_related,
+            notes_lock_status,
+            notes_lock_set,
+            notes_lock_timeout_set,
+            notes_lock_unlock,
+            notes_lock_lock,
+            notes_lock_touch,
             note_open_window,
             note_history_list,
             note_history_get,
             note_history_diff,
             note_history_restore,
             note_history_merge,
+            note_attachment_add,
+            note_attachment_add_from_path,
+            note_attachment_list,
+            note_attachment_delete,
+            note_attachment_open,
+            note_attachments_gc,
+            note_export,
+            note_import,
             // SSH
             ssh_connection_list,
             ssh_connection_get,

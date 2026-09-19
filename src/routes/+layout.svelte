@@ -15,7 +15,7 @@
   import type { TrayLabels } from '$lib/api';
   import { theme, toggleTheme } from '$lib/theme';
   import Icon from '$lib/Icon.svelte';
-  import { api, isNotesWindow } from '$lib/api';
+  import { api, isNotesWindow, windowLabel } from '$lib/api';
   import type { Profile } from '$lib/types';
   import PasswordGenerator from '$lib/components/PasswordGenerator.svelte';
   import TotpGenerator from '$lib/components/TotpGenerator.svelte';
@@ -101,13 +101,16 @@
       section_files: tt('nav_files'),
       section_notes: tt('nav_notes'),
       password_generator: tt('tray_password_generator'),
+      quick_capture: tt('tray_quick_capture'),
       tooltip: tt('tray_tooltip'),
     };
   }
 
+  // Tray menu and browser extension follow the app language
   function syncTrayLabels() {
     if (!isTauri) return;
     api.settings.setTrayLabels(buildTrayLabels()).catch(() => {});
+    api.settings.setLocale(get(locale)).catch(() => {});
   }
 
   function handleKeyBack(e: KeyboardEvent) {
@@ -229,12 +232,13 @@
  <div class="layout">
   {#if isCsd}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="titlebar" onmousedown={onTitlebarMouseDown} ondblclick={onTitlebarDblClick}>
+    <div class="titlebar">
       <div class="titlebar-title">
         <img src="/logo.png" alt="" class="titlebar-logo" />
-        <span>{standaloneNotes ? $t('nav_notes') : 'Veydan Browser'}</span>
+        <span>{standaloneNotes ? $t(windowLabel() === 'quick-capture' ? 'quick_capture_title' : 'nav_notes') : 'Veydan Browser'}</span>
       </div>
-      <div class="titlebar-drag"></div>
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="titlebar-drag" onmousedown={onTitlebarMouseDown} ondblclick={onTitlebarDblClick}></div>
       {#if !standaloneNotes}
         <button
           class="titlebar-btn"
@@ -259,7 +263,7 @@
   {/if}
   {#if !standaloneNotes}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <header class="topbar" onmousedown={onTitlebarMouseDown} ondblclick={onTitlebarDblClick}>
+    <header class="topbar">
      <div class="topbar-inner">
       <a href="/" class="topbar-brand">
         <span class="brand-tile">

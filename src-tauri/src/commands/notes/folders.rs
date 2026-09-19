@@ -3,6 +3,8 @@
 
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
+use super::files::*;
+use super::index::rebuild_manifest;
 use super::models::*;
 use chrono::Utc;
 use uuid::Uuid;
@@ -129,31 +131,58 @@ pub async fn note_folder_delete(
     Ok(())
 }
 
+/// Persist a new bindings list to the DB and the note file frontmatter.
+pub(crate) async fn persist_bindings(
+    note_id: &str,
+    bindings: &[String],
+    state: &AppState,
+) -> Result<(), AppError> {
+    let new_json = serde_json::to_string(bindings).map_err(AppError::other)?;
+    let now = Utc::now().to_rfc3339();
+    sqlx::query("UPDATE notes SET bindings = ?, updated_at = ? WHERE id = ?")
+        .bind(&new_json)
+        .bind(&now)
+        .bind(note_id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    let Some(row) = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+        .bind(note_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?
+    else {
+        return Ok(());
+    };
+
+    let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
+    if file_path.exists() {
+        let (_, tags, body) = read_note_file(&file_path)?;
+        write_note_file(&file_path, &row, &tags, &body)?;
+    }
+    rebuild_manifest(&state.db, &state.app_data_dir).await
+}
+
+async fn load_bindings(note_id: &str, state: &AppState) -> Result<Option<Vec<String>>, AppError> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT bindings FROM notes WHERE id = ?")
+        .bind(note_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    Ok(row.map(|(json,)| serde_json::from_str(&json).unwrap_or_default()))
+}
+
 #[tauri::command]
 pub async fn note_add_binding(
     note_id: String,
     binding: String,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT bindings FROM notes WHERE id = ?")
-        .bind(&note_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(AppError::db)?;
-
-    let Some((bindings_json,)) = row else { return Ok(()); };
-    let mut bindings: Vec<String> = serde_json::from_str(&bindings_json).unwrap_or_default();
+    let Some(mut bindings) = load_bindings(&note_id, &state).await? else { return Ok(()); };
     if !bindings.contains(&binding) {
         bindings.push(binding);
-        let new_json = serde_json::to_string(&bindings).map_err(AppError::other)?;
-        let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("UPDATE notes SET bindings = ?, updated_at = ? WHERE id = ?")
-            .bind(&new_json)
-            .bind(&now)
-            .bind(&note_id)
-            .execute(&state.db)
-            .await
-            .map_err(AppError::db)?;
+        persist_bindings(&note_id, &bindings, &state).await?;
     }
     Ok(())
 }
@@ -164,25 +193,9 @@ pub async fn note_remove_binding(
     binding: String,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT bindings FROM notes WHERE id = ?")
-        .bind(&note_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(AppError::db)?;
-
-    let Some((bindings_json,)) = row else { return Ok(()); };
-    let mut bindings: Vec<String> = serde_json::from_str(&bindings_json).unwrap_or_default();
+    let Some(mut bindings) = load_bindings(&note_id, &state).await? else { return Ok(()); };
     bindings.retain(|b| b != &binding);
-    let new_json = serde_json::to_string(&bindings).map_err(AppError::other)?;
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("UPDATE notes SET bindings = ?, updated_at = ? WHERE id = ?")
-        .bind(&new_json)
-        .bind(&now)
-        .bind(&note_id)
-        .execute(&state.db)
-        .await
-        .map_err(AppError::db)?;
-    Ok(())
+    persist_bindings(&note_id, &bindings, &state).await
 }
 
 #[tauri::command]

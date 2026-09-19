@@ -264,6 +264,7 @@ pub async fn sync_notes_index(
         let file_path = resolve_note_abs_path(app_data_dir, &row.file_path);
         let (_, tags_list, body) = read_note_file(&file_path).unwrap_or_default();
         let tags_str = tags_list.join(" ");
+        super::links::reindex_links(&row.id, &body, db).await?;
 
         let mut conn = db.acquire().await.map_err(AppError::db)?;
         sqlx::query(

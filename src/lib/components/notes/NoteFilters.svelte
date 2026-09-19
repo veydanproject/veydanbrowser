@@ -2,9 +2,10 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
-  import type { NoteListItem, NoteTag, NoteFolder } from '$lib/types';
+  import type { NoteListItem, NoteTag, NoteFolder, NoteSmartView } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
+  import SmartViewDialog from './SmartViewDialog.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { notesStore } from '$lib/store/notes.svelte';
@@ -17,13 +18,15 @@
 
   interface Props {
     notes: NoteListItem[];
+    trashCount?: number;
     allTags: NoteTag[];
     folders: NoteFolder[];
     activeFilter: { type: string; id?: string };
     onfilter: (filter: { type: string; id?: string }) => void;
+    onexportfolder?: (folderId: string) => void;
   }
 
-  let { notes, allTags, folders, activeFilter, onfilter }: Props = $props();
+  let { notes, trashCount = 0, allTags, folders, activeFilter, onfilter, onexportfolder }: Props = $props();
 
   // ── Единый collapsed state (ключи: 'ws:id', 'folder:id', 'tag:path') ────────
   let collapsed = $state<Set<string>>(new Set());
@@ -298,6 +301,42 @@
     }).filter(ws => ws.noteCount > 0 || ws.profiles.length > 0)
   );
 
+  // ── Smart views ───────────────────────────────────────────────────────────────
+  let smartDialogOpen = $state(false);
+  let smartEditing = $state<NoteSmartView | null>(null);
+  let hoveredSmartId = $state<string | null>(null);
+
+  function openSmartDialog(view: NoteSmartView | null, e?: MouseEvent) {
+    e?.stopPropagation();
+    smartEditing = view;
+    smartDialogOpen = true;
+    openMenuKey = null;
+  }
+
+  async function deleteSmartView(view: NoteSmartView, e: MouseEvent) {
+    e.stopPropagation();
+    openMenuKey = null;
+    await notesStore.deleteSmartView(view.id);
+    if (activeFilter.type === 'smart' && activeFilter.id === view.id) onfilter({ type: 'all' });
+  }
+
+  // ── Sites (domain: bindings from browser capture) ─────────────────────────────
+  const siteList = $derived.by(() => {
+    const counts = new Map<string, number>();
+    for (const n of notes) {
+      if (n.archived) continue;
+      for (const b of n.bindings) {
+        if (b.startsWith('domain:')) {
+          const d = b.slice('domain:'.length);
+          counts.set(d, (counts.get(d) ?? 0) + 1);
+        }
+      }
+    }
+    return [...counts.entries()]
+      .map(([domain, noteCount]) => ({ domain, noteCount }))
+      .sort((a, b) => b.noteCount - a.noteCount || a.domain.localeCompare(b.domain));
+  });
+
   // ── Helpers ───────────────────────────────────────────────────────────────────
   function isGlobal(bindings: string[]) {
     return !bindings.some(b => b.startsWith('workspace:') || b.startsWith('profile:'));
@@ -406,6 +445,11 @@
               <button onclick={(e) => { startEditFolder(f, e); openMenuKey = null; }}>
                 <Icon name="pencil" size={11} /><span>Редактировать</span>
               </button>
+              {#if onexportfolder}
+                <button onclick={() => { onexportfolder(f.id); openMenuKey = null; }}>
+                  <Icon name="download" size={11} /><span>{$t('notes_folder_export')}</span>
+                </button>
+              {/if}
               <button class="menu-del" onclick={(e) => { void deleteFolder(f, e); openMenuKey = null; }}>
                 <Icon name="trash-2" size={11} /><span>Удалить</span>
               </button>
@@ -520,6 +564,11 @@
       {$t('notes_filter_archived')}
       <span class="count">{countArchived}</span>
     </button>
+    <button class={filterClass('trash')} onclick={() => onfilter({ type: 'trash' })}>
+      <span class="global-icon-slot"><Icon name="trash-2" size={13} /></span>
+      {$t('notes_filter_trash')}
+      <span class="count">{trashCount}</span>
+    </button>
   </div>
 
   <!-- Воркспейсы -->
@@ -556,6 +605,73 @@
     </div>
   {/if}
 
+  <!-- Умные списки -->
+  <div class="filter-section">
+    <div class="section-label-row">
+      <span class="section-label">{$t('notes_smart_title')}</span>
+      <button class="btn-add-area" onclick={() => openSmartDialog(null)} title={$t('notes_smart_new')}>
+        <Icon name="plus" size={11} />
+      </button>
+    </div>
+    {#each notesStore.smartViews as view (view.id)}
+      <div class="tree-node">
+        <div class="tree-row folder-row" role="group"
+          onmouseenter={() => hoveredSmartId = view.id}
+          onmouseleave={() => hoveredSmartId = null}
+        >
+          <button class="{filterClass('smart', view.id)} tree-item" onclick={() => onfilter({ type: 'smart', id: view.id })}>
+            <span class="dot-slot"><span class="dot" style="background:{view.color}"></span></span>
+            <span class="item-name">{view.name}</span>
+          </button>
+          <div class="count-wrap"
+            class:menu-open={openMenuKey === 'smart:' + view.id}
+            class:hovered={hoveredSmartId === view.id}
+            role="presentation"
+            onclick={(e) => e.stopPropagation()}
+          >
+            <button class="dots-btn" onclick={(e) => openMenuAt(e, `smart:${view.id}`)} title="Действия">
+              <Icon name="more-vertical" size={11} />
+            </button>
+            {#if openMenuKey === 'smart:' + view.id}
+              <div class="folder-menu" style="left:{menuPos.x}px; top:{menuPos.y}px">
+                <button onclick={(e) => openSmartDialog(view, e)}>
+                  <Icon name="pencil" size={11} /><span>{$t('notes_smart_edit')}</span>
+                </button>
+                <button class="menu-del" onclick={(e) => deleteSmartView(view, e)}>
+                  <Icon name="trash-2" size={11} /><span>{$t('notes_tag_delete')}</span>
+                </button>
+              </div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    {/each}
+    {#if notesStore.smartViews.length === 0}
+      <span class="empty-hint">{$t('notes_smart_empty')}</span>
+    {/if}
+  </div>
+
+  <!-- Сайты -->
+  {#if siteList.length > 0}
+    <div class="filter-section">
+      <div class="section-label-row">
+        <button class="section-label section-toggle" onclick={() => toggle('sites')}>
+          {$t('notes_filter_sites')}
+          <Icon name={collapsed.has('sites') ? 'chevron-right' : 'chevron-down'} size={10} />
+        </button>
+      </div>
+      {#if !collapsed.has('sites')}
+        {#each siteList as site (site.domain)}
+          <button class={filterClass('domain', site.domain)} onclick={() => onfilter({ type: 'domain', id: site.domain })}>
+            <span class="global-icon-slot"><Icon name="globe" size={12} /></span>
+            <span class="item-name">{site.domain}</span>
+            <span class="count">{site.noteCount}</span>
+          </button>
+        {/each}
+      {/if}
+    </div>
+  {/if}
+
   <!-- Папки -->
   <div class="filter-section">
     <div class="section-label-row">
@@ -588,6 +704,8 @@
     {/if}
   </div>
 </div>
+
+<SmartViewDialog open={smartDialogOpen} view={smartEditing} onclose={() => (smartDialogOpen = false)} />
 
 <!-- Модалка тега -->
 <Dialog open={popupOpen} width="300px" title={popupPrefix ? `Тег в «${popupPrefix.replace('/', '')}»` : 'Новый тег'} onclose={closePopup}>
@@ -741,6 +859,16 @@
     letter-spacing: 0.06em;
     color: var(--text-3);
     font-weight: 600;
+  }
+
+  .section-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
   }
 
   /* Nav item — базовый элемент списка */
