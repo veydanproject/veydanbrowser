@@ -10,8 +10,8 @@ attribution requirements of the MIT, Apache-2.0, BSD, ISC, MPL-2.0 and other
 licenses under which these components are distributed.
 
 - **Rust / Cargo crates:** 646
-- **JavaScript / npm packages:** 106
-- **Total third-party components:** 752
+- **JavaScript / npm packages:** 156
+- **Total third-party components:** 802
 
 > Entries marked with an asterisk (`*`) are platform-specific dependencies
 > (Windows / macOS / Android / WASM targets) that are **not** compiled into the
@@ -71,7 +71,7 @@ their file-level copyleft imposes no obligations on VeydanBrowser's own code.
 
 | License | Count |
 |---|---:|
-| MIT | 87 |
+| MIT | 137 |
 | Apache-2.0 OR MIT | 6 |
 | Apache-2.0 | 6 |
 | MIT OR Apache-2.0 | 3 |
@@ -736,7 +736,7 @@ Thank you to the authors of the following Cargo crates:
 
 ---
 
-## Full acknowledgements — npm packages (106)
+## Full acknowledgements — npm packages (156)
 
 Thank you to the authors of the following npm packages:
 
@@ -752,6 +752,9 @@ Thank you to the authors of the following npm packages:
 | @polka/url | 1.0.0-next.29 | MIT |
 | @rolldown/binding-linux-x64-gnu | 1.1.4 | MIT |
 | @rolldown/pluginutils | 1.0.1 | MIT |
+| @floating-ui/core | 1.8.0 | MIT |
+| @floating-ui/dom | 1.8.0 | MIT |
+| @floating-ui/utils | 0.2.12 | MIT |
 | @rollup/rollup-linux-x64-gnu | 4.61.1 | MIT |
 | @rollup/rollup-linux-x64-gnu | 4.62.2 | MIT |
 | @standard-schema/spec | 1.1.0 | MIT |
@@ -773,6 +776,36 @@ Thank you to the authors of the following npm packages:
 | @tauri-apps/plugin-dialog | 2.7.1 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-fs | 2.5.1 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-opener | 2.5.4 | MIT OR Apache-2.0 |
+| @tiptap/core | 3.31.3 | MIT |
+| @tiptap/extension-blockquote | 3.31.3 | MIT |
+| @tiptap/extension-bold | 3.31.3 | MIT |
+| @tiptap/extension-bullet-list | 3.31.3 | MIT |
+| @tiptap/extension-code | 3.31.3 | MIT |
+| @tiptap/extension-code-block | 3.31.3 | MIT |
+| @tiptap/extension-document | 3.31.3 | MIT |
+| @tiptap/extension-dropcursor | 3.31.3 | MIT |
+| @tiptap/extension-gapcursor | 3.31.3 | MIT |
+| @tiptap/extension-hard-break | 3.31.3 | MIT |
+| @tiptap/extension-heading | 3.31.3 | MIT |
+| @tiptap/extension-horizontal-rule | 3.31.3 | MIT |
+| @tiptap/extension-image | 3.31.3 | MIT |
+| @tiptap/extension-italic | 3.31.3 | MIT |
+| @tiptap/extension-link | 3.31.3 | MIT |
+| @tiptap/extension-list | 3.31.3 | MIT |
+| @tiptap/extension-list-item | 3.31.3 | MIT |
+| @tiptap/extension-list-keymap | 3.31.3 | MIT |
+| @tiptap/extension-ordered-list | 3.31.3 | MIT |
+| @tiptap/extension-paragraph | 3.31.3 | MIT |
+| @tiptap/extension-strike | 3.31.3 | MIT |
+| @tiptap/extension-table | 3.31.3 | MIT |
+| @tiptap/extension-task-item | 3.31.3 | MIT |
+| @tiptap/extension-task-list | 3.31.3 | MIT |
+| @tiptap/extension-text | 3.31.3 | MIT |
+| @tiptap/extension-underline | 3.31.3 | MIT |
+| @tiptap/extensions | 3.31.3 | MIT |
+| @tiptap/markdown | 3.31.3 | MIT |
+| @tiptap/pm | 3.31.3 | MIT |
+| @tiptap/starter-kit | 3.31.3 | MIT |
 | @types/cookie | 0.6.0 | MIT |
 | @types/estree | 1.0.9 | MIT |
 | @types/node | 25.9.1 | MIT |
@@ -809,24 +842,40 @@ Thank you to the authors of the following npm packages:
 | kleur | 4.1.5 | MIT |
 | lightningcss | 1.32.0 | MPL-2.0 |
 | lightningcss-linux-x64-gnu | 1.32.0 | MPL-2.0 |
+| linkifyjs | 4.3.3 | MIT |
 | locate-character | 3.0.0 | MIT |
 | magic-string | 0.30.21 | MIT |
-| marked | 18.0.5 | MIT |
+| marked | 17.0.6 | MIT |
 | mri | 1.2.0 | MIT |
 | mrmime | 2.0.1 | MIT |
 | ms | 2.1.3 | MIT |
 | nanoid | 3.3.12 | MIT |
 | nanoid | 3.3.15 | MIT |
 | obug | 2.1.3 | MIT |
+| orderedmap | 2.1.1 | MIT |
 | picocolors | 1.1.1 | ISC |
 | picomatch | 4.0.4 | MIT |
 | picomatch | 4.0.5 | MIT |
 | postcss | 8.5.15 | MIT |
 | postcss | 8.5.16 | MIT |
+| prosemirror-changeset | 2.4.3 | MIT |
+| prosemirror-commands | 1.7.2 | MIT |
+| prosemirror-dropcursor | 1.8.3 | MIT |
+| prosemirror-gapcursor | 1.4.1 | MIT |
+| prosemirror-history | 1.5.0 | MIT |
+| prosemirror-inputrules | 1.5.1 | MIT |
+| prosemirror-keymap | 1.2.3 | MIT |
+| prosemirror-model | 1.25.11 | MIT |
+| prosemirror-schema-list | 1.5.1 | MIT |
+| prosemirror-state | 1.4.4 | MIT |
+| prosemirror-tables | 1.8.5 | MIT |
+| prosemirror-transform | 1.12.1 | MIT |
+| prosemirror-view | 1.42.4 | MIT |
 | readdirp | 4.1.2 | MIT |
 | rolldown | 1.1.4 | MIT |
 | rollup | 4.61.1 | MIT |
 | rollup | 4.62.2 | MIT |
+| rope-sequence | 1.3.4 | MIT |
 | sade | 1.8.1 | MIT |
 | set-cookie-parser | 3.1.0 | MIT |
 | set-cookie-parser | 3.1.1 | MIT |
@@ -847,6 +896,7 @@ Thank you to the authors of the following npm packages:
 | vite | 6.4.3 | MIT |
 | vite | 8.1.3 | MIT |
 | vitefu | 1.1.3 | MIT |
+| w3c-keyname | 2.2.8 | MIT |
 | zimmerframe | 1.1.4 | MIT |
 
 ---

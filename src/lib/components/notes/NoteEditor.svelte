@@ -12,7 +12,7 @@
   import NoteHistoryPanel from './NoteHistoryPanel.svelte';
   import NoteHistoryMerge from './NoteHistoryMerge.svelte';
   import NoteToolbar, { type EditorMode } from './NoteToolbar.svelte';
-  import NotePreview from './NotePreview.svelte';
+  import NoteRichEditor from './NoteRichEditor.svelte';
   import NoteFindBar from './NoteFindBar.svelte';
   import NoteAttachments from './NoteAttachments.svelte';
   import NoteLinks from './NoteLinks.svelte';
@@ -55,33 +55,37 @@
   let showHistory = $state(false);
   let mergeHistoryId = $state<string | null>(null);
 
-  // ── Markdown editing: mode, toolbar actions, hotkeys, find/replace ──────────
+  // ── Editing modes: `rich` (WYSIWYG, default) and `source` (raw Markdown) ─────
   const MODE_KEY = 'notes-editor-mode';
   function loadMode(): EditorMode {
     try {
+      // 'edit' is the pre-WYSIWYG name of the source mode
       const v = localStorage.getItem(MODE_KEY);
-      if (v === 'edit' || v === 'split' || v === 'preview') return v;
+      if (v === 'source' || v === 'edit') return 'source';
     } catch {}
-    return 'edit';
+    return 'rich';
   }
   let mode = $state<EditorMode>(loadMode());
   let findOpen = $state(false);
   let findBar: NoteFindBar | null = $state(null);
+  let richEditor: NoteRichEditor | null = $state(null);
 
   function setMode(m: EditorMode) {
     mode = m;
     try { localStorage.setItem(MODE_KEY, m); } catch {}
   }
 
-  const showEditor = $derived(mode !== 'preview');
-  const showPreview = $derived(mode !== 'edit');
   const readonly = $derived(note?.deleted ?? false);
   const stats = $derived({ words: wordCount(contentValue), chars: contentValue.length });
 
-  /** Apply a text transformation, restore selection, and schedule autosave. */
+  function setContent(content: string) {
+    contentValue = content;
+    notesStore.onContentChange(content);
+  }
+
+  /** Apply a text transformation to the source textarea, restore selection, and schedule autosave. */
   function applyEdit(r: EditResult) {
-    contentValue = r.text;
-    notesStore.onContentChange(r.text);
+    setContent(r.text);
     tick().then(() => {
       if (!textareaEl) return;
       textareaEl.focus();
@@ -91,10 +95,28 @@
 
   function runAction(action: EditAction) {
     if (readonly) return;
-    if (mode === 'preview') setMode('split');
+    if (mode === 'rich') { richEditor?.runAction(action); return; }
     const start = textareaEl?.selectionStart ?? contentValue.length;
     const end = textareaEl?.selectionEnd ?? contentValue.length;
     applyEdit(applyAction(contentValue, start, end, action));
+  }
+
+  /** Find/replace works on the source textarea, so it switches the mode. */
+  function openFind() {
+    setMode('source');
+    findOpen = true;
+    tick().then(() => findBar?.focus());
+  }
+
+  /** Ctrl+K / Ctrl+F / Ctrl+S in the rich editor (bold/italic are built in). */
+  function onRichHotkey(e: KeyboardEvent): boolean {
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod || e.shiftKey || e.altKey) return false;
+    const key = e.key.toLowerCase();
+    if (key === 'k') { runAction('link'); return true; }
+    if (key === 'f') { openFind(); return true; }
+    if (key === 's') { void notesStore.save(); return true; }
+    return false;
   }
 
   function onEditorKeydown(e: KeyboardEvent) {
@@ -102,12 +124,15 @@
     const { selectionStart: s, selectionEnd: en } = ta;
     const mod = e.ctrlKey || e.metaKey;
 
-    if (wikiOpen && onWikiKeydown(e)) return;
+    if (wikiOpen) {
+      if (e.key === 'Escape') { wikiOpen = false; return; }
+      if (wikiPicker?.handleKeydown(e)) return;
+    }
     if (mod && !e.shiftKey && !e.altKey) {
       const key = e.key.toLowerCase();
       const hotkeys: Record<string, EditAction> = { b: 'bold', i: 'italic', k: 'link' };
       if (hotkeys[key]) { e.preventDefault(); runAction(hotkeys[key]); return; }
-      if (key === 'f') { e.preventDefault(); findOpen = true; findBar?.focus(); return; }
+      if (key === 'f') { e.preventDefault(); openFind(); return; }
       if (key === 's') { e.preventDefault(); void notesStore.save(); return; }
     }
     if (readonly) return;
@@ -123,12 +148,7 @@
     }
   }
 
-  function onPreviewChange(content: string) {
-    contentValue = content;
-    notesStore.onContentChange(content);
-  }
-
-  // ── Wiki links: `[[` autocomplete, preview navigation, backlinks panel ──────
+  // ── Wiki links: `[[` autocomplete in source mode, navigation, backlinks panel ─
   let wikiOpen = $state(false);
   let wikiQuery = $state('');
   let wikiIndex = $state(0);
@@ -162,18 +182,6 @@
     wikiOpen = false;
     const caret = wikiStart + link.length;
     applyEdit({ text, selStart: caret, selEnd: caret });
-  }
-
-  function onWikiKeydown(e: KeyboardEvent): boolean {
-    const count = wikiPicker?.rowCount() ?? 0;
-    if (e.key === 'Escape') { wikiOpen = false; return true; }
-    if (e.key === 'ArrowDown' && count) { e.preventDefault(); wikiIndex = (wikiIndex + 1) % count; return true; }
-    if (e.key === 'ArrowUp' && count) { e.preventDefault(); wikiIndex = (wikiIndex - 1 + count) % count; return true; }
-    if ((e.key === 'Enter' || e.key === 'Tab') && count) {
-      const title = wikiPicker?.pickAt(wikiIndex);
-      if (title) { e.preventDefault(); pickWikiLink(title); return true; }
-    }
-    return false;
   }
 
   /** Open a linked note by id or title; create it when nothing matches. */
@@ -215,6 +223,7 @@
   function insertAttachmentLink(a: NoteAttachment) {
     const rel = a.rel_path.split('/').map(encodeURIComponent).join('/');
     const link = `${a.is_image ? '!' : ''}[${a.name}](${rel})`;
+    if (mode === 'rich') { richEditor?.insertMarkdown(link); return; }
     const pos = textareaEl?.selectionStart ?? contentValue.length;
     const before = contentValue.slice(0, pos);
     const pad = before.length && !before.endsWith('\n') ? '\n' : '';
@@ -239,13 +248,15 @@
     void uploadFiles(files);
   }
 
+  // Source-mode drop target; in rich mode the editor handles drops itself
   function onDragOver(e: DragEvent) {
-    if (readonly || !e.dataTransfer?.types.includes('Files')) return;
+    if (mode === 'rich' || readonly || !e.dataTransfer?.types.includes('Files')) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
   }
 
   function onDrop(e: DragEvent) {
+    if (mode === 'rich') return;
     e.preventDefault();
     if (readonly) return;
     const files = Array.from(e.dataTransfer?.files ?? []);
@@ -288,10 +299,16 @@
     window.addEventListener('mouseup', onUp);
   }
 
+  // Highlight the list search query inside the opened note
   $effect(() => {
     const query = notesStore.searchQuery;
     const content = contentValue;
-    if (!textareaEl || !query || !content) return;
+    if (!query || !content) return;
+    if (mode === 'rich') {
+      tick().then(() => richEditor?.selectText(query));
+      return;
+    }
+    if (!textareaEl) return;
     const idx = content.toLowerCase().indexOf(query.toLowerCase());
     if (idx < 0) return;
     tick().then(() => {
@@ -359,8 +376,7 @@
 
   function onMergeResolved(mergedContent: string) {
     if (!note) return;
-    contentValue = mergedContent;
-    notesStore.onContentChange(mergedContent);
+    setContent(mergedContent);
     mergeHistoryId = null;
     showHistory = false;
   }
@@ -497,7 +513,7 @@
         disabled={readonly}
         onaction={runAction}
         onmode={setMode}
-        ontogglefind={() => (findOpen = !findOpen)}
+        ontogglefind={() => (findOpen ? (findOpen = false) : openFind())}
       />
       {#if findOpen}
         <NoteFindBar
@@ -505,12 +521,28 @@
           textarea={textareaEl}
           content={contentValue}
           {readonly}
-          onreplace={onPreviewChange}
+          onreplace={setContent}
           onclose={() => { findOpen = false; textareaEl?.focus(); }}
         />
       {/if}
-      <div class="panes" class:split={mode === 'split'} ondragover={onDragOver} ondrop={onDrop}>
-        {#if showEditor}
+      <div class="panes" ondragover={onDragOver} ondrop={onDrop}>
+        {#if mode === 'rich'}
+          {#key note.id}
+            <NoteRichEditor
+              bind:this={richEditor}
+              content={contentValue}
+              baseDir={note.base_dir}
+              {readonly}
+              placeholder={$t('note_content_placeholder')}
+              notes={notesStore.list}
+              excludeId={note.id}
+              onchange={setContent}
+              onwikilink={openWikiLink}
+              onfiles={uploadFiles}
+              onhotkey={onRichHotkey}
+            />
+          {/key}
+        {:else}
           <textarea
             bind:this={textareaEl}
             bind:value={contentValue}
@@ -526,16 +558,13 @@
           {#if wikiOpen}
             <WikiLinkPicker
               bind:this={wikiPicker}
+              bind:index={wikiIndex}
               query={wikiQuery}
               notes={notesStore.list}
               excludeId={note.id}
-              index={wikiIndex}
               onpick={pickWikiLink}
             />
           {/if}
-        {/if}
-        {#if showPreview}
-          <NotePreview content={contentValue} baseDir={note.base_dir} {readonly} onchange={onPreviewChange} onwikilink={openWikiLink} />
         {/if}
       </div>
       {#if linksOpen}
@@ -850,7 +879,6 @@
     min-height: 0;
   }
   .panes > :global(*) { flex: 1; min-width: 0; }
-  .panes.split > :global(* + *) { border-left: 1px solid var(--border); }
 
   .editor-body {
     flex: 1;

@@ -10,12 +10,12 @@
     query: string;
     notes: NoteListItem[];
     excludeId?: string | null;
-    /** Highlighted row, controlled by the editor's arrow keys */
-    index: number;
+    /** Highlighted row; moved by arrow keys via `handleKeydown` */
+    index?: number;
     onpick: (title: string) => void;
   }
 
-  let { query, notes, excludeId = null, index, onpick }: Props = $props();
+  let { query, notes, excludeId = null, index = $bindable(0), onpick }: Props = $props();
 
   const MAX = 8;
 
@@ -37,14 +37,25 @@
   );
 
   /** Rows in display order: existing notes, then "create" */
-  export function pickAt(i: number): string | null {
+  function pickAt(i: number): string | null {
     if (i < matches.length) return matches[i].title;
     if (canCreate && i === matches.length) return query.trim();
     return null;
   }
 
-  export function rowCount(): number {
-    return matches.length + (canCreate ? 1 : 0);
+  const rowCount = () => matches.length + (canCreate ? 1 : 0);
+
+  /** Arrow navigation and Enter/Tab pick; returns true when the key was consumed. */
+  export function handleKeydown(e: KeyboardEvent): boolean {
+    const count = rowCount();
+    if (!count) return false;
+    if (e.key === 'ArrowDown') { e.preventDefault(); index = (index + 1) % count; return true; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); index = (index - 1 + count) % count; return true; }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      const title = pickAt(index);
+      if (title) { e.preventDefault(); onpick(title); return true; }
+    }
+    return false;
   }
 </script>
 

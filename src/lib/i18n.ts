@@ -494,9 +494,9 @@ const translations = {
     note_tb_link: 'Link',
     note_tb_codeblock: 'Code block',
     note_tb_hr: 'Horizontal rule',
-    note_mode_edit: 'Edit',
-    note_mode_split: 'Split',
-    note_mode_preview: 'Preview',
+    note_mode_rich: 'Editor',
+    note_mode_source: 'Markdown source',
+    note_link_remove: 'Remove link',
 
     // Find / replace
     note_find_title: 'Find in note',
@@ -1391,9 +1391,9 @@ const translations = {
     note_tb_link: 'Ссылка',
     note_tb_codeblock: 'Блок кода',
     note_tb_hr: 'Разделитель',
-    note_mode_edit: 'Редактор',
-    note_mode_split: 'Разделённый вид',
-    note_mode_preview: 'Просмотр',
+    note_mode_rich: 'Редактор',
+    note_mode_source: 'Исходник Markdown',
+    note_link_remove: 'Убрать ссылку',
 
     // Find / replace
     note_find_title: 'Найти в заметке',

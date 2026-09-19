@@ -6,7 +6,8 @@
   import type { EditAction } from '$lib/markdown-edit';
   import { t, type TranslationKey } from '$lib/i18n';
 
-  export type EditorMode = 'edit' | 'split' | 'preview';
+  /** `rich`: WYSIWYG editing (default); `source`: raw Markdown textarea */
+  export type EditorMode = 'rich' | 'source';
 
   interface Props {
     mode: EditorMode;
@@ -46,10 +47,9 @@
     ],
   ];
 
-  const modes: { id: EditorMode; icon: string; label: TranslationKey }[] = [
-    { id: 'edit', icon: 'edit', label: 'note_mode_edit' },
-    { id: 'split', icon: 'columns', label: 'note_mode_split' },
-    { id: 'preview', icon: 'eye', label: 'note_mode_preview' },
+  const modes: { id: EditorMode; icon?: string; text?: string; label: TranslationKey }[] = [
+    { id: 'rich', icon: 'edit', label: 'note_mode_rich' },
+    { id: 'source', text: 'MD', label: 'note_mode_source' },
   ];
 
   const title = (item: TbItem) => {
@@ -97,7 +97,11 @@
         title={$t(m.label)}
         onclick={() => onmode(m.id)}
       >
-        <Icon name={m.icon} size={13} />
+        {#if m.icon}
+          <Icon name={m.icon} size={13} />
+        {:else}
+          <span class="tb-h-label">{m.text}</span>
+        {/if}
       </button>
     {/each}
   </div>
