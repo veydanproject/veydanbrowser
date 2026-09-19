@@ -83,16 +83,56 @@ export const WikiLink = Node.create({
 
 export type ResolveSrc = (src: string) => string;
 
+function escAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
 /** Inline image whose `src` attr stays a relative attachment path; display URL is resolved at render. */
 export const NoteImage = Image.extend<ImageOptions & { resolveSrc: ResolveSrc }>({
   addOptions() {
     const base = this.parent?.() as ImageOptions;
-    return { ...base, inline: true, resolveSrc: (s: string) => s };
+    return {
+      ...base,
+      inline: true,
+      resolveSrc: (s: string) => s,
+      resize: {
+        enabled: true,
+        directions: ['bottom-right'],
+        minWidth: 40,
+        minHeight: 40,
+        alwaysPreserveAspectRatio: true,
+      },
+    };
+  },
+
+  addAttributes() {
+    const parent = this.parent?.() ?? {};
+    return {
+      ...parent,
+      src: {
+        default: null,
+        renderHTML: (attrs: { src?: string | null }) => {
+          if (!attrs.src) return {};
+          return { src: this.options.resolveSrc(attrs.src) };
+        },
+      },
+    };
   },
 
   renderHTML({ HTMLAttributes }) {
     const src = this.options.resolveSrc(HTMLAttributes.src ?? '');
     return ['img', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, { src })];
+  },
+
+  renderMarkdown: (node: JSONContent) => {
+    const src = String(node.attrs?.src ?? '');
+    const alt = String(node.attrs?.alt ?? '');
+    const title = String(node.attrs?.title ?? '');
+    const width = Number(node.attrs?.width);
+    if (width > 0) {
+      return `<img src="${escAttr(src)}" alt="${escAttr(alt)}" width="${Math.round(width)}">`;
+    }
+    return title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
   },
 });
 

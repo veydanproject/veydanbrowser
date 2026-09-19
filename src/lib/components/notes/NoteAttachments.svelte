@@ -3,7 +3,7 @@
 
 <script lang="ts">
   import type { NoteAttachment } from '$lib/types';
-  import { api } from '$lib/api';
+  import { api, downloadNoteAttachment } from '$lib/api';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/i18n';
 
@@ -79,6 +79,9 @@
           <Icon name={a.is_image ? 'image' : 'file-text'} size={13} />
           <button class="att-name" title={a.name} onclick={() => api.notes.attachmentOpen(noteId, a.name)}>{a.name}</button>
           <span class="att-size">{fmtSize(a.size)}</span>
+          <button class="att-btn" title={$t('note_att_download')} onclick={() => downloadNoteAttachment(noteId, a.name)}>
+            <Icon name="download" size={12} />
+          </button>
           {#if !readonly}
             <button class="att-btn" title={$t('note_att_insert')} onclick={() => oninsert(a)}><Icon name="link" size={12} /></button>
             <button class="att-btn att-danger" title={$t('note_att_delete')} onclick={() => remove(a)}><Icon name="x" size={12} /></button>

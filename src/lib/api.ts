@@ -283,6 +283,8 @@ export const api = {
     attachmentList: (noteId: string) => call<NoteAttachment[]>('note_attachment_list', { noteId }),
     attachmentDelete: (noteId: string, name: string) => call<void>('note_attachment_delete', { noteId, name }),
     attachmentOpen: (noteId: string, name: string) => call<void>('note_attachment_open', { noteId, name }),
+    attachmentSave: (noteId: string, name: string, dest: string) =>
+      call<void>('note_attachment_save', { noteId, name, dest }),
     attachmentsGc: (del: boolean) => call<OrphanAttachment[]>('note_attachments_gc', { delete: del }),
     export: (ids: string[], dest: string, asZip: boolean, password?: string) =>
       call<{ count: number; path: string }>('note_export', { ids, dest, asZip, password: password ?? null }),
@@ -396,6 +398,14 @@ export const api = {
     windowMinimize: () => call<void>('window_minimize'),
   },
 };
+
+/** Save-as dialog, then copy the attachment to the chosen path. */
+export async function downloadNoteAttachment(noteId: string, name: string): Promise<void> {
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  const dest = await save({ defaultPath: name });
+  if (!dest) return;
+  await api.notes.attachmentSave(noteId, name, dest);
+}
 
 export interface TraySettings {
   minimize_to_tray: boolean;

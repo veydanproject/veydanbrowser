@@ -42,7 +42,7 @@ mod window;
 
 pub use attachments::{
     allow_asset_dir, note_attachment_add, note_attachment_add_from_path, note_attachment_delete,
-    note_attachment_list, note_attachment_open, note_attachments_gc,
+    note_attachment_list, note_attachment_open, note_attachment_save, note_attachments_gc,
 };
 pub use capture::handle_capture;
 pub use crud::{

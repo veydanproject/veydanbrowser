@@ -433,10 +433,9 @@
     user-select: none;
   }
   .titlebar-logo {
-    width: 15px;
-    height: 15px;
+    width: 18px;
+    height: 18px;
     object-fit: contain;
-    opacity: 0.9;
   }
   /* Empty flexible middle — the primary drag area. */
   .titlebar-drag {
@@ -505,22 +504,18 @@
     flex-shrink: 0;
   }
 
-  /* Gradient tile behind the logo (design: 34×34, radius 9, purple gradient) */
   .brand-tile {
     display: flex;
     align-items: center;
     justify-content: center;
     width: 34px;
     height: 34px;
-    border-radius: 9px;
-    background: var(--accent-grad);
-    box-shadow: var(--shadow-logo);
     flex-shrink: 0;
   }
 
   .brand-logo {
-    width: 22px;
-    height: 22px;
+    width: 34px;
+    height: 34px;
     object-fit: contain;
   }
 

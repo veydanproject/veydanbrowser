@@ -1060,11 +1060,10 @@
   .about-head-text { display: flex; flex-direction: column; gap: 2px; }
   .about-logo {
     display: flex; align-items: center; justify-content: center;
-    width: 44px; height: 44px; border-radius: var(--radius-md);
-    background: var(--accent-grad); box-shadow: var(--shadow-logo);
+    width: 44px; height: 44px;
     flex-shrink: 0;
   }
-  .about-logo img { width: 28px; height: 28px; object-fit: contain; }
+  .about-logo img { width: 44px; height: 44px; object-fit: contain; }
   .about-app { font-size: var(--fs-lg); font-weight: var(--fw-extrabold); letter-spacing: -0.3px; color: var(--text); }
   .about-tagline { font-size: var(--fs-sm); color: var(--text-3); }
   .about-note { font-size: var(--fs-sm); color: var(--text-3); line-height: 1.5; margin: 0; }

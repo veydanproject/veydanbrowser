@@ -243,6 +243,27 @@ pub async fn note_attachment_open(
     open_path(&path)
 }
 
+/// Copy an attachment to a user-chosen path (Save As).
+#[tauri::command]
+pub async fn note_attachment_save(
+    note_id: String,
+    name: String,
+    dest: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    let note_file = note_file_path(&note_id, &state).await?;
+    let path = attachments_dir_for(&note_file, &note_id).join(safe_file_name(&name));
+    if !path.is_file() {
+        return Err(AppError::not_found(name));
+    }
+    let dest_path = PathBuf::from(&dest);
+    if let Some(parent) = dest_path.parent() {
+        std::fs::create_dir_all(parent).map_err(AppError::io)?;
+    }
+    std::fs::copy(&path, &dest_path).map_err(AppError::io)?;
+    Ok(())
+}
+
 /// Find attachments no note body references. With `delete`, remove them.
 #[tauri::command]
 pub async fn note_attachments_gc(

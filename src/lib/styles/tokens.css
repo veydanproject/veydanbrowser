@@ -164,7 +164,6 @@
   --shadow-accent: 0 5px 14px rgba(124, 108, 246, 0.33);
   --shadow-danger: 0 5px 16px rgba(229, 72, 77, 0.3);
   --shadow-drawer: -24px 0 60px rgba(0, 0, 0, 0.5);
-  --shadow-logo:   0 4px 14px rgba(124, 108, 246, 0.4);
   --shadow-note-active: 0 0 0 1px rgba(124, 108, 246, 0.15), 0 8px 22px rgba(0, 0, 0, 0.35);
   --shadow-knob: 0 2px 5px rgba(0, 0, 0, 0.4);  /* toggle knob */
 
@@ -263,7 +262,6 @@
   --shadow-accent: 0 5px 14px rgba(109, 92, 240, 0.28);
   --shadow-danger: 0 5px 16px rgba(214, 54, 64, 0.22);
   --shadow-drawer: -24px 0 60px rgba(23, 20, 60, 0.14);
-  --shadow-logo:   0 4px 14px rgba(109, 92, 240, 0.3);
   --shadow-note-active: 0 0 0 1px rgba(109, 92, 240, 0.18), 0 8px 22px rgba(23, 20, 60, 0.1);
   --shadow-knob: 0 1px 3px rgba(23, 20, 60, 0.25);
 

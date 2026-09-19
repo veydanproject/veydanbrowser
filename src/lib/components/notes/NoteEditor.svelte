@@ -532,6 +532,7 @@
               bind:this={richEditor}
               content={contentValue}
               baseDir={note.base_dir}
+              noteId={note.id}
               {readonly}
               placeholder={$t('note_content_placeholder')}
               notes={notesStore.list}

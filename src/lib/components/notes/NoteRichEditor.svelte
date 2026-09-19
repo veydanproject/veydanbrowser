@@ -5,7 +5,7 @@
   import { onMount, tick } from 'svelte';
   import { Editor } from '@tiptap/core';
   import { convertFileSrc } from '@tauri-apps/api/core';
-  import { api } from '$lib/api';
+  import { api, downloadNoteAttachment } from '$lib/api';
   import { noteExtensions } from '$lib/tiptap-ext';
   import type { EditAction } from '$lib/markdown-edit';
   import type { NoteListItem } from '$lib/types';
@@ -17,6 +17,7 @@
     content: string;
     /** Absolute dir the relative attachment links resolve against */
     baseDir?: string;
+    noteId?: string;
     readonly?: boolean;
     placeholder?: string;
     notes: NoteListItem[];
@@ -29,7 +30,7 @@
   }
 
   let {
-    content, baseDir, readonly = false, placeholder = '', notes, excludeId = null,
+    content, baseDir, noteId, readonly = false, placeholder = '', notes, excludeId = null,
     onchange, onwikilink, onfiles, onhotkey,
   }: Props = $props();
 
@@ -40,8 +41,14 @@
   let isEmpty = $state(false);
 
   const isRelative = (url: string) => !/^([a-z][a-z0-9+.-]*:|\/\/|#|\/)/i.test(url);
-  const resolveSrc = (src: string) =>
-    baseDir && isRelative(src) ? convertFileSrc(`${baseDir}/${decodeURIComponent(src)}`) : src;
+  function resolveSrc(src: string): string {
+    if (!baseDir || !isRelative(src)) return src;
+    try {
+      return convertFileSrc(`${baseDir}/${decodeURIComponent(src)}`);
+    } catch {
+      return src;
+    }
+  }
 
   onMount(() => {
     editor = new Editor({
@@ -61,12 +68,13 @@
         const md = ed.getMarkdown();
         isEmpty = ed.isEmpty;
         updateWikiState();
+        updateImageBar();
         // Only real document changes reach the parent
         if (md === lastEmitted) return;
         lastEmitted = md;
         onchange(md);
       },
-      onSelectionUpdate: updateWikiState,
+      onSelectionUpdate: () => { updateWikiState(); updateImageBar(); },
     });
     lastEmitted = content;
     isEmpty = editor.isEmpty;
@@ -236,6 +244,41 @@
       .run();
     wikiOpen = false;
   }
+
+  let imgOpen = $state(false);
+  let imgPos = $state({ x: 0, y: 0 });
+  let imgName = $state('');
+
+  function fileNameFromSrc(src: string): string {
+    return decodeURIComponent(src.split(/[/\\]/).pop()?.split('?')[0] || '') || 'image';
+  }
+
+  function updateImageBar() {
+    if (!editor || !wrapEl || !editor.isActive('image')) { imgOpen = false; return; }
+    const src = String(editor.getAttributes('image').src ?? '');
+    imgName = fileNameFromSrc(src);
+    const { from } = editor.state.selection;
+    const caret = editor.view.coordsAtPos(from);
+    const box = wrapEl.getBoundingClientRect();
+    imgPos = { x: Math.max(0, caret.left - box.left), y: caret.bottom - box.top + 8 };
+    imgOpen = true;
+  }
+
+  async function downloadSelectedImage() {
+    if (!editor) return;
+    const src = String(editor.getAttributes('image').src ?? '');
+    const name = fileNameFromSrc(src);
+    if (noteId && isRelative(src)) {
+      await downloadNoteAttachment(noteId, name);
+      return;
+    }
+    const { save } = await import('@tauri-apps/plugin-dialog');
+    const dest = await save({ defaultPath: name });
+    if (!dest) return;
+    const buf = new Uint8Array(await (await fetch(resolveSrc(src))).arrayBuffer());
+    const { writeFile } = await import('@tauri-apps/plugin-fs');
+    await writeFile(dest, buf);
+  }
 </script>
 
 <div class="rich" bind:this={wrapEl}>
@@ -261,6 +304,14 @@
   {/if}
   {#if wikiOpen}
     <WikiLinkPicker bind:this={wikiPicker} bind:index={wikiIndex} query={wikiQuery} {notes} {excludeId} onpick={pickWikiLink} />
+  {/if}
+  {#if imgOpen}
+    <div class="img-bar" style="left: {imgPos.x}px; top: {imgPos.y}px">
+      <span class="img-name" title={imgName}>{imgName}</span>
+      <button type="button" class="lf-btn" title={$t('note_att_download')} onclick={downloadSelectedImage}>
+        <Icon name="download" size={13} />
+      </button>
+    </div>
   {/if}
 </div>
 
@@ -324,6 +375,28 @@
     padding: 0.15rem 0.3rem;
   }
   .lf-btn:hover { background: var(--surface-2); color: var(--text); }
+
+  .img-bar {
+    position: absolute;
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.4rem;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    max-width: 260px;
+  }
+  .img-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-xs);
+    color: var(--text-2);
+  }
 
   /* ── Document styles (shared look with the former read-only preview) ── */
   .host :global(.ProseMirror) {
@@ -397,8 +470,27 @@
     accent-color: var(--accent);
   }
   .host :global(hr) { border: none; border-top: 1px solid var(--border); margin: 1.2em 0; }
-  .host :global(img) { max-width: 100%; border-radius: var(--radius-sm); vertical-align: middle; }
+  .host :global(img) { max-width: 100%; height: auto; border-radius: var(--radius-sm); vertical-align: middle; }
+  .host :global([data-resize-container]) { max-width: 100%; vertical-align: middle; }
+  .host :global([data-resize-wrapper]) { max-width: 100%; }
+  .host :global([data-resize-wrapper] img) { display: block; }
+  .host :global([data-resize-handle]) {
+    width: 10px;
+    height: 10px;
+    background: var(--accent);
+    border: 1px solid var(--surface-1);
+    border-radius: 2px;
+    z-index: 2;
+    display: none;
+    transform: translate(30%, 30%);
+  }
+  .host :global([data-resize-handle="bottom-right"]) { cursor: nwse-resize; }
+  .host :global(.ProseMirror-selectednode [data-resize-handle]),
+  .host :global([data-resize-container].ProseMirror-selectednode [data-resize-handle]) {
+    display: block;
+  }
   .host :global(img.ProseMirror-selectednode) { outline: 2px solid var(--accent); }
+  .host :global([data-resize-container].ProseMirror-selectednode) { outline: 2px solid var(--accent); border-radius: var(--radius-sm); }
   .host :global(.ProseMirror-selectednode) { outline: 2px solid var(--accent); border-radius: 3px; }
   .host :global(.tableWrapper) { overflow-x: auto; margin: 0 0 1em; }
   .host :global(table) { border-collapse: collapse; font-size: 0.92em; table-layout: fixed; width: 100%; }
