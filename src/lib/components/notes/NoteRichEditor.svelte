@@ -58,10 +58,13 @@
         handleClick: (_view, _pos, e) => onClick(e),
       },
       onUpdate: ({ editor: ed }) => {
-        lastEmitted = ed.getMarkdown();
+        const md = ed.getMarkdown();
         isEmpty = ed.isEmpty;
-        onchange(lastEmitted);
         updateWikiState();
+        // Only real document changes reach the parent
+        if (md === lastEmitted) return;
+        lastEmitted = md;
+        onchange(md);
       },
       onSelectionUpdate: updateWikiState,
     });
@@ -80,7 +83,8 @@
     isEmpty = editor.isEmpty;
   });
 
-  $effect(() => { editor?.setEditable(!readonly); });
+  // emitUpdate=false: setEditable must not fire onUpdate and push content to the store
+  $effect(() => { editor?.setEditable(!readonly, false); });
 
   function takeFiles(files: File[]): boolean {
     if (readonly || files.length === 0) return false;
