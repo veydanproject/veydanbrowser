@@ -9,7 +9,6 @@ use crate::AppState;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Sqlite};
 use std::sync::atomic::Ordering;
-use tauri::Manager;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TraySettings {
@@ -73,25 +72,24 @@ pub async fn tray_settings_set(
 }
 
 /// Minimize action for the custom titlebar's "–" button. With minimize-to-tray
-/// on, the window is hidden to the tray (leaves the taskbar) instead of being
-/// iconified — now possible because it's our button, not the OS decoration.
+/// on, the main window is hidden to the tray (leaves the taskbar) instead of
+/// being iconified. Other windows (e.g. notes) always minimize themselves.
 #[tauri::command]
 pub async fn window_minimize(
+    window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
     let to_tray = state.tray_settings.minimize_to_tray.load(Ordering::Relaxed);
-    if to_tray {
+    if to_tray && window.label() == "main" {
         tray::hide_to_tray(&app);
-    } else {
-        let app2 = app.clone();
-        app.run_on_main_thread(move || {
-            if let Some(w) = app2.get_webview_window("main") {
-                let _ = w.minimize();
-            }
-        })
-        .map_err(AppError::other)?;
+        return Ok(());
     }
+    let win = window.clone();
+    app.run_on_main_thread(move || {
+        let _ = win.minimize();
+    })
+    .map_err(AppError::other)?;
     Ok(())
 }
 

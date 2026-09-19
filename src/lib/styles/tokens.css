@@ -16,7 +16,7 @@
  *                        onto canonical tokens, so stray var() refs stop
  *                        silently collapsing to transparent / inherited.
  *
- * Naming canon: --bg / --bg-2 / --surface / --surface-2 / --surface-3 / --border / --border-2
+ * Naming canon: --bg / --bg-2 / --chrome / --surface / --surface-2 / --surface-3 / --border / --border-2
  *               --text / --text-2 / --text-3 / --accent / --success / --danger / --warn-*
  * Do NOT introduce new ad-hoc names in components — extend this file instead.
  * ========================================================================== */
@@ -110,6 +110,7 @@
   color-scheme: dark;
   --bg:          #08080c;
   --bg-2:        #0b0b10;  /* chrome: header / dock / session bar */
+  --chrome:      #0b0b10;  /* window titlebar (CSD) */
   --surface:     #0e0e14;  /* cards / sections / tables */
   --surface-2:   #14141b;  /* nested: profile cards, mono chips */
   --surface-3:   #101017;  /* form fields / segment containers / filter chips */
@@ -207,6 +208,7 @@
   color-scheme: light;
   --bg:          #f4f3f8;  /* page bg — violet-tinted */
   --bg-2:        #fafafd;  /* chrome: header / dock / session bar */
+  --chrome:      #fafafd;  /* window titlebar (CSD) */
   --surface:     #ffffff;  /* cards / sections / tables */
   --surface-2:   #f6f5fa;  /* nested: profile cards, mono chips */
   --surface-3:   #f8f7fc;  /* form fields / segment containers / filter chips */

@@ -15,7 +15,7 @@
   import type { TrayLabels } from '$lib/api';
   import { theme, toggleTheme } from '$lib/theme';
   import Icon from '$lib/Icon.svelte';
-  import { api } from '$lib/api';
+  import { api, isNotesWindow } from '$lib/api';
   import type { Profile } from '$lib/types';
   import PasswordGenerator from '$lib/components/PasswordGenerator.svelte';
   import TotpGenerator from '$lib/components/TotpGenerator.svelte';
@@ -51,6 +51,7 @@
   );
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const standaloneNotes = isNotesWindow();
 
   // Client-side decorations are used only on Linux (to dodge the KWin
   // hide()/show() decoration bug). Windows/macOS keep their native window
@@ -151,50 +152,55 @@
         .catch(() => {});
     }
 
-    // Preload profiles and TOTP for running indicator and badge resolution
-    profilesStore.ensureLoaded();
-    totpStore.ensureLoaded();
-    sshStore.ensureLoaded();
-    refreshRunning();
-
-    // Fallback: refresh on window focus (handles crash/manual kill/hot reload)
-    window.addEventListener('focus', refreshRunning);
+    // Notes popout: only theme + window chrome. Main window owns tray / dock / updater.
+    if (!standaloneNotes) {
+      profilesStore.ensureLoaded();
+      totpStore.ensureLoaded();
+      sshStore.ensureLoaded();
+      refreshRunning();
+      window.addEventListener('focus', refreshRunning);
+    }
 
     // Native back button support for WebKitGTK (Tauri on Linux)
     window.addEventListener('keydown', handleKeyBack);
     window.addEventListener('mouseup', handleMouseBack);
 
-    // Main: react to backend events
-    const unlisten = listen<{ running_ids: string[] }>('profiles://running-changed', (e) => {
-      runningIds = e.payload.running_ids;
-    });
+    const unlisten = standaloneNotes
+      ? Promise.resolve(() => {})
+      : listen<{ running_ids: string[] }>('profiles://running-changed', (e) => {
+          runningIds = e.payload.running_ids;
+        });
 
-    // ── System tray ──
-    // Push localized menu strings now and whenever the locale changes.
-    syncTrayLabels();
-    const unsubLocale = locale.subscribe(() => syncTrayLabels());
+    const unsubLocale = standaloneNotes
+      ? () => {}
+      : locale.subscribe(() => syncTrayLabels());
+    if (!standaloneNotes) syncTrayLabels();
 
-    const trayUnlisteners = [
-      listen<string>('tray://navigate', (e) => goto(e.payload)),
-      listen<string>('tray://launch-profile', (e) => {
-        api.profiles.launch(e.payload).catch((err) => console.error(err));
-      }),
-      listen<string>('tray://stop-profile', (e) => {
-        api.profiles.stop(e.payload).catch((err) => console.error(err));
-      }),
-      listen('tray://stop-all', () => {
-        runningIds.forEach((id) => api.profiles.stop(id).catch(() => {}));
-      }),
-      listen('tray://open-pwgen', () => { pwgenOpen = true; }),
-    ];
+    const trayUnlisteners = standaloneNotes
+      ? []
+      : [
+          listen<string>('tray://navigate', (e) => goto(e.payload)),
+          listen<string>('tray://launch-profile', (e) => {
+            api.profiles.launch(e.payload).catch((err) => console.error(err));
+          }),
+          listen<string>('tray://stop-profile', (e) => {
+            api.profiles.stop(e.payload).catch((err) => console.error(err));
+          }),
+          listen('tray://stop-all', () => {
+            runningIds.forEach((id) => api.profiles.stop(id).catch(() => {}));
+          }),
+          listen('tray://open-pwgen', () => { pwgenOpen = true; }),
+        ];
 
-    // Background update check: delayed so startup work (profiles/db) settles first
-    updaterStore.init();
-    const updateTimer = setTimeout(() => updaterStore.check(true), 5000);
+    let updateTimer: ReturnType<typeof setTimeout> | undefined;
+    if (!standaloneNotes) {
+      updaterStore.init();
+      updateTimer = setTimeout(() => updaterStore.check(true), 5000);
+    }
 
     return () => {
       unsub();
-      clearTimeout(updateTimer);
+      if (updateTimer) clearTimeout(updateTimer);
       window.removeEventListener('focus', refreshRunning);
       window.removeEventListener('keydown', handleKeyBack);
       window.removeEventListener('mouseup', handleMouseBack);
@@ -222,112 +228,117 @@
     <div class="titlebar" onmousedown={onTitlebarMouseDown} ondblclick={onTitlebarDblClick}>
       <div class="titlebar-title">
         <img src="/logo.png" alt="" class="titlebar-logo" />
-        <span>Veydan Browser</span>
+        <span>{standaloneNotes ? $t('nav_notes') : 'Veydan Browser'}</span>
       </div>
       <div class="titlebar-drag"></div>
-      <button
-        class="titlebar-btn"
-        class:active={isActive('/settings')}
-        onclick={() => goto('/settings')}
-        aria-label={$t('nav_settings')}
-        title={$t('nav_settings')}
-      >
-        <Icon name="settings" size={15} />
-      </button>
-      <WindowControls />
-    </div>
-  {/if}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <header class="topbar" onmousedown={onTitlebarMouseDown} ondblclick={onTitlebarDblClick}>
-   <div class="topbar-inner">
-    <a href="/" class="topbar-brand">
-      <span class="brand-tile">
-        <img src="/logo.png" alt="Veydan Browser" class="brand-logo" />
-      </span>
-      <span class="brand-name">Veydan Browser</span>
-    </a>
-
-    <nav class="topbar-nav">
-      <a href="/" class="nav-link" class:active={isActive('/')}>
-        <Icon name="layers" size={14} />
-        {$t('nav_workspaces')}
-      </a>
-      <a href="/proxies" class="nav-link" class:active={isActive('/proxies')}>
-        <Icon name="globe" size={14} />
-        {$t('nav_proxies')}
-      </a>
-      <a href="/terminal" class="nav-link" class:active={isActive('/terminal')}>
-        <Icon name="terminal" size={14} />
-        {$t('nav_terminal')}
-      </a>
-      <a href="/files" class="nav-link" class:active={isActive('/files')}>
-        <Icon name="folder" size={14} />
-        {$t('nav_files')}
-      </a>
-      <a href="/notes" class="nav-link" class:active={isActive('/notes')}>
-        <Icon name="file-text" size={14} />
-        {$t('nav_notes')}
-      </a>
-    </nav>
-
-    <div class="topbar-right">
-      {#if !isCsd}
-        <button class="theme-toggle" onclick={() => goto('/settings')} title={$t('nav_settings')}>
+      {#if !standaloneNotes}
+        <button
+          class="titlebar-btn"
+          class:active={isActive('/settings')}
+          onclick={() => goto('/settings')}
+          aria-label={$t('nav_settings')}
+          title={$t('nav_settings')}
+        >
           <Icon name="settings" size={15} />
         </button>
       {/if}
-      <button class="theme-toggle" onclick={() => (totpOpen = !totpOpen)} title={$t('totp_title')}>
-        <Icon name="shield" size={15} />
-      </button>
-      <button class="theme-toggle" onclick={() => (pwgenOpen = !pwgenOpen)} title={$t('pwgen_title')}>
-        <Icon name="key" size={15} />
-      </button>
-      <button class="theme-toggle" onclick={toggleTheme} title={$t('theme_toggle')}>
-        {#if $theme === 'dark'}
-          <Icon name="sun" size={15} />
-        {:else}
-          <Icon name="moon" size={15} />
-        {/if}
-      </button>
+      <WindowControls />
     </div>
-   </div>
-  </header>
+  {/if}
+  {#if !standaloneNotes}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <header class="topbar" onmousedown={onTitlebarMouseDown} ondblclick={onTitlebarDblClick}>
+     <div class="topbar-inner">
+      <a href="/" class="topbar-brand">
+        <span class="brand-tile">
+          <img src="/logo.png" alt="Veydan Browser" class="brand-logo" />
+        </span>
+        <span class="brand-name">Veydan Browser</span>
+      </a>
 
-  <UpdateBanner />
+      <nav class="topbar-nav">
+        <a href="/" class="nav-link" class:active={isActive('/')}>
+          <Icon name="layers" size={14} />
+          {$t('nav_workspaces')}
+        </a>
+        <a href="/proxies" class="nav-link" class:active={isActive('/proxies')}>
+          <Icon name="globe" size={14} />
+          {$t('nav_proxies')}
+        </a>
+        <a href="/terminal" class="nav-link" class:active={isActive('/terminal')}>
+          <Icon name="terminal" size={14} />
+          {$t('nav_terminal')}
+        </a>
+        <a href="/files" class="nav-link" class:active={isActive('/files')}>
+          <Icon name="folder" size={14} />
+          {$t('nav_files')}
+        </a>
+        <a href="/notes" class="nav-link" class:active={isActive('/notes')}>
+          <Icon name="file-text" size={14} />
+          {$t('nav_notes')}
+        </a>
+      </nav>
+
+      <div class="topbar-right">
+        {#if !isCsd}
+          <button class="theme-toggle" onclick={() => goto('/settings')} title={$t('nav_settings')}>
+            <Icon name="settings" size={15} />
+          </button>
+        {/if}
+        <button class="theme-toggle" onclick={() => (totpOpen = !totpOpen)} title={$t('totp_title')}>
+          <Icon name="shield" size={15} />
+        </button>
+        <button class="theme-toggle" onclick={() => (pwgenOpen = !pwgenOpen)} title={$t('pwgen_title')}>
+          <Icon name="key" size={15} />
+        </button>
+        <button class="theme-toggle" onclick={toggleTheme} title={$t('theme_toggle')}>
+          {#if $theme === 'dark'}
+            <Icon name="sun" size={15} />
+          {:else}
+            <Icon name="moon" size={15} />
+          {/if}
+        </button>
+      </div>
+     </div>
+    </header>
+
+    <UpdateBanner />
+  {/if}
 
   <main class="content">
     {@render children()}
   </main>
 
-  <!-- Slot clips terminal animation — overflow:hidden prevents sliding through dock/session bar -->
-  <div class="ssh-terminal-slot" style="bottom:{terminalBottom}px">
-    {#each sshStore.sessions as s (s.session_id)}
-      <SSHTerminal
-        sessionId={s.session_id}
-        visible={sshStore.activeTerminalId === s.session_id}
-        bottomOffset={terminalBottom}
-        onMinimize={() => { sshStore.activeTerminalId = null; }}
-        onDisconnect={() => { sshStore.activeTerminalId = null; }}
-      />
-    {/each}
-  </div>
-  <SSHSessionBar />
-  <!-- Dock is last in DOM — at the very bottom below the SSH bar -->
-  {#if runningProfiles.length > 0}
-    <div class="dock">
-      <span class="dock-label">
-        <span class="dock-dot"></span>
-        {runningProfiles.length} running
-      </span>
-      <div class="dock-sessions">
-        {#each runningProfiles as p (p.id)}
-          <a href={getWorkspaceHref(p)} class="dock-item" title={p.name}>
-            <Icon name="globe" size={13} />
-            <span class="dock-name">{p.name}</span>
-          </a>
-        {/each}
-      </div>
+  {#if !standaloneNotes}
+    <!-- Slot clips terminal animation — overflow:hidden prevents sliding through dock/session bar -->
+    <div class="ssh-terminal-slot" style="bottom:{terminalBottom}px">
+      {#each sshStore.sessions as s (s.session_id)}
+        <SSHTerminal
+          sessionId={s.session_id}
+          visible={sshStore.activeTerminalId === s.session_id}
+          bottomOffset={terminalBottom}
+          onMinimize={() => { sshStore.activeTerminalId = null; }}
+          onDisconnect={() => { sshStore.activeTerminalId = null; }}
+        />
+      {/each}
     </div>
+    <SSHSessionBar />
+    {#if runningProfiles.length > 0}
+      <div class="dock">
+        <span class="dock-label">
+          <span class="dock-dot"></span>
+          {runningProfiles.length} running
+        </span>
+        <div class="dock-sessions">
+          {#each runningProfiles as p (p.id)}
+            <a href={getWorkspaceHref(p)} class="dock-item" title={p.name}>
+              <Icon name="globe" size={13} />
+              <span class="dock-name">{p.name}</span>
+            </a>
+          {/each}
+        </div>
+      </div>
+    {/if}
   {/if}
  </div>
 </div>
@@ -335,8 +346,10 @@
 {#if isCsd}
   <ResizeHandles />
 {/if}
-<PasswordGenerator bind:open={pwgenOpen} />
-<TotpGenerator bind:open={totpOpen} context="global" />
+{#if !standaloneNotes}
+  <PasswordGenerator bind:open={pwgenOpen} />
+  <TotpGenerator bind:open={totpOpen} context="global" />
+{/if}
 <UIInspector />
 
 <style>
@@ -382,7 +395,7 @@
     height: 34px;
     flex-shrink: 0;
     padding-left: 12px;
-    background: var(--bg-2);
+    background: var(--chrome);
     border-bottom: 1px solid var(--border);
   }
   .titlebar-title {

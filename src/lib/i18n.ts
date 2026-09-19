@@ -73,6 +73,10 @@ const translations = {
     files_chmod_apply: 'Apply',
     proxies_sub: '{count} proxies · manage the IP pool for profiles',
     settings_section_theme: 'Theme',
+    settings_theme_chrome: 'Frame',
+    settings_theme_accent: 'Accent',
+    settings_theme_bg: 'Background',
+    settings_theme_reset: 'Reset',
     terminal_sub: '{count} connections · terminal access to servers',
 
     // Workspaces page
@@ -444,6 +448,7 @@ const translations = {
     notes_btn_toggle_sidebar: 'Toggle sidebar',
     notes_search_placeholder: 'Search notes…',
     notes_btn_new: 'New',
+    notes_btn_open_window: 'Open in a separate window',
     notes_create_title: 'New Note',
     notes_title_placeholder: 'Note title',
     notes_btn_cancel: 'Cancel',
@@ -841,6 +846,10 @@ const translations = {
     theme_toggle: 'Переключить тему',
     proxies_sub: '{count} прокси · управляйте пулом IP для профилей',
     settings_section_theme: 'Тема',
+    settings_theme_chrome: 'Рамка',
+    settings_theme_accent: 'Акцент',
+    settings_theme_bg: 'Фон',
+    settings_theme_reset: 'Сбросить',
     terminal_sub: 'Подключений: {count} · терминальный доступ к серверам',
 
     // Workspaces page
@@ -1212,6 +1221,7 @@ const translations = {
     notes_btn_toggle_sidebar: 'Свернуть панель',
     notes_search_placeholder: 'Поиск заметок…',
     notes_btn_new: 'Новая',
+    notes_btn_open_window: 'Открыть в отдельном окне',
     notes_create_title: 'Новая заметка',
     notes_title_placeholder: 'Название заметки',
     notes_btn_cancel: 'Отмена',

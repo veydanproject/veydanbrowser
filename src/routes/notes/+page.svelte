@@ -6,13 +6,15 @@
   import { notesStore } from '$lib/store/notes.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
-  import { api } from '$lib/api';
+  import { api, isNotesWindow } from '$lib/api';
   import type { NoteCreateInput, NoteFilter } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import NotesList from '$lib/components/notes/NotesList.svelte';
   import NoteEditor from '$lib/components/notes/NoteEditor.svelte';
   import NoteFilters from '$lib/components/notes/NoteFilters.svelte';
   import { t } from '$lib/i18n';
+
+  const standaloneNotes = isNotesWindow();
 
   let searchQuery = $state('');
   let searching = $state(false);
@@ -254,6 +256,15 @@
           <button class="icon-btn" title={$t('notes_btn_open_folder')} onclick={() => api.notes.openFolder()}>
             <Icon name="folder-open" size={14} />
           </button>
+          {#if !standaloneNotes}
+            <button
+              class="icon-btn"
+              onclick={() => api.notes.openWindow($t('nav_notes'))}
+              title={$t('notes_btn_open_window')}
+            >
+              <Icon name="maximize-2" size={14} />
+            </button>
+          {/if}
           <button class="icon-btn" onclick={() => { sidebarVisible = false; }} title={$t('notes_btn_toggle_sidebar')}>
             <Icon name="sidebar" size={14} />
           </button>

@@ -54,6 +54,17 @@ import type {
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
+/** True inside the standalone notes Tauri window. */
+export function isNotesWindow(): boolean {
+  if (typeof window === 'undefined') return false;
+  const internals = (
+    window as unknown as {
+      __TAURI_INTERNALS__?: { metadata?: { currentWindow?: { label?: string } } };
+    }
+  ).__TAURI_INTERNALS__;
+  return internals?.metadata?.currentWindow?.label === 'notes';
+}
+
 const devMocks: Record<string, unknown> = {
   fingerprint_presets: [
     { id: 'win10', label: 'Windows 10 / Chrome' },
@@ -236,6 +247,7 @@ export const api = {
       call<Note>('note_history_restore', { noteId, historyId }),
     historyMerge: (noteId: string, historyId: string) =>
       call<MergeResult>('note_history_merge', { noteId, historyId }),
+    openWindow: (title: string) => call<void>('note_open_window', { title }),
   },
 
   ssh: {

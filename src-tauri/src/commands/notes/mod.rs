@@ -10,6 +10,7 @@
 //! - `folders`  — folder CRUD + note↔folder / note↔binding commands
 //! - `settings` — notes directory settings commands
 //! - `history`  — version history (snapshot, diff, restore, merge) + commands
+//! - `window`   — standalone notes window
 
 mod crud;
 mod files;
@@ -19,6 +20,7 @@ mod index;
 mod models;
 mod settings;
 mod tags;
+mod window;
 
 pub use crud::*;
 pub use folders::*;
@@ -26,3 +28,4 @@ pub use history::*;
 pub use index::start_notes_watcher;
 pub use settings::*;
 pub use tags::{note_tag_create, note_tag_delete, note_tag_list, note_tag_update};
+pub use window::note_open_window;

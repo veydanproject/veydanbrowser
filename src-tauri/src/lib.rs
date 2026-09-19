@@ -27,7 +27,7 @@ use commands::notes::{
     note_set_tags, note_sync, note_tag_list, note_tag_create, note_tag_delete, note_tag_update,
     note_folder_list, note_folder_create, note_folder_update, note_folder_delete,
     note_add_folder, note_remove_folder, note_add_binding, note_remove_binding,
-    note_update, notes_get_dir, notes_set_dir,
+    note_update, notes_get_dir, notes_set_dir, note_open_window,
     note_history_list, note_history_get, note_history_diff,
     note_history_restore, note_history_merge,
 };
@@ -395,6 +395,7 @@ pub fn run() {
             note_remove_binding,
             notes_get_dir,
             notes_set_dir,
+            note_open_window,
             note_history_list,
             note_history_get,
             note_history_diff,

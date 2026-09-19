@@ -4,7 +4,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { locale, t } from '$lib/i18n';
-  import { theme } from '$lib/theme';
+  import {
+    theme,
+    themeCustom,
+    resolvedOverride,
+    hasThemeOverrides,
+    setThemeOverride,
+    resetThemeOverrides,
+  } from '$lib/theme';
+  import ColorField from '$lib/components/ui/ColorField.svelte';
   import { inspectorApp } from '$lib/inspector/inspector.svelte';
   import Icon from '$lib/Icon.svelte';
   import { api } from '$lib/api';
@@ -17,6 +25,18 @@
   import Dialog from '$lib/components/ui/Dialog.svelte';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+  const THEME_PRESETS = {
+    chrome: {
+      dark: ['#0b0b10', '#14141c', '#1c1c26', '#0e1620', '#16120e', '#1a1224'],
+      light: ['#fafafd', '#ffffff', '#f0eef8', '#ebe8f2', '#f4f1ea', '#efe8f0'],
+    },
+    accent: ['#8b7bff', '#6d5cf0', '#60a5fa', '#2dd4bf', '#f472b6', '#34d399'],
+    bg: {
+      dark: ['#08080c', '#0c0c12', '#101018', '#0a1016', '#12100c', '#100c16'],
+      light: ['#f4f3f8', '#ffffff', '#eeeef4', '#f6f4ee', '#f2eef8', '#eaeaf0'],
+    },
+  } as const;
 
   const languages: { value: Locale; label: string; native: string }[] = [
     { value: 'en', label: 'English', native: 'English' },
@@ -509,6 +529,34 @@
         <span class="theme-icon"><Icon name="sun" size={15} /></span>
         <span>Light</span>
         {#if $theme === 'light'}<span class="lang-check">✓</span>{/if}
+      </button>
+    </div>
+    <div class="theme-customize">
+      <ColorField
+        label={$t('settings_theme_chrome')}
+        value={resolvedOverride($themeCustom, $theme, 'chrome')}
+        presets={[...THEME_PRESETS.chrome[$theme]]}
+        onchange={(hex) => setThemeOverride('chrome', hex)}
+      />
+      <ColorField
+        label={$t('settings_theme_accent')}
+        value={resolvedOverride($themeCustom, $theme, 'accent')}
+        presets={[...THEME_PRESETS.accent]}
+        onchange={(hex) => setThemeOverride('accent', hex)}
+      />
+      <ColorField
+        label={$t('settings_theme_bg')}
+        value={resolvedOverride($themeCustom, $theme, 'bg')}
+        presets={[...THEME_PRESETS.bg[$theme]]}
+        onchange={(hex) => setThemeOverride('bg', hex)}
+      />
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm theme-reset"
+        disabled={!hasThemeOverrides($themeCustom, $theme)}
+        onclick={resetThemeOverrides}
+      >
+        {$t('settings_theme_reset')}
       </button>
     </div>
   </div>
@@ -1031,6 +1079,15 @@
   .theme-opt.active { border-color: var(--accent-border); background: var(--accent-bg); color: var(--accent-text); }
   .theme-opt:disabled { opacity: 0.4; cursor: not-allowed; }
   .theme-icon { font-size: var(--fs-md); display: flex; }
+  .theme-customize {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    margin-top: var(--sp-4);
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--border);
+  }
+  .theme-reset { align-self: flex-start; }
 
   .dir-row {
     display: flex; align-items: center; gap: 0.4rem;
