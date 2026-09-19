@@ -234,6 +234,14 @@
       {#if !standaloneNotes}
         <button
           class="titlebar-btn"
+          onclick={() => api.notes.openWindow($t('nav_notes'))}
+          aria-label={$t('notes_btn_open_window')}
+          title={$t('notes_btn_open_window')}
+        >
+          <Icon name="file-text" size={15} />
+        </button>
+        <button
+          class="titlebar-btn"
           class:active={isActive('/settings')}
           onclick={() => goto('/settings')}
           aria-label={$t('nav_settings')}
@@ -281,6 +289,13 @@
 
       <div class="topbar-right">
         {#if !isCsd}
+          <button
+            class="theme-toggle"
+            onclick={() => api.notes.openWindow($t('nav_notes'))}
+            title={$t('notes_btn_open_window')}
+          >
+            <Icon name="file-text" size={15} />
+          </button>
           <button class="theme-toggle" onclick={() => goto('/settings')} title={$t('nav_settings')}>
             <Icon name="settings" size={15} />
           </button>

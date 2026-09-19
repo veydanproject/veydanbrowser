@@ -262,7 +262,7 @@
               onclick={() => api.notes.openWindow($t('nav_notes'))}
               title={$t('notes_btn_open_window')}
             >
-              <Icon name="maximize-2" size={14} />
+              <Icon name="file-text" size={14} />
             </button>
           {/if}
           <button class="icon-btn" onclick={() => { sidebarVisible = false; }} title={$t('notes_btn_toggle_sidebar')}>
