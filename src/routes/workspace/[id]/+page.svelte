@@ -54,6 +54,7 @@
   let selectedProfile = $state<import('$lib/types').Profile | null>(null);
   let rawDataProfile = $state<import('$lib/types').Profile | null>(null);
   let unlistenRunning: (() => void) | undefined;
+  let unlistenSync: (() => void) | undefined;
 
   const isSelectedRunning = $derived(
     selectedProfile ? runningProfiles.has(selectedProfile.id) : false
@@ -80,9 +81,35 @@
       'profiles://running-changed',
       (e) => { runningProfiles = new Set(e.payload.running_ids); }
     );
+    unlistenSync = await listen<string[]>('sync://data-changed', (e) => {
+      if (e.payload.some((x) => x === 'workspace_column' || x === 'profile' || x === 'workspace' || x === 'proxy')) {
+        reloadWorkspace();
+      }
+    });
   });
 
-  onDestroy(() => unlistenRunning?.());
+  onDestroy(() => {
+    unlistenRunning?.();
+    unlistenSync?.();
+  });
+
+  async function reloadWorkspace() {
+    if (!workspaceId) return;
+    try {
+      const [ws, cols] = await Promise.all([
+        api.workspaces.get(workspaceId),
+        api.workspaces.columns.list(workspaceId),
+        profilesStore.refresh(),
+        proxiesStore.refresh(),
+      ]);
+      if (!ws) return;
+      workspace = ws;
+      columns = cols;
+      notesValue = ws.notes ?? '';
+      profiles = profilesStore.byWorkspace(workspaceId);
+      proxies = proxiesStore.byWorkspace(workspaceId);
+    } catch {}
+  }
 
   async function loadData() {
     loading = true;

@@ -15,7 +15,7 @@ use crate::AppState;
 use serde_json::{Map, Value};
 use sqlx::sqlite::SqliteArguments;
 use sqlx::{query::Query, AssertSqlSafe, Pool, Sqlite};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use tauri::{AppHandle, Emitter, Manager};
 use veydan_sync::{sha256_hex, Hlc, HlcClock, Op};
 
@@ -47,8 +47,8 @@ pub struct TableSpec {
     links: &'static [LinkSpec],
     /// SQL condition selecting the rows to sync.
     filter: Option<&'static str>,
-    /// A local row with the same value here is the same thing under another id.
-    unique: Option<&'static str>,
+    /// A local row with the same values here is the same thing under another id.
+    unique: Option<&'static [&'static str]>,
     /// Remote rows may create local rows; `false` for tables owned by another entity.
     insert: bool,
     delete: Delete,
@@ -81,7 +81,7 @@ pub const SPECS: &[TableSpec] = &[
         columns: &["workspace_id", "name", "tag_name", "color", "position", "created_at"],
         links: NO_LINKS,
         filter: None,
-        unique: None,
+        unique: Some(&["workspace_id", "name"]),
         insert: true,
         delete: Delete::Plain(&[]),
     },
@@ -182,7 +182,7 @@ pub const SPECS: &[TableSpec] = &[
         columns: &["name", "color", "created_at", "updated_at"],
         links: NO_LINKS,
         filter: None,
-        unique: Some("name"),
+        unique: Some(&["name"]),
         insert: true,
         delete: Delete::Plain(&["DELETE FROM note_tag_links WHERE tag_id = ?"]),
     },
@@ -440,26 +440,137 @@ fn insert_defaults(spec: &TableSpec, state: &AppState, id: &str) -> CmdResult<Ve
     ])
 }
 
-/// Write the row. Returns `false` when the table forbids inserts and the row is absent.
-async fn upsert(state: &AppState, spec: &TableSpec, id: &str, payload: &Map<String, Value>) -> CmdResult<bool> {
+enum Upsert {
+    Done { id: String, absorbed: Option<String> },
+    Skip,
+}
+
+fn unique_vals<'a>(keys: &[&str], payload: &'a Map<String, Value>) -> Option<Vec<&'a str>> {
+    keys.iter().map(|k| payload.get(*k).and_then(Value::as_str)).collect()
+}
+
+async fn find_unique_other(
+    db: &Pool<Sqlite>,
+    spec: &TableSpec,
+    keys: &[&str],
+    vals: &[&str],
+    id: &str,
+) -> CmdResult<Option<String>> {
+    let where_sql = keys.iter().map(|k| format!("{k} = ?")).collect::<Vec<_>>().join(" AND ");
+    let sql = format!("SELECT {} FROM {} WHERE {} AND {} != ?", spec.pk, spec.table, where_sql, spec.pk);
+    let mut q = sqlx::query_as::<_, (String,)>(AssertSqlSafe(sql));
+    for v in vals {
+        q = q.bind(*v);
+    }
+    q = q.bind(id);
+    Ok(q.fetch_optional(db).await.map_err(AppError::db)?.map(|(x,)| x))
+}
+
+async fn column_tag_name(db: &Pool<Sqlite>, id: &str) -> CmdResult<Option<String>> {
+    let row: Option<(String,)> = sqlx::query_as("SELECT tag_name FROM workspace_columns WHERE id = ?")
+        .bind(id)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::db)?;
+    Ok(row.map(|(t,)| t))
+}
+
+/// Rewrite a tag string on every profile that still uses it.
+async fn retarget_profile_tags(db: &Pool<Sqlite>, from: &str, to: &str) -> CmdResult<()> {
+    if from == to || from.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT id, tags FROM profiles")
+        .fetch_all(db)
+        .await
+        .map_err(AppError::db)?;
+    for (pid, tags) in rows {
+        let mut v: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
+        let mut changed = false;
+        for t in &mut v {
+            if t == from {
+                *t = to.to_string();
+                changed = true;
+            }
+        }
+        if !changed {
+            continue;
+        }
+        let json = serde_json::to_string(&v).unwrap_or_else(|_| "[]".into());
+        exec(db, "UPDATE profiles SET tags = ? WHERE id = ?".into(), &[Value::String(json), Value::String(pid)]).await?;
+    }
+    Ok(())
+}
+
+fn rewrite_json_tags(payload: &mut Map<String, Value>, key: &str, aliases: &HashMap<String, String>) {
+    if aliases.is_empty() {
+        return;
+    }
+    let Some(v) = payload.get(key) else { return };
+    let mut tags: Vec<String> = match v {
+        Value::String(s) => serde_json::from_str(s).unwrap_or_default(),
+        Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+        _ => return,
+    };
+    let mut changed = false;
+    for t in &mut tags {
+        if let Some(n) = aliases.get(t) {
+            *t = n.clone();
+            changed = true;
+        }
+    }
+    if !changed {
+        return;
+    }
+    payload.insert(key.into(), Value::String(serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into())));
+}
+
+/// Write the row. `Skip` when the table forbids inserts and the row is absent.
+async fn upsert(
+    state: &AppState,
+    spec: &TableSpec,
+    id: &str,
+    payload: &Map<String, Value>,
+    aliases: &mut HashMap<String, String>,
+) -> CmdResult<Upsert> {
     let db = &state.db;
     let cols = known_columns(spec, payload);
 
-    // Same value in the unique column under another id: update that row instead.
-    if let Some(u) = spec.unique {
-        if let Some(uv) = payload.get(u).and_then(Value::as_str) {
-            let sql = format!("SELECT {} FROM {} WHERE {} = ? AND {} != ?", spec.pk, spec.table, u, spec.pk);
-            let other: Option<(String,)> =
-                sqlx::query_as(AssertSqlSafe(sql)).bind(uv).bind(id).fetch_optional(db).await.map_err(AppError::db)?;
-            if let Some((other_id,)) = other {
-                let rest: Vec<(&str, Value)> = cols.into_iter().filter(|(c, _)| *c != u).collect();
-                return update_row(db, spec, &other_id, &rest).await.map(|_| true);
+    // Same unique key under another id: keep that row, absorb the remote id.
+    if let Some(keys) = spec.unique {
+        if let Some(vals) = unique_vals(keys, payload) {
+            if let Some(other_id) = find_unique_other(db, spec, keys, &vals, id).await? {
+                let remote_wins = id < other_id.as_str();
+                if spec.entity == "workspace_column" {
+                    let remote_tag = payload.get("tag_name").and_then(Value::as_str).unwrap_or("");
+                    let local_tag = column_tag_name(db, &other_id).await?.unwrap_or_default();
+                    if remote_wins && !remote_tag.is_empty() && remote_tag != local_tag {
+                        retarget_profile_tags(db, &local_tag, remote_tag).await?;
+                        if !local_tag.is_empty() {
+                            aliases.insert(local_tag, remote_tag.to_string());
+                        }
+                    } else if !remote_wins && !remote_tag.is_empty() && remote_tag != local_tag {
+                        retarget_profile_tags(db, remote_tag, &local_tag).await?;
+                        aliases.insert(remote_tag.to_string(), local_tag);
+                    }
+                }
+                let mut skip: HashSet<&str> = keys.iter().copied().collect();
+                if spec.entity == "workspace_column" && !remote_wins {
+                    skip.insert("tag_name");
+                }
+                let rest: Vec<(&str, Value)> = cols.into_iter().filter(|(c, _)| !skip.contains(c)).collect();
+                update_row(db, spec, &other_id, &rest).await?;
+                return Ok(Upsert::Done { id: other_id, absorbed: Some(id.into()) });
             }
         }
     }
 
     if !spec.insert {
-        return update_row(db, spec, id, &cols).await;
+        return if update_row(db, spec, id, &cols).await? {
+            Ok(Upsert::Done { id: id.into(), absorbed: None })
+        } else {
+            Ok(Upsert::Skip)
+        };
     }
 
     let extra = insert_defaults(spec, state, id)?;
@@ -481,7 +592,7 @@ async fn upsert(state: &AppState, spec: &TableSpec, id: &str, payload: &Map<Stri
         on_conflict
     );
     exec(db, sql, &values).await?;
-    Ok(true)
+    Ok(Upsert::Done { id: id.into(), absorbed: None })
 }
 
 async fn update_row(db: &Pool<Sqlite>, spec: &TableSpec, id: &str, cols: &[(&str, Value)]) -> CmdResult<bool> {
@@ -544,6 +655,7 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
     let db = &state.db;
     let mut outcome = ApplyOutcome::default();
 
+    let mut aliases: HashMap<String, String> = HashMap::new();
     for op in ops {
         if !in_scope(&op.entity_type, scope) {
             continue;
@@ -573,19 +685,40 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
             continue;
         }
 
-        let payload = op.payload.as_object().cloned().unwrap_or_default();
-        if !upsert(&state, spec, id, &payload).await? {
-            // Row owned by another entity has not arrived; a retry batch brings it back.
-            continue;
+        let mut payload = op.payload.as_object().cloned().unwrap_or_default();
+        if spec.entity == "profile" {
+            rewrite_json_tags(&mut payload, "tags", &aliases);
         }
-        apply_links(db, spec, id, &payload).await?;
-        // Hash what the table now holds, so the next collect sees no change.
-        st.synced_hash = match read_row(db, spec, id).await? {
-            Some(local) => payload_hash(&local),
-            None => payload_hash(&Value::Object(payload)),
-        };
-        save_row_state(db, &st).await?;
-        outcome.changed.insert(spec.entity.into());
+        match upsert(&state, spec, id, &payload, &mut aliases).await? {
+            Upsert::Skip => continue,
+            Upsert::Done { id: applied_id, absorbed } => {
+                apply_links(db, spec, &applied_id, &payload).await?;
+                st.id = applied_id.clone();
+                // Hash what the table now holds, so the next collect sees no change.
+                st.synced_hash = match read_row(db, spec, &applied_id).await? {
+                    Some(local) => payload_hash(&local),
+                    None => payload_hash(&Value::Object(payload)),
+                };
+                save_row_state(db, &st).await?;
+                if let Some(old) = absorbed {
+                    save_row_state(
+                        db,
+                        &RowSyncState {
+                            entity: spec.entity.into(),
+                            id: old,
+                            head_hlc: Some(op.hlc.clone()),
+                            deleted: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                }
+                outcome.changed.insert(spec.entity.into());
+                if spec.entity == "workspace_column" {
+                    outcome.changed.insert("profile".into());
+                }
+            }
+        }
     }
     Ok(outcome)
 }
