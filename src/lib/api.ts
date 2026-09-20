@@ -116,7 +116,7 @@ export const api = {
       call<Profile>('profile_update', { id, req }),
     delete: (id: string) => call<void>('profile_delete', { id }),
     clone: (id: string) => call<Profile>('profile_clone', { id }),
-    launch: (id: string) => call<number>('profile_launch', { id }),
+    launch: (id: string, force = false) => call<number>('profile_launch', { id, force }),
     stop: (id: string) => call<void>('profile_stop', { id }),
     isRunning: (id: string) => call<boolean>('profile_is_running', { id }),
     runningIds: () => call<string[]>('profiles_running_ids'),
@@ -400,6 +400,8 @@ export const api = {
     conflictGet: (noteId: string) => call<MergeResult>('sync_conflict_get', { noteId }),
     conflictResolve: (noteId: string, content: string) =>
       call<SyncStatus>('sync_conflict_resolve', { noteId, content }),
+    profileTakeRemote: (profileId: string) => call<SyncStatus>('sync_profile_files_take_remote', { profileId }),
+    profilePushMine: (profileId: string) => call<SyncStatus>('sync_profile_files_push_mine', { profileId }),
   },
 
   settings: {
@@ -412,6 +414,7 @@ export const api = {
       }),
     setTrayLabels: (labels: TrayLabels) => call<void>('tray_set_labels', { labels }),
     setLocale: (locale: string) => call<void>('app_locale_set', { locale }),
+    getLocale: () => call<string>('app_locale_get'),
     windowMinimize: () => call<void>('window_minimize'),
   },
 };
@@ -464,6 +467,16 @@ export interface SyncConfig {
   };
   webdav: { url: string; username: string; password: string };
   interval_sec: number;
+  /** Replicate firefox-profile directories, not only metadata. */
+  profile_files: boolean;
+  device_name: string;
+}
+
+export interface SyncLease {
+  profile_id: string;
+  device_id: string;
+  device_name: string;
+  own: boolean;
 }
 
 export interface SyncStatus {
@@ -476,6 +489,21 @@ export interface SyncStatus {
   last_run: string | null;
   last_error: string | null;
   conflicts: { note_id: string; title: string }[];
+  /** Profiles whose files changed on both sides; `note_id` holds the profile id. */
+  profile_conflicts: { note_id: string; title: string }[];
+  profile_leases: SyncLease[];
+  /** Remote ops received in the last cycle. */
+  last_applied: number | null;
+  gc_last: string | null;
+  blobs_total: number | null;
+  blobs_removed_last_gc: number | null;
+}
+
+/** Device name from a `profile_launch` lease error, or null for other errors. */
+export function leaseHolder(err: unknown): string | null {
+  const msg = typeof err === 'string' ? err : (err as { message?: string })?.message ?? String(err);
+  const i = msg.indexOf('profile_in_use:');
+  return i >= 0 ? msg.slice(i + 'profile_in_use:'.length).trim() : null;
 }
 
 export interface TrayLabels {

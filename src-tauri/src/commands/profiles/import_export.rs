@@ -8,9 +8,12 @@ use crate::models::{
 use crate::AppState;
 use std::path::PathBuf;
 
-const ZIP_FILE_BLACKLIST: &[&str] = &[
+/// Runtime-only entries of a firefox-profile: locks and caches. Shared by
+/// export, backup and vault sync.
+pub(crate) const PROFILE_FILE_BLACKLIST: &[&str] = &[
     "lock",
     ".parentlock",
+    "parent.lock",
     "compatibility.ini",
     "cache2",
     "startupCache",
@@ -19,8 +22,8 @@ const ZIP_FILE_BLACKLIST: &[&str] = &[
     "minidumps",
 ];
 
-fn is_blacklisted(name: &str) -> bool {
-    ZIP_FILE_BLACKLIST.iter().any(|b| *b == name)
+pub(crate) fn is_blacklisted(name: &str) -> bool {
+    PROFILE_FILE_BLACKLIST.iter().any(|b| *b == name)
 }
 
 fn build_profile_export(

@@ -61,7 +61,8 @@ pub use lock::{
     notes_lock_unlock, start_auto_lock, NotesLock,
 };
 pub use quick_capture::{
-    open_quick_capture, quick_capture_shortcut_get, quick_capture_shortcut_set, register_quick_capture_shortcut,
+    open_quick_capture, quick_capture_shortcut_get, quick_capture_shortcut_set, reapply_quick_capture_shortcut,
+    register_quick_capture_shortcut,
     show_quick_capture,
 };
 pub use settings::*;

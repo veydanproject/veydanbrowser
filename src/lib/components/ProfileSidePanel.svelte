@@ -4,7 +4,8 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { t, locale } from '$lib/i18n';
-  import { api } from '$lib/api';
+  import { api, leaseHolder } from '$lib/api';
+  import ProfileSyncBadge from '$lib/components/ProfileSyncBadge.svelte';
   import type { Profile, Proxy, WorkspaceColumn } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import Drawer from '$lib/components/ui/Drawer.svelte';
@@ -90,12 +91,19 @@
     return map[preset] ?? preset;
   }
 
-  async function launch() {
-    actionLoading = true; error = '';
+  /** Set when another device holds the sync lease; offers "launch anyway". */
+  let leaseBlockedBy = $state('');
+
+  async function launch(force = false) {
+    actionLoading = true; error = ''; leaseBlockedBy = '';
     try {
-      await api.profiles.launch(profile.id);
+      await api.profiles.launch(profile.id, force);
       onsync({ ...profile, status: 'running' });
-    } catch (e) { error = formatError(e); }
+    } catch (e) {
+      const holder = leaseHolder(e);
+      if (holder !== null) leaseBlockedBy = holder;
+      else error = formatError(e);
+    }
     finally { actionLoading = false; }
   }
 
@@ -315,9 +323,18 @@
         </div>
       </div>
 
+      <ProfileSyncBadge profileId={profile.id} />
+
+      {#if leaseBlockedBy}
+        <div class="error-msg lease-block">
+          <span>{$t('profile_sync_in_use', { device: leaseBlockedBy })}</span>
+          <button class="btn btn-ghost btn-sm" disabled={actionLoading} onclick={() => launch(true)}>{$t('profile_sync_launch_anyway')}</button>
+        </div>
+      {/if}
+
       <div class="panel-actions">
         {#if !isRunning}
-          <button class="btn btn-success btn-main" disabled={actionLoading} onclick={launch}>
+          <button class="btn btn-success btn-main" disabled={actionLoading} onclick={() => launch()}>
             <Icon name="play" size={16} />{actionLoading ? '…' : $t('panel_btn_launch')}
           </button>
         {:else}
@@ -566,6 +583,7 @@
   }
   .status-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .status-badge.running { background: var(--success-bg); color: var(--success-text); border-color: var(--success-border); }
+  .lease-block { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
 
   .psp-body {
     display: flex;

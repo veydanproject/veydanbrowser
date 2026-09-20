@@ -28,6 +28,7 @@
   import { listen } from '@tauri-apps/api/event';
   import type { Window } from '@tauri-apps/api/window';
   import { profilesStore } from '$lib/store/profiles.svelte';
+  import { syncStore } from '$lib/store/sync.svelte';
   import UIInspector from '$lib/inspector/UIInspector.svelte';
   import { inspectorApp } from '$lib/inspector/inspector.svelte';
   import WindowControls from '$lib/components/WindowControls.svelte';
@@ -173,6 +174,7 @@
       : listen<{ running_ids: string[] }>('profiles://running-changed', (e) => {
           runningIds = e.payload.running_ids;
         });
+    const unlistenSyncData = standaloneNotes ? Promise.resolve(() => {}) : syncStore.listenDataChanged();
 
     const unsubLocale = standaloneNotes
       ? () => {}
@@ -208,6 +210,7 @@
       window.removeEventListener('keydown', handleKeyBack);
       window.removeEventListener('mouseup', handleMouseBack);
       unlisten.then((fn) => fn());
+      unlistenSyncData.then((fn) => fn());
       unsubLocale();
       trayUnlisteners.forEach((p) => p.then((fn) => fn()));
       unlistenMax?.();

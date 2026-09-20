@@ -4,7 +4,8 @@
 <script lang="ts">
   import type { Profile, Proxy, WorkspaceColumn } from '$lib/types';
   import { t, locale } from '$lib/i18n';
-  import { api } from '$lib/api';
+  import { api, leaseHolder } from '$lib/api';
+  import ProfileSyncBadge from '$lib/components/ProfileSyncBadge.svelte';
   import Icon from '$lib/Icon.svelte';
   import { formatDateTime } from '$lib/utils';
 
@@ -79,7 +80,13 @@
     e.stopPropagation();
     loadingId = profile.id;
     try { await api.profiles.launch(profile.id); onRefresh(); }
-    catch {}
+    catch (err) {
+      // Leased by another device: let the user override.
+      const holder = leaseHolder(err);
+      if (holder !== null && confirm($t('profile_sync_in_use_confirm', { device: holder }))) {
+        try { await api.profiles.launch(profile.id, true); onRefresh(); } catch {}
+      }
+    }
     finally { loadingId = null; }
   }
 
@@ -165,6 +172,7 @@
               {#if isRunning}
                 <span class="running-pill">● live</span>
               {/if}
+              <ProfileSyncBadge profileId={profile.id} compact />
             </td>
 
             <!-- OS / Browser -->

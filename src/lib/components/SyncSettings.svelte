@@ -19,6 +19,8 @@
     s3: { endpoint: '', region: '', bucket: '', prefix: '', access_key: '', secret_key: '', path_style: true },
     webdav: { url: '', username: '', password: '' },
     interval_sec: 60,
+    profile_files: true,
+    device_name: '',
   });
   let status = $state<SyncStatus | null>(null);
   let passphrase = $state('');
@@ -235,6 +237,20 @@
     {/if}
   </div>
 
+  <div class="toggle-row">
+    <div class="toggle-info">
+      <span>{$t('settings_sync_profile_files')}</span>
+      <span class="hint">{$t('settings_sync_profile_files_hint')}</span>
+    </div>
+    <button class="toggle" class:on={cfg.profile_files} onclick={() => (cfg.profile_files = !cfg.profile_files)} aria-pressed={cfg.profile_files} aria-label={$t('settings_sync_profile_files')}></button>
+  </div>
+
+  <label class="field">
+    <span class="field-label">{$t('settings_sync_device_name')}</span>
+    <input class="input" type="text" bind:value={cfg.device_name} maxlength="64" />
+    <span class="hint">{$t('settings_sync_device_name_hint')}</span>
+  </label>
+
   {#if status?.joined}
     <div class="toggle-row">
       <div class="toggle-info">
@@ -294,6 +310,12 @@
         {#if status.last_error}
           <div class="trow"><span class="tlabel">{$t('settings_sync_last_error')}</span><span class="tvalue error">{status.last_error}</span></div>
         {/if}
+        {#if status.blobs_total !== null}
+          <div class="trow" title={$t('settings_sync_gc_hint')}>
+            <span class="tlabel">{$t('settings_sync_gc')}</span>
+            <span class="tvalue">{$t('settings_sync_gc_value', { total: String(status.blobs_total), removed: String(status.blobs_removed_last_gc ?? 0), when: status.gc_last ? new Date(status.gc_last).toLocaleString() : '' })}</span>
+          </div>
+        {/if}
       {/if}
     </div>
 
@@ -304,6 +326,18 @@
         <ul class="conflicts">
           {#each status.conflicts as c (c.note_id)}
             <li><a href="/notes?open={c.note_id}">{c.title}</a></li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+
+    {#if status.profile_conflicts.length > 0}
+      <div class="field">
+        <span class="field-label">{$t('settings_sync_profile_conflicts')}</span>
+        <p class="hint">{$t('profile_sync_diverged_hint')}</p>
+        <ul class="conflicts">
+          {#each status.profile_conflicts as c (c.note_id)}
+            <li>{c.title}</li>
           {/each}
         </ul>
       </div>

@@ -266,7 +266,41 @@ impl Engine {
         Ok(Some(serde_json::from_slice(&pt)?))
     }
 
+    /// Latest op per entity across every device's log (snapshot + all chunks).
+    /// Fails when a listed chunk cannot be read yet, since its references are unknown.
+    pub async fn all_latest_ops(&self) -> Result<Vec<Op>> {
+        let all = self.storage.list("devices/").await?;
+        let devices: BTreeSet<String> = all.iter().filter_map(|k| device_from_key(k)).map(str::to_string).collect();
+        let mut ops: Vec<Op> = Vec::new();
+        for device in devices {
+            if let Some(snap) = self.read_snapshot(&device).await? {
+                ops.extend(snap.ops);
+            }
+            let log_prefix = format!("devices/{device}/log/");
+            for key in all.iter().filter(|k| k.starts_with(&log_prefix)) {
+                let Some(seq) = seq_from_key(key) else { continue };
+                let bytes = self
+                    .storage
+                    .get(key)
+                    .await?
+                    .ok_or_else(|| SyncError::Storage(format!("chunk {key} listed but not readable")))?;
+                ops.extend(self.open_chunk(&device, seq, &bytes)?.ops);
+            }
+        }
+        Ok(fold_latest(ops))
+    }
+
     // ── Blobs ────────────────────────────────────────────────────────────────
+
+    /// Names of every blob in the storage.
+    pub async fn list_blobs(&self) -> Result<BTreeSet<String>> {
+        let keys = self.storage.list("blobs/").await?;
+        Ok(keys.iter().filter_map(|k| k.strip_prefix("blobs/")).filter(|n| !n.is_empty()).map(str::to_string).collect())
+    }
+
+    pub async fn delete_blob(&self, name: &str) -> Result<()> {
+        self.storage.delete(&blob_key(name)).await
+    }
 
     /// Content-addressed name: keyed HMAC so the storage cannot correlate plaintext hashes.
     pub fn blob_name(&self, data: &[u8]) -> String {

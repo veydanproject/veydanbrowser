@@ -17,7 +17,6 @@ use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 use tauri::{AppHandle, Emitter, Manager};
 use veydan_sync::{sha256_hex, Engine, Hlc, HlcClock, Op};
 
@@ -77,29 +76,6 @@ async fn attachment_dir(state: &AppState, note_id: &str) -> CmdResult<PathBuf> {
     })
 }
 
-/// Cached hash of a file, valid while its mtime and size are unchanged.
-#[derive(Clone)]
-pub struct FileStamp {
-    mtime: Option<SystemTime>,
-    size: u64,
-    hash: String,
-}
-
-/// Hash without re-reading unchanged files; the cache is per process.
-fn file_hash(state: &AppState, path: &Path) -> Option<String> {
-    let meta = std::fs::metadata(path).ok()?;
-    let (mtime, size) = (meta.modified().ok(), meta.len());
-    let mut cache = state.sync.attachment_hashes.lock().ok()?;
-    if let Some(s) = cache.get(path) {
-        if s.mtime == mtime && s.size == size {
-            return Some(s.hash.clone());
-        }
-    }
-    let hash = sha256_hex(&std::fs::read(path).ok()?);
-    cache.insert(path.to_path_buf(), FileStamp { mtime, size, hash: hash.clone() });
-    Some(hash)
-}
-
 /// Attachment names in a directory (sanitizer-safe, no temp files).
 fn dir_names(dir: &Path) -> Vec<String> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
@@ -144,7 +120,7 @@ pub async fn collect_local_changes(engine: &Engine, state: &AppState, clock: &mu
     for (note_id, dir) in &dirs {
         for name in dir_names(dir) {
             let path = dir.join(&name);
-            let Some(hash) = file_hash(state, &path) else { continue };
+            let Some(hash) = state.sync.file_hashes.file_hash(&path) else { continue };
             let prev = states.remove(&(note_id.clone(), name.clone()));
             if prev.as_ref().map(|s| s.synced_hash == hash && !s.deleted).unwrap_or(false) {
                 continue;

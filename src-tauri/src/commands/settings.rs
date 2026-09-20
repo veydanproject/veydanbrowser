@@ -71,6 +71,29 @@ pub async fn tray_settings_set(
     Ok(())
 }
 
+/// Re-read the tray flags from `app_settings` (after sync applied them) and update the tray.
+pub async fn reload_tray_settings(app: &tauri::AppHandle, state: &AppState) {
+    let mut want_tray = false;
+    for (key, flag) in [
+        ("minimize_to_tray", &state.tray_settings.minimize_to_tray),
+        ("close_to_tray", &state.tray_settings.close_to_tray),
+        ("start_hidden", &state.tray_settings.start_hidden),
+    ] {
+        let on = sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        flag.store(on, Ordering::Relaxed);
+        want_tray |= on;
+    }
+    tray::apply_tray_async(app, want_tray);
+    tray::sync_taskbar_to_visibility(app);
+}
+
 /// Minimize action for the custom titlebar's "–" button. With minimize-to-tray
 /// on, the main window is hidden to the tray (leaves the taskbar) instead of
 /// being iconified. Other windows (e.g. notes) always minimize themselves.
@@ -112,6 +135,11 @@ pub async fn app_locale_set(locale: String, state: tauri::State<'_, AppState>) -
     .await
     .map_err(AppError::db)?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn app_locale_get(state: tauri::State<'_, AppState>) -> CmdResult<String> {
+    Ok(app_locale(&state.db).await)
 }
 
 /// Stored UI language, `en` when never set.

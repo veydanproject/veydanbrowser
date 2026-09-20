@@ -18,7 +18,9 @@ use commands::backup::{
     backup_get_config, backup_list, backup_restore, backup_run_now, backup_set_config,
     start_backup_scheduler, BackupManager,
 };
-use commands::settings::{app_locale_set, tray_set_labels, tray_settings_get, tray_settings_set, window_minimize};
+use commands::settings::{
+    app_locale_get, app_locale_set, tray_set_labels, tray_settings_get, tray_settings_set, window_minimize,
+};
 use commands::camoufox::{
     camoufox_download, camoufox_download_cancel, camoufox_download_state, camoufox_latest_version,
     camoufox_status, DownloadManager,
@@ -71,7 +73,8 @@ use commands::workspaces::*;
 use sqlx::{Pool, Sqlite};
 use sync::{
     start_sync_scheduler, sync_change_passphrase, sync_conflict_get, sync_conflict_resolve, sync_create_vault,
-    sync_get_config, sync_join_vault, sync_leave, sync_probe, sync_run_now, sync_set_config, sync_status, SyncManager,
+    sync_get_config, sync_join_vault, sync_leave, sync_probe, sync_profile_files_push_mine,
+    sync_profile_files_take_remote, sync_run_now, sync_set_config, sync_status, SyncManager,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -334,6 +337,7 @@ pub fn run() {
             tray_settings_set,
             tray_set_labels,
             app_locale_set,
+            app_locale_get,
             window_minimize,
             // Backup
             backup_get_config,
@@ -353,6 +357,8 @@ pub fn run() {
             sync_run_now,
             sync_conflict_get,
             sync_conflict_resolve,
+            sync_profile_files_take_remote,
+            sync_profile_files_push_mine,
             // Profiles
             profiles_list,
             profile_get,

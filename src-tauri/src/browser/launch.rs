@@ -187,6 +187,7 @@ pub async fn launch(
         .ok();
         let ids = state_clone.running_ids().await;
         emit_running_changed(&app_handle_clone, ids);
+        crate::sync::on_profile_stopped(&app_handle_clone, &profile_id_clone).await;
     });
 
     // Store the monitor handle so stop_all can await the actual kill on app

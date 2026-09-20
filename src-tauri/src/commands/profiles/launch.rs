@@ -12,15 +12,18 @@ pub async fn emit_running_ids(app_handle: &tauri::AppHandle, state: &AppState) {
     browser_launch::emit_running_changed(app_handle, ids);
 }
 
+/// `force` launches even when another device holds the sync lease.
 #[tauri::command]
 pub async fn profile_launch(
     id: String,
+    force: Option<bool>,
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<u32> {
     if state.browser.is_running(&id).await {
         return Err(AppError::other("Profile is already running"));
     }
+    crate::sync::before_profile_launch(&app_handle, &id, force.unwrap_or(false)).await?;
 
     let profile = sqlx::query_as::<_, Profile>("SELECT * FROM profiles WHERE id = ?")
         .bind(&id)
@@ -59,6 +62,7 @@ pub async fn profile_launch(
         .bind(&id)
         .execute(&state.db)
         .await;
+        crate::sync::on_profile_stopped(&app_handle, &id).await;
     }
 
     // Always emit so frontend reflects actual running state (empty on failure)

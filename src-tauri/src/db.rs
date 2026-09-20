@@ -505,6 +505,51 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Per-row sync position for table entities (profiles, proxies, ...).
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_row_state (
+            entity_type TEXT NOT NULL,
+            entity_id   TEXT NOT NULL,
+            head_hlc    TEXT NOT NULL DEFAULT '',
+            synced_hash TEXT NOT NULL DEFAULT '',
+            deleted     INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (entity_type, entity_id)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Firefox profile files: last pushed/applied snapshot, lease holder, pending work.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_profile_files_state (
+            profile_id       TEXT PRIMARY KEY NOT NULL,
+            head_hlc         TEXT NOT NULL DEFAULT '',
+            synced_hash      TEXT NOT NULL DEFAULT '',
+            manifest_json    TEXT NOT NULL DEFAULT '',
+            snapshot_at      TEXT NOT NULL DEFAULT '',
+            dirty            INTEGER NOT NULL DEFAULT 0,
+            pending_manifest TEXT NOT NULL DEFAULT '',
+            lease_device     TEXT NOT NULL DEFAULT '',
+            lease_name       TEXT NOT NULL DEFAULT '',
+            lease_since      TEXT NOT NULL DEFAULT '',
+            lease_hlc        TEXT NOT NULL DEFAULT '',
+            lease_synced     INTEGER NOT NULL DEFAULT 1,
+            diverged         INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Unreferenced vault blobs and when they were first seen; deleted after a grace period.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_gc_candidates (
+            blob       TEXT PRIMARY KEY NOT NULL,
+            first_seen INTEGER NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Reset stale running status on startup — no browsers are actually running yet
     sqlx::query("UPDATE profiles SET status = 'stopped' WHERE status = 'running'")
         .execute(pool)

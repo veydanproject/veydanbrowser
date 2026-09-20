@@ -82,6 +82,15 @@ pub fn register_quick_capture_shortcut(app: &tauri::AppHandle) {
     }
 }
 
+/// Re-register after the persisted accelerator changed outside this process (sync).
+pub async fn reapply_quick_capture_shortcut(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let accelerator = load_shortcut(&state).await;
+    if let Err(e) = apply_shortcut(app, &accelerator) {
+        eprintln!("[quick-capture] shortcut registration failed: {e}");
+    }
+}
+
 #[tauri::command]
 pub async fn quick_capture_shortcut_get(state: tauri::State<'_, AppState>) -> CmdResult<String> {
     Ok(load_shortcut(&state).await)

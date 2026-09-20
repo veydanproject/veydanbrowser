@@ -96,10 +96,79 @@ pub async fn save_note_state(db: &Pool<Sqlite>, s: &NoteSyncState) -> CmdResult<
     Ok(())
 }
 
-pub async fn clear_note_states(db: &Pool<Sqlite>) -> CmdResult<()> {
-    sqlx::query("DELETE FROM sync_note_state").execute(db).await.map_err(AppError::db)?;
-    sqlx::query("DELETE FROM sync_attachment_state").execute(db).await.map_err(AppError::db)?;
-    sqlx::query("DELETE FROM sync_peers").execute(db).await.map_err(AppError::db)?;
+/// Forget every sync position; the next cycle starts from scratch.
+pub async fn clear_all_states(db: &Pool<Sqlite>) -> CmdResult<()> {
+    for table in [
+        "sync_note_state",
+        "sync_attachment_state",
+        "sync_row_state",
+        "sync_profile_files_state",
+        "sync_gc_candidates",
+        "sync_peers",
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}"))).execute(db).await.map_err(AppError::db)?;
+    }
+    Ok(())
+}
+
+// ── Table rows ───────────────────────────────────────────────────────────────
+
+/// Where a local table row stands relative to the vault (LWW, no merge).
+#[derive(Debug, Clone, Default)]
+pub struct RowSyncState {
+    pub entity: String,
+    pub id: String,
+    pub head_hlc: Option<Hlc>,
+    /// Hash of the synced columns when the row was last pushed or applied.
+    pub synced_hash: String,
+    pub deleted: bool,
+}
+
+type RowStateRow = (String, String, String, String, i64);
+
+fn row_to_row_state(r: RowStateRow) -> RowSyncState {
+    RowSyncState { entity: r.0, id: r.1, head_hlc: Hlc::decode(&r.2), synced_hash: r.3, deleted: r.4 != 0 }
+}
+
+pub async fn load_row_states(db: &Pool<Sqlite>, entity: &str) -> CmdResult<HashMap<String, RowSyncState>> {
+    let rows: Vec<RowStateRow> = sqlx::query_as(
+        "SELECT entity_type, entity_id, head_hlc, synced_hash, deleted FROM sync_row_state WHERE entity_type = ?",
+    )
+    .bind(entity)
+    .fetch_all(db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(rows.into_iter().map(row_to_row_state).map(|s| (s.id.clone(), s)).collect())
+}
+
+pub async fn load_row_state(db: &Pool<Sqlite>, entity: &str, id: &str) -> CmdResult<Option<RowSyncState>> {
+    let row: Option<RowStateRow> = sqlx::query_as(
+        "SELECT entity_type, entity_id, head_hlc, synced_hash, deleted FROM sync_row_state
+         WHERE entity_type = ? AND entity_id = ?",
+    )
+    .bind(entity)
+    .bind(id)
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(row.map(row_to_row_state))
+}
+
+pub async fn save_row_state(db: &Pool<Sqlite>, s: &RowSyncState) -> CmdResult<()> {
+    sqlx::query(
+        "INSERT INTO sync_row_state (entity_type, entity_id, head_hlc, synced_hash, deleted)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+           head_hlc = excluded.head_hlc, synced_hash = excluded.synced_hash, deleted = excluded.deleted",
+    )
+    .bind(&s.entity)
+    .bind(&s.id)
+    .bind(s.head_hlc.as_ref().map(Hlc::encode).unwrap_or_default())
+    .bind(&s.synced_hash)
+    .bind(s.deleted as i64)
+    .execute(db)
+    .await
+    .map_err(AppError::db)?;
     Ok(())
 }
 
@@ -172,6 +241,141 @@ pub async fn save_attachment_state(db: &Pool<Sqlite>, s: &AttachmentSyncState) -
     .await
     .map_err(AppError::db)?;
     Ok(())
+}
+
+// ── Profile files ────────────────────────────────────────────────────────────
+
+/// Where the local `firefox-profile/` stands relative to the vault, plus the
+/// lease telling which device may run the profile right now.
+#[derive(Debug, Clone, Default)]
+pub struct ProfileFilesState {
+    pub profile_id: String,
+    /// HLC of the last snapshot op pushed or applied.
+    pub head_hlc: Option<Hlc>,
+    /// Hash of the manifest JSON at that point.
+    pub synced_hash: String,
+    /// That manifest; lets unchanged files reuse their blob without re-reading.
+    pub manifest_json: String,
+    pub snapshot_at: String,
+    /// Local files changed since the last snapshot (browser ran).
+    pub dirty: bool,
+    /// Remote manifest blob that could not be applied while the browser ran.
+    pub pending_manifest: String,
+    pub lease_device: String,
+    pub lease_name: String,
+    pub lease_since: String,
+    pub lease_hlc: Option<Hlc>,
+    /// Our own lease change was pushed.
+    pub lease_synced: bool,
+    /// Both sides changed the files; the user picks a side.
+    pub diverged: bool,
+}
+
+impl ProfileFilesState {
+    pub fn new(profile_id: &str) -> Self {
+        Self { profile_id: profile_id.into(), lease_synced: true, ..Default::default() }
+    }
+}
+
+type ProfileFilesRow = (String, String, String, String, String, i64, String, String, String, String, String, i64, i64);
+
+const SELECT_PROFILE_FILES: &str = "SELECT profile_id, head_hlc, synced_hash, manifest_json, snapshot_at, dirty,
+    pending_manifest, lease_device, lease_name, lease_since, lease_hlc, lease_synced, diverged FROM sync_profile_files_state";
+
+fn row_to_profile_files(r: ProfileFilesRow) -> ProfileFilesState {
+    ProfileFilesState {
+        profile_id: r.0,
+        head_hlc: Hlc::decode(&r.1),
+        synced_hash: r.2,
+        manifest_json: r.3,
+        snapshot_at: r.4,
+        dirty: r.5 != 0,
+        pending_manifest: r.6,
+        lease_device: r.7,
+        lease_name: r.8,
+        lease_since: r.9,
+        lease_hlc: Hlc::decode(&r.10),
+        lease_synced: r.11 != 0,
+        diverged: r.12 != 0,
+    }
+}
+
+pub async fn load_profile_files_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<String, ProfileFilesState>> {
+    let rows: Vec<ProfileFilesRow> = sqlx::query_as(SELECT_PROFILE_FILES).fetch_all(db).await.map_err(AppError::db)?;
+    Ok(rows.into_iter().map(row_to_profile_files).map(|s| (s.profile_id.clone(), s)).collect())
+}
+
+pub async fn load_profile_files_state(db: &Pool<Sqlite>, profile_id: &str) -> CmdResult<Option<ProfileFilesState>> {
+    let row: Option<ProfileFilesRow> = sqlx::query_as(
+        "SELECT profile_id, head_hlc, synced_hash, manifest_json, snapshot_at, dirty,
+         pending_manifest, lease_device, lease_name, lease_since, lease_hlc, lease_synced, diverged
+         FROM sync_profile_files_state WHERE profile_id = ?",
+    )
+    .bind(profile_id)
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(row.map(row_to_profile_files))
+}
+
+pub async fn save_profile_files_state(db: &Pool<Sqlite>, s: &ProfileFilesState) -> CmdResult<()> {
+    sqlx::query(
+        "INSERT INTO sync_profile_files_state (profile_id, head_hlc, synced_hash, manifest_json, snapshot_at, dirty,
+           pending_manifest, lease_device, lease_name, lease_since, lease_hlc, lease_synced, diverged)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(profile_id) DO UPDATE SET
+           head_hlc = excluded.head_hlc, synced_hash = excluded.synced_hash, manifest_json = excluded.manifest_json,
+           snapshot_at = excluded.snapshot_at, dirty = excluded.dirty, pending_manifest = excluded.pending_manifest,
+           lease_device = excluded.lease_device, lease_name = excluded.lease_name, lease_since = excluded.lease_since,
+           lease_hlc = excluded.lease_hlc, lease_synced = excluded.lease_synced, diverged = excluded.diverged",
+    )
+    .bind(&s.profile_id)
+    .bind(s.head_hlc.as_ref().map(Hlc::encode).unwrap_or_default())
+    .bind(&s.synced_hash)
+    .bind(&s.manifest_json)
+    .bind(&s.snapshot_at)
+    .bind(s.dirty as i64)
+    .bind(&s.pending_manifest)
+    .bind(&s.lease_device)
+    .bind(&s.lease_name)
+    .bind(&s.lease_since)
+    .bind(s.lease_hlc.as_ref().map(Hlc::encode).unwrap_or_default())
+    .bind(s.lease_synced as i64)
+    .bind(s.diverged as i64)
+    .execute(db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(())
+}
+
+pub async fn delete_profile_files_state(db: &Pool<Sqlite>, profile_id: &str) -> CmdResult<()> {
+    sqlx::query("DELETE FROM sync_profile_files_state WHERE profile_id = ?")
+        .bind(profile_id)
+        .execute(db)
+        .await
+        .map_err(AppError::db)?;
+    Ok(())
+}
+
+/// Leased profiles: (profile_id, lease_device, lease_name).
+pub async fn profile_leases(db: &Pool<Sqlite>) -> CmdResult<Vec<(String, String, String)>> {
+    sqlx::query_as::<_, (String, String, String)>(
+        "SELECT profile_id, lease_device, lease_name FROM sync_profile_files_state WHERE lease_device != ''",
+    )
+    .fetch_all(db)
+    .await
+    .map_err(AppError::db)
+}
+
+/// Profiles whose files diverged: (id, name).
+pub async fn profile_conflicts(db: &Pool<Sqlite>) -> CmdResult<Vec<(String, String)>> {
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT s.profile_id, COALESCE(p.name, s.profile_id) FROM sync_profile_files_state s
+         LEFT JOIN profiles p ON p.id = s.profile_id WHERE s.diverged = 1",
+    )
+    .fetch_all(db)
+    .await
+    .map_err(AppError::db)
 }
 
 /// Notes with an unresolved sync conflict: (id, title).

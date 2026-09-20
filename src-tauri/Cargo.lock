@@ -7189,6 +7189,7 @@ dependencies = [
  "chrono",
  "diffy",
  "futures-util",
+ "gethostname",
  "ksni",
  "lz4_flex",
  "notify",

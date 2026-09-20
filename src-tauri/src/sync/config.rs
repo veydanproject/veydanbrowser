@@ -39,6 +39,16 @@ pub struct SyncConfig {
     pub s3: S3Settings,
     pub webdav: WebDavSettings,
     pub interval_sec: u64,
+    /// Replicate `firefox-profile/` directories (cookies, sessions, history).
+    #[serde(default = "default_true")]
+    pub profile_files: bool,
+    /// How this device is shown to others (lease badge).
+    #[serde(default)]
+    pub device_name: String,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for SyncConfig {
@@ -50,8 +60,15 @@ impl Default for SyncConfig {
             s3: S3Settings::default(),
             webdav: WebDavSettings::default(),
             interval_sec: DEFAULT_INTERVAL_SEC,
+            profile_files: true,
+            device_name: String::new(),
         }
     }
+}
+
+/// Hostname, or the device id when the OS gives nothing usable.
+fn default_device_name() -> String {
+    gethostname::gethostname().to_string_lossy().trim().to_string()
 }
 
 /// Identity of the vault this device joined. Absent until create/join.
@@ -120,7 +137,21 @@ pub async fn load_config(db: &Pool<Sqlite>) -> SyncConfig {
             .await
             .and_then(|v| v.parse().ok())
             .unwrap_or(d.interval_sec),
+        profile_files: get_setting(db, "sync_profile_files").await.as_deref() != Some("0"),
+        device_name: device_name(db).await,
     }
+}
+
+/// Name shown to other devices; falls back to the hostname, then the device id.
+pub async fn device_name(db: &Pool<Sqlite>) -> String {
+    if let Some(n) = get_setting(db, "sync_device_name").await.filter(|s| !s.trim().is_empty()) {
+        return n;
+    }
+    let host = default_device_name();
+    if !host.is_empty() {
+        return host;
+    }
+    device_id(db).await.unwrap_or_default()
 }
 
 pub async fn save_config(db: &Pool<Sqlite>, cfg: &SyncConfig) -> CmdResult<()> {
@@ -139,6 +170,8 @@ pub async fn save_config(db: &Pool<Sqlite>, cfg: &SyncConfig) -> CmdResult<()> {
     set_setting(db, "sync_webdav_password", &cfg.webdav.password).await?;
     let interval = cfg.interval_sec.clamp(MIN_INTERVAL_SEC, MAX_INTERVAL_SEC);
     set_setting(db, "sync_interval_sec", &interval.to_string()).await?;
+    set_setting(db, "sync_profile_files", if cfg.profile_files { "1" } else { "0" }).await?;
+    set_setting(db, "sync_device_name", cfg.device_name.trim()).await?;
     Ok(())
 }
 
@@ -173,6 +206,10 @@ pub async fn clear_binding(db: &Pool<Sqlite>) -> CmdResult<()> {
         "sync_last_run",
         "sync_last_started",
         "sync_last_error",
+        "sync_last_applied",
+        "sync_gc_last",
+        "sync_gc_blobs_total",
+        "sync_gc_removed",
     ] {
         delete_setting(db, key).await?;
     }

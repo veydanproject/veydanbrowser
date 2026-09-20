@@ -31,28 +31,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
-/// Cache directories inside a firefox-profile that are pure runtime caches —
-/// reused from the per-profile export blacklist so we don't bloat the backup.
-const CACHE_BLACKLIST: &[&str] = &[
-    "lock",
-    ".parentlock",
-    "compatibility.ini",
-    "cache2",
-    "startupCache",
-    "shader-cache",
-    "crashes",
-    "minidumps",
-];
+use crate::commands::profiles::is_blacklisted;
 
 const FORMAT_VERSION: u32 = 1;
 /// Max scrypt log2(N) accepted on restore (age default is 18-22 on modern HW).
 const MAX_SCRYPT_WORK_FACTOR: u8 = 22;
 const FILE_PREFIX: &str = "veydan-backup-";
 const FILE_EXT: &str = "vbk";
-
-fn is_blacklisted(name: &str) -> bool {
-    CACHE_BLACKLIST.iter().any(|b| *b == name)
-}
 
 // ── Shared state ────────────────────────────────────────────────────────────
 

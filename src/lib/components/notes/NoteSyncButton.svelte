@@ -22,7 +22,8 @@
     if (!s?.joined) return `${$t('notes_btn_sync')} · ${$t('notes_sync_not_joined')}`;
     const last = s.last_run ? new Date(s.last_run).toLocaleString() : $t('notes_sync_never');
     const err = syncStore.error || s.last_error;
-    const base = `${$t('notes_btn_sync')} · ${$t('notes_sync_last')}: ${last}`;
+    let base = `${$t('notes_btn_sync')} · ${$t('notes_sync_last')}: ${last}`;
+    if (s.last_applied !== null) base += ` · ${$t('notes_sync_applied', { n: String(s.last_applied) })}`;
     return err ? `${base}\n${$t('notes_sync_error')}: ${err}` : base;
   });
 
