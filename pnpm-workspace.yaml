@@ -1,3 +1,5 @@
+packages:
+  - 'mobile'
 onlyBuiltDependencies:
   - esbuild
 allowBuilds:

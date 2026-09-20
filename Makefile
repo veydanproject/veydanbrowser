@@ -1,4 +1,4 @@
-.PHONY: dev update push clean push-dev push-test push-beta _push-channel linux windows macos
+.PHONY: dev update push clean push-dev push-test push-beta _push-channel linux windows macos android-dev android-apk android-install android-devices
 
 # So `make push-dev linux` treats linux/windows/macos as flags, not real targets.
 linux windows macos:
@@ -14,6 +14,22 @@ clean:
 
 dev:
 	@bash dev.sh
+
+android-dev:
+	@bash mobile/dev.sh
+
+android-apk:
+	@bash -c 'source mobile/android-env.sh && cd mobile && pnpm tauri android build'
+
+android-install:
+	@bash -c 'source mobile/android-env.sh && \
+	  apk=$$(find mobile/src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -printf "%T@\t%p\n" 2>/dev/null | sort -nr | cut -f2- | head -n1); \
+	  if [ -z "$$apk" ]; then echo ">> No APK. Run: make android-apk"; exit 1; fi; \
+	  echo ">> Installing $$apk"; \
+	  adb install -r "$$apk"'
+
+android-devices:
+	@bash -c 'source mobile/android-env.sh && adb devices'
 
 update:
 	@bash update.sh

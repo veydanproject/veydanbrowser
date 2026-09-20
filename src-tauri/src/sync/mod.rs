@@ -327,10 +327,15 @@ async fn open_engine(state: &AppState) -> CmdResult<Engine> {
     Ok(Engine::with_key(build_storage(&cfg)?, &vmk, &binding.vault_id, &device))
 }
 
+/// Vault joined and background sync is on.
+async fn vault_active(state: &AppState) -> bool {
+    let cfg = load_config(&state.db).await;
+    cfg.enabled && load_binding(&state.db).await.is_some()
+}
+
 /// Sync is on, a vault is joined and profile files are included.
 async fn profile_files_active(state: &AppState) -> bool {
-    let cfg = load_config(&state.db).await;
-    cfg.enabled && cfg.profile_files && load_binding(&state.db).await.is_some()
+    load_config(&state.db).await.profile_files && vault_active(state).await
 }
 
 /// Run a cycle in the background unless one is already running.
@@ -355,14 +360,14 @@ pub const ERR_PROFILE_IN_USE: &str = "profile_in_use";
 /// apply a snapshot that waited, take the lease.
 pub async fn before_profile_launch(app: &AppHandle, profile_id: &str, force: bool) -> CmdResult<()> {
     let state = app.state::<AppState>();
-    if !profile_files_active(&state).await {
+    if !vault_active(&state).await {
         return Ok(());
     }
     if !force {
         if let Some((_, name)) = profile_files::foreign_lease(&state, profile_id).await? {
             return Err(AppError::other(format!("{ERR_PROFILE_IN_USE}:{name}")));
         }
-        if profile_files::has_pending(&state, profile_id).await? {
+        if profile_files_active(&state).await && profile_files::has_pending(&state, profile_id).await? {
             let engine = open_engine(&state).await?;
             profile_files::apply_pending(&engine, &state, app, profile_id).await?;
         }
@@ -375,7 +380,7 @@ pub async fn before_profile_launch(app: &AppHandle, profile_id: &str, force: boo
 /// After the browser exited: mark files dirty, release the lease, sync soon.
 pub async fn on_profile_stopped(app: &AppHandle, profile_id: &str) {
     let state = app.state::<AppState>();
-    if !profile_files_active(&state).await {
+    if !vault_active(&state).await {
         return;
     }
     if let Err(e) = profile_files::on_profile_stopped(&state, profile_id).await {
@@ -436,10 +441,12 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     let changes = notes::collect_local_changes(&engine, state, &mut clock).await?;
     emit_progress(app, "collect", 18, 0, 0, "");
     let table_rows = rows::collect_local_changes(state, &mut clock, rows::RowScope::App).await?;
+    let leases = profile_files::collect_leases(state, &mut clock).await?;
     let mut ops = note_rows.ops;
     ops.extend(attachments.ops);
     ops.extend(changes.ops);
     ops.extend(table_rows.ops);
+    ops.extend(leases.ops);
     emit_progress(app, "push", 22, 0, 0, "");
     if !ops.is_empty() {
         engine.push(&mut local, ops).await.map_err(AppError::other)?;
@@ -452,6 +459,9 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
         }
         for st in &changes.states {
             state::save_note_state(db, st).await?;
+        }
+        for st in &leases.states {
+            state::save_profile_files_state(db, st).await?;
         }
     }
 
@@ -482,6 +492,12 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     rows::finish_apply(app, &rows_outcome).await;
 
     let mut warnings: Vec<String> = pulled.errors.into_iter().map(|(peer, e)| format!("{peer}: {e}")).collect();
+    match profile_files::apply_leases(app, &pulled.ops).await {
+        Ok(_) => {
+            let _ = app.emit(EVENT_STATUS, ());
+        }
+        Err(e) => warnings.push(format!("leases: {e}")),
+    }
     let mut files_retry = None;
     if cfg.profile_files {
         emit_progress(app, "profiles_up", 55, 0, 0, "");

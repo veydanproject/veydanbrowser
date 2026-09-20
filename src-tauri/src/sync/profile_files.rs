@@ -259,7 +259,33 @@ async fn build_manifest(
     Ok(Manifest { files })
 }
 
-/// Publish lease changes and snapshots of profiles that ran since the last one.
+/// Lease ops only: a tiny payload, never waits on profile files.
+pub async fn collect_leases(state: &AppState, clock: &mut HlcClock) -> CmdResult<LocalChanges> {
+    let db = &state.db;
+    let device = super::config::device_id(db).await?;
+    let mut out = LocalChanges { ops: Vec::new(), states: Vec::new() };
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT id FROM profiles").fetch_all(db).await.map_err(AppError::db)?;
+    for (id,) in rows {
+        let mut st = load_profile_files_state(db, &id).await?.unwrap_or_else(|| ProfileFilesState::new(&id));
+        if st.lease_synced {
+            continue;
+        }
+        let hlc = clock.now();
+        let payload = (st.lease_device == device).then(|| LeasePayload {
+            device_id: device.clone(),
+            device_name: st.lease_name.clone(),
+            since: st.lease_since.clone(),
+        });
+        out.ops.push(lease_op(&id, hlc.clone(), payload));
+        st.lease_hlc = Some(hlc);
+        st.lease_synced = true;
+        out.states.push(st);
+    }
+    Ok(out)
+}
+
+/// Snapshots of profiles that ran since the last one. Leases are collected separately.
 pub async fn collect_local_changes(
     engine: &Engine,
     state: &AppState,
@@ -277,19 +303,6 @@ pub async fn collect_local_changes(
     for (id, profile_path, last_launch_at) in rows {
         let mut st = states.remove(&id).unwrap_or_else(|| ProfileFilesState::new(&id));
 
-        let lease_changed = !st.lease_synced;
-        if lease_changed {
-            let hlc = clock.now();
-            let payload = (st.lease_device == device).then(|| LeasePayload {
-                device_id: device.clone(),
-                device_name: st.lease_name.clone(),
-                since: st.lease_since.clone(),
-            });
-            out.ops.push(lease_op(&id, hlc.clone(), payload));
-            st.lease_hlc = Some(hlc);
-            st.lease_synced = true;
-        }
-
         let dir = PathBuf::from(&profile_path).join("firefox-profile");
         let launched_after = match (last_launch_at.as_deref().and_then(parse_time), parse_time(&st.snapshot_at)) {
             (Some(launch), Some(snap)) => launch > snap,
@@ -304,10 +317,6 @@ pub async fn collect_local_changes(
             let now_diverged = foreign_lease && candidate && !running && st.dirty && !st.diverged;
             if now_diverged {
                 st.diverged = true;
-            }
-            if lease_changed {
-                out.states.push(st);
-            } else if now_diverged {
                 save_profile_files_state(db, &st).await?;
             }
             continue;
@@ -426,47 +435,59 @@ fn record_applied(st: &mut ProfileFilesState, manifest: &Manifest) {
     st.diverged = false;
 }
 
-/// Apply remote lease and snapshot ops. Ops are already HLC-sorted.
-pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdResult<ApplyOutcome> {
+/// Apply remote lease ops. Independent of profile file snapshots.
+pub async fn apply_leases(app: &AppHandle, ops: &[Op]) -> CmdResult<ApplyOutcome> {
     let state = app.state::<AppState>();
     let db = &state.db;
     let device = super::config::device_id(db).await?;
+    let outcome = ApplyOutcome::default();
+
+    for op in ops {
+        if op.entity_type != LEASE_ENTITY {
+            continue;
+        }
+        let id = op.entity_id.as_str();
+        let mut st = load_profile_files_state(db, id).await?.unwrap_or_else(|| ProfileFilesState::new(id));
+        let stale = st.lease_hlc.as_ref().map(|h| *h >= op.hlc).unwrap_or(false);
+        if op.deleted {
+            if stale {
+                continue;
+            }
+            if st.lease_device == op.hlc.device_id {
+                st.lease_device.clear();
+                st.lease_name.clear();
+                st.lease_since.clear();
+            }
+        } else {
+            if st.lease_device == device {
+                // Concurrent launches: the earlier one (lower HLC) keeps the profile.
+                if st.lease_hlc.as_ref().map(|h| *h < op.hlc).unwrap_or(false) {
+                    continue;
+                }
+            } else if stale {
+                continue;
+            }
+            let p: LeasePayload = serde_json::from_value(op.payload.clone()).unwrap_or_default();
+            st.lease_device = p.device_id;
+            st.lease_name = p.device_name;
+            st.lease_since = p.since;
+            st.lease_synced = true;
+        }
+        st.lease_hlc = Some(op.hlc.clone());
+        save_profile_files_state(db, &st).await?;
+    }
+    Ok(outcome)
+}
+
+/// Apply remote snapshot ops. Ops are already HLC-sorted.
+pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdResult<ApplyOutcome> {
+    let state = app.state::<AppState>();
+    let db = &state.db;
     let mut outcome = ApplyOutcome::default();
 
     for op in ops {
         let id = op.entity_id.as_str();
         match op.entity_type.as_str() {
-            LEASE_ENTITY => {
-                let mut st = load_profile_files_state(db, id).await?.unwrap_or_else(|| ProfileFilesState::new(id));
-                let stale = st.lease_hlc.as_ref().map(|h| *h >= op.hlc).unwrap_or(false);
-                if op.deleted {
-                    if stale {
-                        continue;
-                    }
-                    if st.lease_device == op.hlc.device_id {
-                        st.lease_device.clear();
-                        st.lease_name.clear();
-                        st.lease_since.clear();
-                    }
-                } else {
-                    if st.lease_device == device {
-                        // Concurrent launches: the earlier one (lower HLC) keeps the profile.
-                        // An unpushed lease of ours would get a higher HLC, so it yields.
-                        if st.lease_hlc.as_ref().map(|h| *h < op.hlc).unwrap_or(false) {
-                            continue;
-                        }
-                    } else if stale {
-                        continue;
-                    }
-                    let p: LeasePayload = serde_json::from_value(op.payload.clone()).unwrap_or_default();
-                    st.lease_device = p.device_id;
-                    st.lease_name = p.device_name;
-                    st.lease_since = p.since;
-                    st.lease_synced = true;
-                }
-                st.lease_hlc = Some(op.hlc.clone());
-                save_profile_files_state(db, &st).await?;
-            }
             SNAPSHOT_ENTITY => {
                 if op.deleted {
                     continue;
