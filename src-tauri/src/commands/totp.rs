@@ -138,19 +138,24 @@ fn decode_secret(s: &str) -> Result<Vec<u8>, AppError> {
     Err(AppError::other("Could not decode TOTP secret"))
 }
 
+/// `new_unchecked`: TOTP::new rejects secrets under 128 bits, but many
+/// services issue 80-bit (16-char Base32) secrets that work fine.
 pub(crate) fn build_totp(entry: &TotpEntry) -> Result<TOTP, AppError> {
-    let secret = decode_secret(&entry.secret)?;
-
-    TOTP::new(
+    if !(6..=8).contains(&entry.digits) {
+        return Err(AppError::other("Digits must be between 6 and 8"));
+    }
+    if entry.period < 1 {
+        return Err(AppError::other("Period must be positive"));
+    }
+    Ok(TOTP::new_unchecked(
         parse_algorithm(&entry.algorithm),
         entry.digits as usize,
         1,
         entry.period as u64,
-        secret,
+        decode_secret(&entry.secret)?,
         entry.issuer.clone(),
         entry.name.clone(),
-    )
-    .map_err(|e| AppError::other(format!("TOTP build error: {e}")))
+    ))
 }
 
 fn generate_code_for(entry: &TotpEntry) -> Result<TotpCode, AppError> {
@@ -397,7 +402,7 @@ pub async fn totp_generate_codes(
     }
     let rows = q.fetch_all(&state.db).await.map_err(AppError::db)?;
 
-    rows.iter().map(generate_code_for).collect()
+    Ok(rows.iter().filter_map(|row| generate_code_for(row).ok()).collect())
 }
 
 #[tauri::command]

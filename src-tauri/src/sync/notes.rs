@@ -464,8 +464,11 @@ pub async fn finish_apply(app: &AppHandle, outcome: &ApplyOutcome) -> CmdResult<
         if let Some(row) = load_head(&state.db, id).await? {
             let path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
             if let Ok(raw) = std::fs::read_to_string(&path) {
-                let (_, tags, _) = parse_note_file(&raw);
-                tags_by_note.insert(id.clone(), tags);
+                let (kv, tags, _) = parse_note_file(&raw);
+                // Skip files we could not parse so we do not wipe existing links.
+                if kv.contains_key("id") {
+                    tags_by_note.insert(id.clone(), tags);
+                }
             }
         }
     }

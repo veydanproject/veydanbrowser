@@ -227,18 +227,20 @@ pub(crate) fn parse_note_file(raw: &str) -> (HashMap<String, String>, Vec<String
                 in_tags = false;
             }
         }
-        if let Some((key, val)) = line.split_once(": ") {
+        // `tags:` is written without a space; other keys use `: `.
+        if let Some((key, val)) = line.split_once(':') {
+            let key = key.trim();
+            let val = val.trim();
             if key == "tags" {
-                in_tags = true;
-            } else {
-                let key = key.trim().to_string();
-                let val = if key == "title" {
-                    decode_fm_title(val.trim())
-                } else {
-                    val.trim().to_string()
-                };
-                kv.insert(key, val);
+                in_tags = val.is_empty() || val == "[]";
+                continue;
             }
+            let val = if key == "title" {
+                decode_fm_title(val)
+            } else {
+                val.to_string()
+            };
+            kv.insert(key.to_string(), val);
         }
     }
 
