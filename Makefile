@@ -1,4 +1,8 @@
-.PHONY: dev update push clean
+.PHONY: dev update push clean push-dev push-test push-beta _push-channel linux windows macos
+
+# So `make push-dev linux` treats linux/windows/macos as flags, not real targets.
+linux windows macos:
+	@:
 
 clean:
 	@echo ">> Stopping running processes..."
@@ -36,3 +40,26 @@ push:
 	git tag v$$NEXT; \
 	git push && git push origin v$$NEXT; \
 	echo ">> Released v$$NEXT"
+
+push-dev push-test push-beta:
+	@$(MAKE) _push-channel CHANNEL=$(patsubst push-%,%,$@) PLATFORMS="$(filter linux windows macos,$(MAKECMDGOALS))"
+
+# Channel snapshot: no VERSION bump. Tag vX.Y.Z-{channel}[-platform...].
+_push-channel:
+	@if [ -z "$(CHANNEL)" ]; then echo ">> CHANNEL is required"; exit 1; fi
+	@VERSION=$$(cat VERSION); \
+	TAG="v$$VERSION-$(CHANNEL)"; \
+	for p in $(PLATFORMS); do TAG="$$TAG-$$p"; done; \
+	if git rev-parse "$$TAG" >/dev/null 2>&1; then \
+		echo ">> Tag $$TAG already exists"; \
+		exit 1; \
+	fi; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		MSG="$(MSG)"; \
+		COMMIT_MSG=$${MSG:-"$(CHANNEL) snapshot $$VERSION"}; \
+		git add -A; \
+		git commit -m "$$COMMIT_MSG"; \
+	fi; \
+	git tag "$$TAG"; \
+	git push && git push origin "$$TAG"; \
+	echo ">> Released $$TAG"
