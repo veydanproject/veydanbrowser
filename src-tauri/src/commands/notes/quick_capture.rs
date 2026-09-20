@@ -29,8 +29,7 @@ pub fn show_quick_capture(app: &tauri::AppHandle) {
             .min_inner_size(360.0, 240.0)
             .always_on_top(true)
             .skip_taskbar(true)
-            .center()
-            .disable_drag_drop_handler();
+            .center();
         #[cfg(target_os = "linux")]
         {
             builder = builder.decorations(false).transparent(true);

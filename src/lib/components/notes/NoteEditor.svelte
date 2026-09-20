@@ -19,9 +19,10 @@
   import WikiLinkPicker from './WikiLinkPicker.svelte';
   import { applyAction, shiftIndent, continueList, type EditAction, type EditResult } from '$lib/markdown-edit';
   import { wordCount } from '$lib/markdown';
+  import { localFilePaths } from '$lib/notes-files';
   import { t, locale } from '$lib/i18n';
   import { relTime } from '$lib/utils';
-  import { tick, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
 
   interface Props {
     allTags: NoteTag[];
@@ -241,27 +242,58 @@
     await loadAttachments();
   }
 
+  /** Copy local files (paste/drop of file references) into the note's attachments. */
+  async function uploadPaths(paths: string[]) {
+    if (!note || readonly) return;
+    for (const p of paths) {
+      try {
+        insertAttachmentLink(await api.notes.attachmentAddFromPath(note.id, p));
+      } catch (e) {
+        console.error('attachment copy failed', p, e);
+      }
+    }
+    await loadAttachments();
+  }
+
+  // Source-mode paste: image bytes upload; file references (Linux/macOS) copy by path
   function onPaste(e: ClipboardEvent) {
     const files = Array.from(e.clipboardData?.files ?? []);
-    if (files.length === 0) return;
-    e.preventDefault();
-    void uploadFiles(files);
+    if (files.length) { e.preventDefault(); void uploadFiles(files); return; }
+    const paths = localFilePaths(e.clipboardData);
+    if (paths.length) { e.preventDefault(); void uploadPaths(paths); }
   }
 
-  // Source-mode drop target; in rich mode the editor handles drops itself
-  function onDragOver(e: DragEvent) {
-    if (mode === 'rich' || readonly || !e.dataTransfer?.types.includes('Files')) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
+  // OS file drops arrive via Tauri's native drag-drop (dragDropEnabled), not the webview.
+  let panesEl: HTMLElement | null = $state(null);
+
+  function pointInEl(el: HTMLElement | null, x: number, y: number): boolean {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   }
 
-  function onDrop(e: DragEvent) {
-    if (mode === 'rich') return;
-    e.preventDefault();
-    if (readonly) return;
-    const files = Array.from(e.dataTransfer?.files ?? []);
-    if (files.length) void uploadFiles(files);
+  async function onOsDrop(paths: string[], physX: number, physY: number) {
+    if (!note || readonly || paths.length === 0) return;
+    const dpr = window.devicePixelRatio || 1;
+    const x = physX / dpr;
+    const y = physY / dpr;
+    if (!pointInEl(panesEl, x, y)) return;
+    if (mode === 'rich') richEditor?.caretAtCoords(x, y);
+    await uploadPaths(paths);
   }
+
+  onMount(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    void import('@tauri-apps/api/webview').then(({ getCurrentWebview }) =>
+      getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type !== 'drop') return;
+        void onOsDrop(event.payload.paths, event.payload.position.x, event.payload.position.y);
+      }),
+    ).then((un) => { if (disposed) un(); else unlisten = un; });
+    return () => { disposed = true; unlisten?.(); };
+  });
 
   // Resizable history panel
   function loadHistWidth(): number {
@@ -525,7 +557,7 @@
           onclose={() => { findOpen = false; textareaEl?.focus(); }}
         />
       {/if}
-      <div class="panes" ondragover={onDragOver} ondrop={onDrop}>
+      <div class="panes" bind:this={panesEl}>
         {#if mode === 'rich'}
           {#key note.id}
             <NoteRichEditor
@@ -540,6 +572,7 @@
               onchange={setContent}
               onwikilink={openWikiLink}
               onfiles={uploadFiles}
+              onpaths={uploadPaths}
               onhotkey={onRichHotkey}
             />
           {/key}

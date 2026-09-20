@@ -6,6 +6,7 @@
   import { Editor } from '@tiptap/core';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { api, downloadNoteAttachment } from '$lib/api';
+  import { localFilePaths } from '$lib/notes-files';
   import { noteExtensions } from '$lib/tiptap-ext';
   import type { EditAction } from '$lib/markdown-edit';
   import type { NoteListItem } from '$lib/types';
@@ -25,13 +26,15 @@
     onchange: (md: string) => void;
     onwikilink: (target: string) => void;
     onfiles: (files: File[]) => void;
+    /** Copy local files (from paste/drop of file references) into the note */
+    onpaths: (paths: string[]) => void;
     /** Hotkeys owned by the parent (save, find, link); return true when handled */
     onhotkey?: (e: KeyboardEvent) => boolean;
   }
 
   let {
     content, baseDir, noteId, readonly = false, placeholder = '', notes, excludeId = null,
-    onchange, onwikilink, onfiles, onhotkey,
+    onchange, onwikilink, onfiles, onpaths, onhotkey,
   }: Props = $props();
 
   let hostEl: HTMLElement | null = $state(null);
@@ -60,8 +63,7 @@
       editorProps: {
         attributes: { spellcheck: 'false' },
         handleKeyDown: (_view, e) => onKeydown(e),
-        handlePaste: (_view, e) => takeFiles(Array.from(e.clipboardData?.files ?? [])),
-        handleDrop: (_view, e) => takeFiles(Array.from(e.dataTransfer?.files ?? [])),
+        handlePaste: (_view, e) => takePayload(e.clipboardData),
         handleClick: (_view, _pos, e) => onClick(e),
       },
       onUpdate: ({ editor: ed }) => {
@@ -97,6 +99,16 @@
   function takeFiles(files: File[]): boolean {
     if (readonly || files.length === 0) return false;
     onfiles(files);
+    return true;
+  }
+
+  // Prefer real file bytes; fall back to local path references (Linux/macOS file paste).
+  function takePayload(dt: DataTransfer | null): boolean {
+    if (readonly) return false;
+    if (takeFiles(Array.from(dt?.files ?? []))) return true;
+    const paths = localFilePaths(dt);
+    if (paths.length === 0) return false;
+    onpaths(paths);
     return true;
   }
 
@@ -151,6 +163,17 @@
   export function insertMarkdown(md: string) {
     if (!editor || readonly) return;
     editor.chain().focus().insertContent(md, { contentType: 'markdown' }).run();
+  }
+
+  /** Move the caret to viewport coordinates (drop point). Returns false if outside the editor. */
+  export function caretAtCoords(x: number, y: number): boolean {
+    if (!editor) return false;
+    const rect = hostEl?.querySelector('.ProseMirror')?.getBoundingClientRect();
+    if (!rect || x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) return false;
+    const at = editor.view.posAtCoords({ left: x, top: y });
+    if (!at) return false;
+    editor.chain().focus().setTextSelection(at.pos).run();
+    return true;
   }
 
   /** Select the first occurrence of `query` (within one text node) and scroll to it. */

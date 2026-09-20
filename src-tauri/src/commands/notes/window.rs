@@ -55,8 +55,7 @@ pub(crate) async fn open_notes_window(
         let mut builder = WebviewWindowBuilder::new(&app2, NOTES_WINDOW_LABEL, WebviewUrl::App(url.into()))
             .title(title)
             .inner_size(960.0, 700.0)
-            .min_inner_size(640.0, 480.0)
-            .disable_drag_drop_handler();
+            .min_inner_size(640.0, 480.0);
 
         #[cfg(target_os = "linux")]
         {
