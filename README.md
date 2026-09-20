@@ -6,7 +6,7 @@ Veydan Browser is a desktop workspace for people who operate many accounts, prox
 
 Browser profiles are powered by [Camoufox](https://camoufox.com/) (a hardened, anti-fingerprinting Firefox fork): each profile is a fully separated identity — its own fingerprint, user agent, timezone, locale, WebRTC policy, geolocation, cookies and proxy — so accounts never cross-contaminate. That isolation is one feature of the toolkit, not the whole product.
 
-Built with **Tauri 2** (Rust) and **Svelte 5 / SvelteKit** (TypeScript). Lightweight, native, cross-platform, and stores everything locally in SQLite — no cloud, no telemetry.
+Built with **Tauri 2** (Rust) and **Svelte 5 / SvelteKit** (TypeScript). Lightweight, native, cross-platform, and **local-first**: data lives in SQLite on your machine, with no telemetry. Optional **own sync** (beta) can replicate a vault through *your* folder, S3 or WebDAV — everything is end-to-end encrypted; the storage never sees plaintext.
 
 ---
 
@@ -60,6 +60,16 @@ A full-featured Markdown note-taking system, not just a text box:
 - **Context bindings** — attach a note to a workspace or profile so relevant notes surface where you need them.
 - **Crash-safe drafts** — in-progress edits are auto-saved and can be recovered (or discarded) after an unexpected close.
 - **Configurable storage location** for the notes directory.
+
+### Sync (beta)
+This is **your own sync**, not a Veydan cloud. There is no vendor account and no hosted backend: you point the app at a folder your cloud client already mirrors (Seafile, Dropbox, …), an S3-compatible bucket you control (MinIO, R2, …), or a WebDAV share. The path may differ on each device — the vault is identified by its encrypted manifest, not by the folder path.
+
+**Everything is encrypted on the device before it leaves.** The storage is untrusted and only ever sees ciphertext: notes, attachments, workspaces, profiles, proxies, SSH, TOTP, settings, and optional browser-profile files. A passphrase (Argon2id) unlocks the vault; the same passphrase joins other devices. Leave vault forgets the key on this machine and deletes nothing.
+
+- **Off by default** — Settings → Sync. Create a vault in empty storage, or join one that is already there.
+- **What syncs** — workspaces, profile settings, proxies, SSH connections and keys, TOTP, notes with attachments, and a whitelist of user settings. Browser profile files (cookies, sessions, history) are a separate toggle.
+- **Conflicts** — notes use a three-way merge (markers in the file if both sides edited the same lines). Table rows use last-write-wins. A running profile takes a lease so two devices do not fork cookies; if files diverged, pick Take remote or Keep mine.
+- **Poll interval** — 1–86400 seconds. Sub-minute intervals are for testing; on S3/WebDAV they mean frequent requests. Unused encrypted blobs are removed once a day after a 24-hour grace period.
 
 ### 🔐 Built-in tools
 - **TOTP / 2FA generator** — store raw Base32 secrets or import `otpauth://` URIs; SHA-1/SHA-256/SHA-512 with configurable digits and period; secrets stay in the backend and are never sent to the UI.
@@ -124,6 +134,7 @@ src-tauri/              Rust / Tauri backend
   src/browser/          Camoufox launch & profile handling
   src/commands/         Tauri commands (profiles, proxies, ssh, ssh_keys, sftp, totp, notes…)
   src/proxy/            HTTP/SOCKS/SSH proxy logic & checks
+  src/sync/             Own E2E vault sync (folder / S3 / WebDAV)
   src/fingerprint.rs    Fingerprint presets
 ```
 
