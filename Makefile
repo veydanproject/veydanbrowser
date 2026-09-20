@@ -44,16 +44,29 @@ push:
 push-dev push-test push-beta:
 	@$(MAKE) _push-channel CHANNEL=$(patsubst push-%,%,$@) PLATFORMS="$(filter linux windows macos,$(MAKECMDGOALS))"
 
-# Channel snapshot: no VERSION bump. Tag vX.Y.Z-{channel}[-platform...].
+# Channel snapshot: no VERSION bump. Tag vX.Y.Z-{channel}[-platform...]-N
 _push-channel:
 	@if [ -z "$(CHANNEL)" ]; then echo ">> CHANNEL is required"; exit 1; fi
 	@VERSION=$$(cat VERSION); \
-	TAG="v$$VERSION-$(CHANNEL)"; \
-	for p in $(PLATFORMS); do TAG="$$TAG-$$p"; done; \
-	if git rev-parse "$$TAG" >/dev/null 2>&1; then \
-		echo ">> Tag $$TAG already exists"; \
-		exit 1; \
-	fi; \
+	PREFIX="v$$VERSION-$(CHANNEL)"; \
+	for p in $(PLATFORMS); do PREFIX="$$PREFIX-$$p"; done; \
+	MAX=0; \
+	for t in $$(git tag -l "$$PREFIX-*"); do \
+		n=$${t#$$PREFIX-}; \
+		case "$$n" in \
+			''|*[!0-9]*) ;; \
+			*) if [ "$$n" -gt "$$MAX" ]; then MAX=$$n; fi ;; \
+		esac; \
+	done; \
+	REMOTE=$$(git ls-remote --tags origin "refs/tags/$${PREFIX}-*" 2>/dev/null | cut -f2 | sed -e 's#^refs/tags/##' -e 's#\^{}$$##'); \
+	for t in $$REMOTE; do \
+		n=$${t#$$PREFIX-}; \
+		case "$$n" in \
+			''|*[!0-9]*) ;; \
+			*) if [ "$$n" -gt "$$MAX" ]; then MAX=$$n; fi ;; \
+		esac; \
+	done; \
+	TAG="$$PREFIX-$$((MAX + 1))"; \
 	if [ -n "$$(git status --porcelain)" ]; then \
 		MSG="$(MSG)"; \
 		COMMIT_MSG=$${MSG:-"$(CHANNEL) snapshot $$VERSION"}; \

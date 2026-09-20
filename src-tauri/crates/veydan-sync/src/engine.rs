@@ -1,0 +1,289 @@
+// SPDX-FileCopyrightText: 2026 Veydan Project
+// SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
+
+//! Vault engine: create/open, push own ops, pull peers' ops, blobs, compaction.
+
+use crate::envelope::{self, Kind};
+use crate::keys::{Keys, Manifest, Vmk, MANIFEST_KEY};
+use crate::log::{
+    blob_key, chunk_ident, chunk_key, device_from_key, fold_latest, seq_from_key, snapshot_ident, snapshot_key,
+    Chunk, LocalState, Op, PeerHead, Snapshot,
+};
+use crate::storage::{is_noise_key, Storage};
+use crate::{sha256_hex, Result, SyncError};
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::Sha256;
+use std::collections::BTreeSet;
+
+/// What a storage location contains before we touch it.
+#[derive(Debug)]
+pub enum Probe {
+    Empty,
+    Vault(Manifest),
+    Foreign,
+}
+
+/// Ops from peers plus per-peer failures that did not stop the others.
+#[derive(Debug, Default)]
+pub struct PullResult {
+    pub ops: Vec<Op>,
+    pub errors: Vec<(String, String)>,
+}
+
+pub struct Engine {
+    storage: Box<dyn Storage>,
+    vault_id: String,
+    device_id: String,
+    keys: Keys,
+}
+
+impl Engine {
+    pub async fn probe(storage: &dyn Storage) -> Result<Probe> {
+        if let Some(bytes) = storage.get(MANIFEST_KEY).await? {
+            return Ok(Probe::Vault(Manifest::from_json(&bytes)?));
+        }
+        let keys = storage.list("").await?;
+        if keys.iter().any(|k| !is_noise_key(k)) {
+            return Ok(Probe::Foreign);
+        }
+        Ok(Probe::Empty)
+    }
+
+    /// New vault in an empty storage.
+    pub async fn create(storage: Box<dyn Storage>, passphrase: &str, device_id: &str) -> Result<(Engine, Vmk)> {
+        match Self::probe(storage.as_ref()).await? {
+            Probe::Empty => {}
+            Probe::Vault(_) => return Err(SyncError::VaultExists),
+            Probe::Foreign => return Err(SyncError::ForeignStorage),
+        }
+        let (manifest, vmk) = Manifest::create(passphrase)?;
+        storage.put(MANIFEST_KEY, &manifest.to_json()?).await?;
+        let engine = Self::with_key(storage, &vmk, &manifest.vault_id, device_id);
+        Ok((engine, vmk))
+    }
+
+    /// Join an existing vault with its passphrase.
+    pub async fn open(storage: Box<dyn Storage>, passphrase: &str, device_id: &str) -> Result<(Engine, Vmk)> {
+        let manifest = match Self::probe(storage.as_ref()).await? {
+            Probe::Vault(m) => m,
+            Probe::Empty => return Err(SyncError::NoVault),
+            Probe::Foreign => return Err(SyncError::ForeignStorage),
+        };
+        let vmk = manifest.unlock(passphrase)?;
+        let engine = Self::with_key(storage, &vmk, &manifest.vault_id, device_id);
+        Ok((engine, vmk))
+    }
+
+    /// Reopen with a stored master key; `vault_id` is what the device joined.
+    pub fn with_key(storage: Box<dyn Storage>, vmk: &Vmk, vault_id: &str, device_id: &str) -> Engine {
+        Engine {
+            storage,
+            vault_id: vault_id.to_string(),
+            device_id: device_id.to_string(),
+            keys: Keys::derive(vmk, vault_id),
+        }
+    }
+
+    /// Guard against pointing a joined device at a different vault.
+    pub async fn verify_manifest(&self) -> Result<()> {
+        match Self::probe(self.storage.as_ref()).await? {
+            Probe::Vault(m) if m.vault_id == self.vault_id => Ok(()),
+            Probe::Vault(_) => Err(SyncError::VaultMismatch),
+            Probe::Empty => Err(SyncError::NoVault),
+            Probe::Foreign => Err(SyncError::ForeignStorage),
+        }
+    }
+
+    pub async fn change_passphrase(&self, vmk: &Vmk, old: &str, new: &str) -> Result<()> {
+        let bytes = self.storage.get(MANIFEST_KEY).await?.ok_or(SyncError::NoVault)?;
+        let mut manifest = Manifest::from_json(&bytes)?;
+        if manifest.vault_id != self.vault_id {
+            return Err(SyncError::VaultMismatch);
+        }
+        manifest.unlock(old)?;
+        manifest.rewrap(vmk, new)?;
+        self.storage.put(MANIFEST_KEY, &manifest.to_json()?).await
+    }
+
+    pub fn vault_id(&self) -> &str {
+        &self.vault_id
+    }
+
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    // ── Own log ──────────────────────────────────────────────────────────────
+
+    /// Append one chunk with `ops` to this device's log.
+    pub async fn push(&self, state: &mut LocalState, ops: Vec<Op>) -> Result<()> {
+        if ops.is_empty() {
+            return Ok(());
+        }
+        let seq = state.own_seq + 1;
+        let chunk = Chunk { prev_hash: state.own_head_hash.clone(), seq, ops };
+        let bytes = envelope::seal(
+            &self.keys.log,
+            &self.vault_id,
+            Kind::Chunk,
+            &chunk_ident(&self.device_id, seq),
+            &serde_json::to_vec(&chunk)?,
+        )?;
+        self.storage.put(&chunk_key(&self.device_id, seq), &bytes).await?;
+        state.own_seq = seq;
+        state.own_head_hash = sha256_hex(&bytes);
+        Ok(())
+    }
+
+    pub async fn own_chunk_count(&self) -> Result<usize> {
+        Ok(self.storage.list(&format!("devices/{}/log/", self.device_id)).await?.len())
+    }
+
+    /// Fold own log into a snapshot and drop the chunks it covers.
+    /// Tombstones older than `tombstone_ttl_ms` (by HLC wall time) are dropped.
+    pub async fn compact(&self, state: &LocalState, now_ms: u64, tombstone_ttl_ms: u64) -> Result<()> {
+        if state.own_seq == 0 {
+            return Ok(());
+        }
+        let mut ops: Vec<Op> = Vec::new();
+        if let Some(snap) = self.read_snapshot(&self.device_id).await? {
+            ops.extend(snap.ops);
+        }
+        let keys = self.storage.list(&format!("devices/{}/log/", self.device_id)).await?;
+        let mut seqs: Vec<u64> = keys.iter().filter_map(|k| seq_from_key(k)).collect();
+        seqs.sort_unstable();
+        for seq in &seqs {
+            if *seq > state.own_seq {
+                continue;
+            }
+            let Some(bytes) = self.storage.get(&chunk_key(&self.device_id, *seq)).await? else { continue };
+            let chunk = self.open_chunk(&self.device_id, *seq, &bytes)?;
+            ops.extend(chunk.ops);
+        }
+        let mut latest = fold_latest(ops);
+        latest.retain(|op| !(op.deleted && op.hlc.wall_ms.saturating_add(tombstone_ttl_ms) < now_ms));
+
+        let snap = Snapshot { up_to_seq: state.own_seq, head_hash: state.own_head_hash.clone(), ops: latest };
+        let bytes = envelope::seal(
+            &self.keys.log,
+            &self.vault_id,
+            Kind::Snapshot,
+            &snapshot_ident(&self.device_id),
+            &serde_json::to_vec(&snap)?,
+        )?;
+        self.storage.put(&snapshot_key(&self.device_id), &bytes).await?;
+        for seq in seqs {
+            if seq <= state.own_seq {
+                self.storage.delete(&chunk_key(&self.device_id, seq)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    // ── Peers ────────────────────────────────────────────────────────────────
+
+    /// Read every peer's log past the remembered head. Verifies the hash chain;
+    /// a peer whose chain breaks is reported in `errors` and its head is left as is.
+    pub async fn pull(&self, state: &mut LocalState) -> Result<PullResult> {
+        let mut result = PullResult::default();
+        let all = self.storage.list("devices/").await?;
+        let peers: BTreeSet<String> = all
+            .iter()
+            .filter_map(|k| device_from_key(k))
+            .filter(|d| *d != self.device_id)
+            .map(str::to_string)
+            .collect();
+
+        for peer in peers {
+            let mut head = state.peers.get(&peer).cloned().unwrap_or_default();
+            match self.pull_peer(&peer, &mut head, &all).await {
+                Ok(ops) => {
+                    result.ops.extend(ops);
+                    state.peers.insert(peer, head);
+                }
+                Err(e) => result.errors.push((peer, e.to_string())),
+            }
+        }
+        result.ops.sort_by(|a, b| a.hlc.cmp(&b.hlc));
+        Ok(result)
+    }
+
+    async fn pull_peer(&self, peer: &str, head: &mut PeerHead, all_keys: &[String]) -> Result<Vec<Op>> {
+        let log_prefix = format!("devices/{peer}/log/");
+        let mut seqs: Vec<u64> = all_keys.iter().filter(|k| k.starts_with(&log_prefix)).filter_map(|k| seq_from_key(k)).collect();
+        seqs.sort_unstable();
+        let mut ops = Vec::new();
+
+        // No chunk continues our head: either nothing new, or the peer compacted
+        // and the snapshot now carries what we miss.
+        let first_available = seqs.iter().copied().find(|s| *s > head.seq);
+        if first_available != Some(head.seq + 1) {
+            if let Some(snap) = self.read_snapshot(peer).await? {
+                if snap.up_to_seq < head.seq {
+                    return Err(SyncError::Integrity(format!("snapshot older than known head ({} < {})", snap.up_to_seq, head.seq)));
+                }
+                if snap.up_to_seq == head.seq && !head.hash.is_empty() && snap.head_hash != head.hash {
+                    return Err(SyncError::Integrity("snapshot head does not match known head".into()));
+                }
+                if snap.up_to_seq > head.seq {
+                    ops.extend(snap.ops);
+                    *head = PeerHead { seq: snap.up_to_seq, hash: snap.head_hash };
+                }
+            }
+        }
+
+        let mut next = head.seq + 1;
+        while seqs.binary_search(&next).is_ok() {
+            let key = chunk_key(peer, next);
+            // Listed but not readable yet: the cloud client is still delivering it.
+            let Some(bytes) = self.storage.get(&key).await? else { break };
+            let chunk = match self.open_chunk(peer, next, &bytes) {
+                Ok(c) => c,
+                Err(SyncError::Format(_)) => break,
+                Err(e) => return Err(e),
+            };
+            if chunk.seq != next {
+                return Err(SyncError::Integrity(format!("chunk {next} carries seq {}", chunk.seq)));
+            }
+            if chunk.prev_hash != head.hash {
+                return Err(SyncError::Integrity(format!("chain break at {peer}/{next}")));
+            }
+            ops.extend(chunk.ops);
+            *head = PeerHead { seq: next, hash: sha256_hex(&bytes) };
+            next += 1;
+        }
+        Ok(ops)
+    }
+
+    fn open_chunk(&self, device: &str, seq: u64, bytes: &[u8]) -> Result<Chunk> {
+        let pt = envelope::open(&self.keys.log, &self.vault_id, Kind::Chunk, &chunk_ident(device, seq), bytes)?;
+        Ok(serde_json::from_slice(&pt)?)
+    }
+
+    async fn read_snapshot(&self, device: &str) -> Result<Option<Snapshot>> {
+        let Some(bytes) = self.storage.get(&snapshot_key(device)).await? else { return Ok(None) };
+        let pt = envelope::open(&self.keys.log, &self.vault_id, Kind::Snapshot, &snapshot_ident(device), &bytes)?;
+        Ok(Some(serde_json::from_slice(&pt)?))
+    }
+
+    // ── Blobs ────────────────────────────────────────────────────────────────
+
+    /// Content-addressed name: keyed HMAC so the storage cannot correlate plaintext hashes.
+    pub fn blob_name(&self, data: &[u8]) -> String {
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&self.keys.id).expect("any key length is valid");
+        mac.update(data);
+        hex::encode(&mac.finalize().into_bytes()[..])
+    }
+
+    pub async fn put_blob(&self, data: &[u8]) -> Result<String> {
+        let name = self.blob_name(data);
+        let bytes = envelope::seal(&self.keys.blob, &self.vault_id, Kind::Blob, &name, data)?;
+        self.storage.put(&blob_key(&name), &bytes).await?;
+        Ok(name)
+    }
+
+    pub async fn get_blob(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        let Some(bytes) = self.storage.get(&blob_key(name)).await? else { return Ok(None) };
+        Ok(Some(envelope::open(&self.keys.blob, &self.vault_id, Kind::Blob, name, &bytes)?))
+    }
+}

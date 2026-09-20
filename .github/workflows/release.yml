@@ -2,7 +2,7 @@ name: Release
 
 # Triggered by `make push` (vX.Y.Z, stable, all platforms) or
 # `make push-dev|test|beta [linux] [windows] [macos]`
-# (vX.Y.Z-{channel}[-platform...], prerelease).
+# (vX.Y.Z-{channel}[-platform...]-N, prerelease).
 # Channel releases stay prerelease so they never become GitHub /releases/latest.
 
 on:
@@ -32,7 +32,7 @@ jobs:
             CHANNEL="stable"
             PRERELEASE="false"
             PLATFORMS="linux windows macos"
-          elif [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-(dev|test|beta)((-(linux|windows|macos))*)$ ]]; then
+          elif [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-(dev|test|beta)((-(linux|windows|macos))*)-([0-9]+)$ ]]; then
             VERSION="${BASH_REMATCH[1]}"
             CHANNEL="${BASH_REMATCH[2]}"
             PRERELEASE="true"
@@ -44,7 +44,7 @@ jobs:
               PLATFORMS="$(echo $PLATFORMS)"
             fi
           else
-            echo "::error::Tag $TAG does not match vX.Y.Z or vX.Y.Z-(dev|test|beta)[-linux|-windows|-macos...]"
+            echo "::error::Tag $TAG does not match vX.Y.Z or vX.Y.Z-(dev|test|beta)[-linux|-windows|-macos...]-N"
             exit 1
           fi
 

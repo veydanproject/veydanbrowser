@@ -10,6 +10,7 @@ pub mod error;
 mod fingerprint;
 mod models;
 mod proxy;
+mod sync;
 mod tray;
 
 use browser::launch::BrowserState;
@@ -68,6 +69,10 @@ use commands::ssh_keys::{
 };
 use commands::workspaces::*;
 use sqlx::{Pool, Sqlite};
+use sync::{
+    start_sync_scheduler, sync_change_passphrase, sync_create_vault, sync_get_config, sync_join_vault, sync_leave,
+    sync_probe, sync_run_now, sync_set_config, sync_status, SyncManager,
+};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -100,6 +105,7 @@ pub struct AppState {
     /// Notes dir watcher; dropped before a backup restore releases its handle.
     pub notes_watcher: Arc<Mutex<Option<notify::RecommendedWatcher>>>,
     pub notes_lock: commands::notes::NotesLock,
+    pub sync: Arc<SyncManager>,
 }
 
 /// Read a boolean flag from `app_settings` (stored as "1"/"0"), defaulting to
@@ -235,6 +241,7 @@ pub fn run() {
                 tray: Arc::new(Mutex::new(None)),
                 notes_watcher: Arc::new(Mutex::new(None)),
                 notes_lock: commands::notes::NotesLock::default(),
+                sync: Arc::new(SyncManager::default()),
             });
             commands::notes::start_auto_lock(app.handle().clone());
 
@@ -263,6 +270,9 @@ pub fn run() {
 
             // Scheduled backups: ticks every 60s, catches up missed runs on start.
             start_backup_scheduler(app.handle().clone());
+
+            // Sync (beta): idle until enabled and a vault is joined.
+            start_sync_scheduler(app.handle().clone());
 
             // ── System tray ──
             let want_tray = tray_settings.minimize_to_tray.load(Ordering::Relaxed)
@@ -331,6 +341,16 @@ pub fn run() {
             backup_list,
             backup_run_now,
             backup_restore,
+            // Sync (beta)
+            sync_get_config,
+            sync_set_config,
+            sync_probe,
+            sync_create_vault,
+            sync_join_vault,
+            sync_leave,
+            sync_change_passphrase,
+            sync_status,
+            sync_run_now,
             // Profiles
             profiles_list,
             profile_get,

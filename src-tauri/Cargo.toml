@@ -60,6 +60,8 @@ zstd = "0.13"
 tar = "0.4"
 age = { version = "0.11", default-features = false }
 argon2 = "0.6.0-rc.8"
+# E2E-encrypted sync core (folder / S3 / WebDAV); Tauri-free so mobile can reuse it.
+veydan-sync = { path = "crates/veydan-sync" }
 
 # Linux-only: native GTK signal for reliable minimize-to-tray detection
 # (Tauri's WindowEvent::Resized / is_minimized() are unreliable on GTK/Wayland).

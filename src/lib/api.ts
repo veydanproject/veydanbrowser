@@ -386,6 +386,19 @@ export const api = {
       call<void>('backup_restore', { path, password }),
   },
 
+  sync: {
+    getConfig: () => call<SyncConfig>('sync_get_config'),
+    setConfig: (cfg: SyncConfig) => call<void>('sync_set_config', { cfg }),
+    probe: () => call<'empty' | 'vault' | 'foreign'>('sync_probe'),
+    createVault: (passphrase: string) => call<SyncStatus>('sync_create_vault', { passphrase }),
+    joinVault: (passphrase: string) => call<SyncStatus>('sync_join_vault', { passphrase }),
+    leave: () => call<SyncStatus>('sync_leave'),
+    changePassphrase: (old: string, newPassphrase: string) =>
+      call<void>('sync_change_passphrase', { old, new: newPassphrase }),
+    status: () => call<SyncStatus>('sync_status'),
+    runNow: () => call<SyncStatus>('sync_run_now'),
+  },
+
   settings: {
     getTray: () => call<TraySettings>('tray_settings_get'),
     setTray: (s: TraySettings) =>
@@ -431,6 +444,35 @@ export interface BackupFileInfo {
   path: string;
   size: number;
   modified: string;
+}
+
+export interface SyncConfig {
+  enabled: boolean;
+  backend: 'folder' | 's3' | 'webdav' | string;
+  folder_path: string;
+  s3: {
+    endpoint: string;
+    region: string;
+    bucket: string;
+    prefix: string;
+    access_key: string;
+    secret_key: string;
+    path_style: boolean;
+  };
+  webdav: { url: string; username: string; password: string };
+  interval_sec: number;
+}
+
+export interface SyncStatus {
+  enabled: boolean;
+  joined: boolean;
+  running: boolean;
+  vault_id: string | null;
+  device_id: string;
+  peers: number;
+  last_run: string | null;
+  last_error: string | null;
+  conflicts: { note_id: string; title: string }[];
 }
 
 export interface TrayLabels {

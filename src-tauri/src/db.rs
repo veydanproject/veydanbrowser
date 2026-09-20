@@ -458,6 +458,33 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     )
     .await?;
 
+    // ── Sync Layer (additive; unused while sync is disabled) ─────────────────
+    // Last verified position in each peer device's log.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_peers (
+            device_id TEXT PRIMARY KEY NOT NULL,
+            seq       INTEGER NOT NULL DEFAULT 0,
+            head_hash TEXT NOT NULL DEFAULT ''
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Per-note sync position: which vault version the local file corresponds to.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_note_state (
+            note_id      TEXT PRIMARY KEY NOT NULL,
+            head_blob    TEXT NOT NULL DEFAULT '',
+            head_parents TEXT NOT NULL DEFAULT '[]',
+            head_hlc     TEXT NOT NULL DEFAULT '',
+            synced_hash  TEXT NOT NULL DEFAULT '',
+            deleted      INTEGER NOT NULL DEFAULT 0,
+            conflict     INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Reset stale running status on startup — no browsers are actually running yet
     sqlx::query("UPDATE profiles SET status = 'stopped' WHERE status = 'running'")
         .execute(pool)

@@ -69,3 +69,9 @@ pub use smart_views::{
 pub use tags::{note_tag_create, note_tag_delete, note_tag_list, note_tag_update};
 pub use transfer::{note_export, note_import};
 pub use window::note_open_window;
+
+// Internals the sync module builds on (file format, index, tag links).
+pub(crate) use files::{effective_docs_dir, parse_note_file, resolve_note_abs_path, write_note_file};
+pub(crate) use index::sync_notes_index;
+pub(crate) use models::NoteRow;
+pub(crate) use tags::set_note_tag_links;

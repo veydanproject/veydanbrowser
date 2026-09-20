@@ -1,0 +1,221 @@
+// SPDX-FileCopyrightText: 2026 Veydan Project
+// SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
+
+//! WebDAV adapter (Nextcloud, Yandex Disk, generic servers) with basic auth.
+
+use crate::storage::{is_noise_key, Storage};
+use crate::{Result, SyncError};
+use async_trait::async_trait;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use reqwest::{Client, Method, StatusCode};
+use std::collections::HashSet;
+use std::sync::Mutex;
+use url::Url;
+
+/// Characters that must be escaped inside a path segment.
+const SEGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>').add(b'?').add(b'`').add(b'{').add(b'}').add(b'%');
+
+#[derive(Clone, Debug)]
+pub struct WebDavConfig {
+    /// Collection URL that becomes the vault root, e.g. `https://webdav.yandex.ru/veydan`.
+    pub url: String,
+    pub username: String,
+    pub password: String,
+}
+
+pub struct WebDavStorage {
+    cfg: WebDavConfig,
+    client: Client,
+    base: Url,
+    /// Collections known to exist; avoids a MKCOL storm on every put.
+    known_dirs: Mutex<HashSet<String>>,
+}
+
+const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>"#;
+
+impl WebDavStorage {
+    pub fn new(cfg: WebDavConfig) -> Result<Self> {
+        let mut base = Url::parse(&cfg.url).map_err(|e| SyncError::Storage(e.to_string()))?;
+        if !base.path().ends_with('/') {
+            let p = format!("{}/", base.path());
+            base.set_path(&p);
+        }
+        Ok(Self { cfg, client: Client::new(), base, known_dirs: Mutex::new(HashSet::new()) })
+    }
+
+    fn url_for(&self, key: &str) -> Url {
+        let mut url = self.base.clone();
+        let encoded: Vec<String> = key.split('/').filter(|s| !s.is_empty()).map(|s| utf8_percent_encode(s, SEGMENT).to_string()).collect();
+        let path = format!("{}{}", self.base.path(), encoded.join("/"));
+        url.set_path(&path);
+        url
+    }
+
+    fn req(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
+        let b = self.client.request(method, url);
+        if self.cfg.username.is_empty() { b } else { b.basic_auth(&self.cfg.username, Some(&self.cfg.password)) }
+    }
+
+    async fn fail(resp: reqwest::Response, what: &str) -> SyncError {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        SyncError::Storage(format!("webdav {what}: {status} {}", text.chars().take(300).collect::<String>()))
+    }
+
+    async fn ensure_dir(&self, dir: &str) -> Result<()> {
+        if dir.is_empty() || self.known_dirs.lock().map(|k| k.contains(dir)).unwrap_or(false) {
+            return Ok(());
+        }
+        if let Some((parent, _)) = dir.rsplit_once('/') {
+            Box::pin(self.ensure_dir(parent)).await?;
+        }
+        let mut url = self.url_for(dir);
+        let p = format!("{}/", url.path());
+        url.set_path(&p);
+        let resp = self.req(Method::from_bytes(b"MKCOL").expect("valid method"), url).send().await?;
+        // 405 = already exists; 301/302 some servers use for existing collections.
+        match resp.status() {
+            s if s.is_success() => {}
+            StatusCode::METHOD_NOT_ALLOWED | StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND => {}
+            _ => return Err(Self::fail(resp, "mkcol").await),
+        }
+        if let Ok(mut k) = self.known_dirs.lock() {
+            k.insert(dir.to_string());
+        }
+        Ok(())
+    }
+
+    /// One PROPFIND with Depth 1: (relative key, is_collection) for each child.
+    async fn list_dir(&self, dir: &str) -> Result<Option<Vec<(String, bool)>>> {
+        let mut url = self.url_for(dir);
+        if !dir.is_empty() {
+            let p = format!("{}/", url.path());
+            url.set_path(&p);
+        }
+        let resp = self
+            .req(Method::from_bytes(b"PROPFIND").expect("valid method"), url)
+            .header("Depth", "1")
+            .header("Content-Type", "application/xml")
+            .body(PROPFIND_BODY)
+            .send()
+            .await?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(Self::fail(resp, "propfind").await);
+        }
+        let body = resp.bytes().await?;
+        let base_path = self.base.path().to_string();
+        let self_path = format!("{}{}", base_path, if dir.is_empty() { String::new() } else { format!("{dir}/") });
+
+        let mut out = Vec::new();
+        for (href, is_dir) in parse_multistatus(&body)? {
+            let decoded = percent_decode_str(&href).decode_utf8_lossy().to_string();
+            // href may be absolute URL or absolute path
+            let path = Url::parse(&decoded).map(|u| u.path().to_string()).unwrap_or(decoded);
+            let path_norm = path.trim_end_matches('/');
+            if path_norm == self_path.trim_end_matches('/') {
+                continue;
+            }
+            let Some(rel) = path_norm.strip_prefix(&base_path) else { continue };
+            let rel = rel.trim_matches('/').to_string();
+            if rel.is_empty() || is_noise_key(&rel) {
+                continue;
+            }
+            out.push((rel, is_dir));
+        }
+        Ok(Some(out))
+    }
+}
+
+/// (href, is_collection) for each `<response>` in a multistatus body.
+fn parse_multistatus(xml: &[u8]) -> Result<Vec<(String, bool)>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut out = Vec::new();
+    let mut href = String::new();
+    let mut is_dir = false;
+    let mut in_href = false;
+    loop {
+        match reader.read_event().map_err(|e| SyncError::Format(e.to_string()))? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"response" => {
+                    href.clear();
+                    is_dir = false;
+                }
+                b"href" => in_href = true,
+                b"collection" => is_dir = true,
+                _ => {}
+            },
+            Event::Empty(e) => {
+                if e.local_name().as_ref() == b"collection" {
+                    is_dir = true;
+                }
+            }
+            Event::Text(t) if in_href => {
+                href = t.xml_content().map_err(|e| SyncError::Format(e.to_string()))?.trim().to_string();
+            }
+            Event::End(e) => match e.local_name().as_ref() {
+                b"href" => in_href = false,
+                b"response" => out.push((href.clone(), is_dir)),
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+#[async_trait]
+impl Storage for WebDavStorage {
+    async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        // Prefixes are directory-like in this crate; walk from the deepest full directory.
+        let start_dir = match prefix.rsplit_once('/') {
+            Some((dir, _)) => dir.to_string(),
+            None => String::new(),
+        };
+        let mut out = Vec::new();
+        let mut stack = vec![start_dir];
+        while let Some(dir) = stack.pop() {
+            let Some(children) = self.list_dir(&dir).await? else { continue };
+            for (rel, is_dir) in children {
+                if is_dir {
+                    stack.push(rel);
+                } else if rel.starts_with(prefix) {
+                    out.push(rel);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let resp = self.req(Method::GET, self.url_for(key)).send().await?;
+        match resp.status() {
+            StatusCode::NOT_FOUND => Ok(None),
+            s if s.is_success() => Ok(Some(resp.bytes().await?.to_vec())),
+            _ => Err(Self::fail(resp, "get").await),
+        }
+    }
+
+    async fn put(&self, key: &str, data: &[u8]) -> Result<()> {
+        if let Some((dir, _)) = key.rsplit_once('/') {
+            self.ensure_dir(dir).await?;
+        }
+        let resp = self.req(Method::PUT, self.url_for(key)).body(data.to_vec()).send().await?;
+        if resp.status().is_success() { Ok(()) } else { Err(Self::fail(resp, "put").await) }
+    }
+
+    async fn delete(&self, key: &str) -> Result<()> {
+        let resp = self.req(Method::DELETE, self.url_for(key)).send().await?;
+        match resp.status() {
+            StatusCode::NOT_FOUND => Ok(()),
+            s if s.is_success() => Ok(()),
+            _ => Err(Self::fail(resp, "delete").await),
+        }
+    }
+}

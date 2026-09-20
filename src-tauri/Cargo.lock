@@ -1038,6 +1038,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
 dependencies = [
  "generic-array 0.14.7",
+ "rand_core 0.6.4",
  "typenum",
 ]
 
@@ -7152,8 +7153,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "veydan-sync"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "async-trait",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "chrono",
+ "hex",
+ "hkdf 0.13.0",
+ "hmac 0.13.0",
+ "percent-encoding",
+ "quick-xml 0.39.4",
+ "rand 0.10.2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "url",
+ "zstd",
+]
+
+[[package]]
 name = "veydanbrowser"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "age",
  "anyhow",
@@ -7191,6 +7216,7 @@ dependencies = [
  "tokio-util",
  "totp-rs",
  "uuid",
+ "veydan-sync",
  "which",
  "zip 8.6.0",
  "zstd",

@@ -25,6 +25,7 @@
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import NoteCaptureRules from '$lib/components/notes/NoteCaptureRules.svelte';
   import NoteLockSettings from '$lib/components/notes/NoteLockSettings.svelte';
+  import SyncSettings from '$lib/components/SyncSettings.svelte';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -870,6 +871,13 @@
         </span>
       </div>
     </div>
+  </div>
+
+  <!-- Sync (beta) -->
+  <div class="card">
+    <div class="card-title">{$t('settings_sync_section')} <span class="badge badge-warn">{$t('settings_sync_beta')}</span></div>
+    <p class="muted">{$t('settings_sync_hint')}</p>
+    <SyncSettings />
   </div>
 
   <!-- App updates -->
