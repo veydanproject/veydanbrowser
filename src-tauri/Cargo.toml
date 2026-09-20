@@ -32,6 +32,8 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
 zip = "8"
 lz4_flex = "0.13"
+# File list from the OS clipboard (webviews hide pasted file paths from JS)
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 futures-util = "0.3"
 # Capped at 0.39 (libsqlite3-sys 0.37): rusqlite 0.40 needs libsqlite3-sys
 # 0.38, which conflicts with sqlx-sqlite 0.9's `libsqlite3-sys <0.38` on the

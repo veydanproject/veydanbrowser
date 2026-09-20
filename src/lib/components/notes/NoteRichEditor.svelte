@@ -6,7 +6,7 @@
   import { Editor } from '@tiptap/core';
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { api, downloadNoteAttachment } from '$lib/api';
-  import { localFilePaths } from '$lib/notes-files';
+  import { pasteHasHiddenFiles } from '$lib/notes-files';
   import { noteExtensions } from '$lib/tiptap-ext';
   import type { EditAction } from '$lib/markdown-edit';
   import type { NoteListItem } from '$lib/types';
@@ -26,15 +26,15 @@
     onchange: (md: string) => void;
     onwikilink: (target: string) => void;
     onfiles: (files: File[]) => void;
-    /** Copy local files (from paste/drop of file references) into the note */
-    onpaths: (paths: string[]) => void;
+    /** Pasted files the webview hides from JS; parent reads them from the OS clipboard */
+    onclipboardfiles: () => void;
     /** Hotkeys owned by the parent (save, find, link); return true when handled */
     onhotkey?: (e: KeyboardEvent) => boolean;
   }
 
   let {
     content, baseDir, noteId, readonly = false, placeholder = '', notes, excludeId = null,
-    onchange, onwikilink, onfiles, onpaths, onhotkey,
+    onchange, onwikilink, onfiles, onclipboardfiles, onhotkey,
   }: Props = $props();
 
   let hostEl: HTMLElement | null = $state(null);
@@ -102,13 +102,12 @@
     return true;
   }
 
-  // Prefer real file bytes; fall back to local path references (Linux/macOS file paste).
+  // Prefer real file bytes; otherwise let the parent read hidden file paths from the OS clipboard.
   function takePayload(dt: DataTransfer | null): boolean {
     if (readonly) return false;
     if (takeFiles(Array.from(dt?.files ?? []))) return true;
-    const paths = localFilePaths(dt);
-    if (paths.length === 0) return false;
-    onpaths(paths);
+    if (!pasteHasHiddenFiles(dt)) return false;
+    onclipboardfiles();
     return true;
   }
 

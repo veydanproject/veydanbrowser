@@ -37,7 +37,7 @@ use commands::notes::{
     note_history_restore, note_history_merge,
     note_attachment_add, note_attachment_add_from_path, note_attachment_list,
     note_attachment_delete, note_attachment_open, note_attachment_save, note_attachments_gc,
-    note_export, note_import,
+    clipboard_file_paths, note_export, note_import,
 };
 use commands::password::{
     pwgen_history_add, pwgen_history_clear, pwgen_history_list, pwgen_history_trim,
@@ -456,6 +456,7 @@ pub fn run() {
             note_attachment_open,
             note_attachment_save,
             note_attachments_gc,
+            clipboard_file_paths,
             note_export,
             note_import,
             // SSH

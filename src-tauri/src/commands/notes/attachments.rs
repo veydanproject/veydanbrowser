@@ -184,6 +184,23 @@ pub async fn note_attachment_add(
     store_attachment(&note_file, &note_id, &file_name, data)
 }
 
+/// Local file paths currently held by the OS clipboard (files copied in a file manager).
+#[tauri::command]
+pub async fn clipboard_file_paths() -> CmdResult<Vec<String>> {
+    let paths = tokio::task::spawn_blocking(|| {
+        let mut cb = arboard::Clipboard::new().map_err(AppError::io)?;
+        Ok::<_, AppError>(cb.get().file_list().unwrap_or_default())
+    })
+    .await
+    .map_err(AppError::io)??;
+    // uri-list entries are CRLF-terminated; arboard leaves the '\r' on the path
+    Ok(paths
+        .into_iter()
+        .map(|p| p.to_string_lossy().trim().to_owned())
+        .filter(|p| !p.is_empty())
+        .collect())
+}
+
 /// Copy an existing file (e.g. from OS drag-and-drop) into the note's attachments.
 #[tauri::command]
 pub async fn note_attachment_add_from_path(

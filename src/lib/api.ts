@@ -280,6 +280,7 @@ export const api = {
     },
     attachmentAddFromPath: (noteId: string, srcPath: string) =>
       call<NoteAttachment>('note_attachment_add_from_path', { noteId, srcPath }),
+    clipboardFilePaths: () => call<string[]>('clipboard_file_paths'),
     attachmentList: (noteId: string) => call<NoteAttachment[]>('note_attachment_list', { noteId }),
     attachmentDelete: (noteId: string, name: string) => call<void>('note_attachment_delete', { noteId, name }),
     attachmentOpen: (noteId: string, name: string) => call<void>('note_attachment_open', { noteId, name }),

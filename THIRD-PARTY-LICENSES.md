@@ -9,9 +9,9 @@ VeydanBrowser, together with its license. It is provided to satisfy the
 attribution requirements of the MIT, Apache-2.0, BSD, ISC, MPL-2.0 and other
 licenses under which these components are distributed.
 
-- **Rust / Cargo crates:** 646
+- **Rust / Cargo crates:** 667
 - **JavaScript / npm packages:** 156
-- **Total third-party components:** 802
+- **Total third-party components:** 823
 
 > Entries marked with an asterisk (`*`) are platform-specific dependencies
 > (Windows / macOS / Android / WASM targets) that are **not** compiled into the
@@ -19,7 +19,7 @@ licenses under which these components are distributed.
 > completeness of attribution across all supported platforms.
 
 All bundled dependencies use permissive or file-level-copyleft licenses
-(MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, MPL-2.0, CC0). **No GPL, LGPL,
+(MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, MPL-2.0, CC0, BSL-1.0). **No GPL, LGPL,
 AGPL or SSPL code is included.** MPL-2.0 components (`cssparser`, `selectors`,
 `webpki-root-certs`, `lightningcss`, and related crates) are used unmodified;
 their file-level copyleft imposes no obligations on VeydanBrowser's own code.
@@ -30,8 +30,8 @@ their file-level copyleft imposes no obligations on VeydanBrowser's own code.
 
 | License | Count |
 |---|---:|
-| MIT OR Apache-2.0 | 263 |
-| MIT | 121 |
+| MIT OR Apache-2.0 | 270 |
+| MIT | 132 |
 | MIT OR Apache-2.0 (platform dep) | 96 |
 | Apache-2.0 OR MIT | 80 |
 | Unicode-3.0 | 18 |
@@ -44,7 +44,7 @@ their file-level copyleft imposes no obligations on VeydanBrowser's own code.
 | Apache-2.0 OR ISC OR MIT | 3 |
 | MIT OR Apache-2.0 OR Zlib | 3 |
 | Zlib OR Apache-2.0 OR MIT | 2 |
-| Zlib | 2 |
+| Zlib | 3 |
 | BSD-3-Clause OR MIT OR Apache-2.0 | 2 |
 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | 2 |
 | Apache-2.0 WITH LLVM-exception | 2 |
@@ -66,6 +66,7 @@ their file-level copyleft imposes no obligations on VeydanBrowser's own code.
 | Apache-2.0 AND ISC | 1 |
 | (MIT OR Apache-2.0) AND Unicode-3.0 | 1 |
 | Apache-2.0 OR BSL-1.0 OR MIT | 1 |
+| BSL-1.0 (platform dep) | 2 |
 
 ## License summary — npm packages
 
@@ -81,7 +82,7 @@ their file-level copyleft imposes no obligations on VeydanBrowser's own code.
 
 ---
 
-## Full acknowledgements — Rust crates (646)
+## Full acknowledgements — Rust crates (667)
 
 Thank you to the authors of the following Cargo crates:
 
@@ -97,6 +98,7 @@ Thank you to the authors of the following Cargo crates:
 | allocator-api2 | 0.2.21 | MIT OR Apache-2.0 |
 | android_system_properties | 0.1.5 | MIT OR Apache-2.0 * |
 | anyhow | 1.0.103 | MIT OR Apache-2.0 |
+| arboard | 3.6.1 | MIT OR Apache-2.0 |
 | argon2 | 0.6.0-rc.8 | MIT OR Apache-2.0 |
 | async-trait | 0.1.89 | MIT OR Apache-2.0 |
 | atk | 0.18.2 | MIT |
@@ -146,6 +148,7 @@ Thank you to the authors of the following Cargo crates:
 | chacha20 | 0.10.1 | MIT OR Apache-2.0 |
 | chrono | 0.4.45 | MIT OR Apache-2.0 |
 | cipher | 0.5.2 | MIT OR Apache-2.0 |
+| clipboard-win | 5.4.1 | BSL-1.0 (platform dep) |
 | cmake | 0.1.58 | MIT OR Apache-2.0 |
 | cmov | 0.5.4 | Apache-2.0 OR MIT |
 | combine | 4.6.7 | MIT * |
@@ -203,6 +206,7 @@ Thank you to the authors of the following Cargo crates:
 | dlopen2_derive | 0.4.3 | MIT |
 | dom_query | 0.27.0 | MIT |
 | dotenvy | 0.15.7 | MIT |
+| downcast-rs | 1.2.1 | MIT OR Apache-2.0 |
 | dpi | 0.1.2 | Apache-2.0 AND MIT |
 | dtoa | 1.0.11 | MIT OR Apache-2.0 |
 | dtoa-short | 0.3.5 | MPL-2.0 |
@@ -222,6 +226,7 @@ Thank you to the authors of the following Cargo crates:
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
 | erased-serde | 0.4.10 | MIT OR Apache-2.0 |
 | errno | 0.3.14 | MIT OR Apache-2.0 |
+| error-code | 3.4.0 | BSL-1.0 (platform dep) |
 | etcetera | 0.11.0 | MIT OR Apache-2.0 * |
 | event-listener | 5.4.1 | Apache-2.0 OR MIT |
 | fallible-iterator | 0.3.0 | MIT/Apache-2.0 |
@@ -232,9 +237,11 @@ Thank you to the authors of the following Cargo crates:
 | fiat-crypto | 0.3.0 | MIT OR Apache-2.0 OR BSD-1-Clause |
 | field-offset | 0.3.6 | MIT OR Apache-2.0 |
 | find-msvc-tools | 0.1.9 | MIT OR Apache-2.0 |
+| fixedbitset | 0.5.7 | MIT OR Apache-2.0 |
 | flate2 | 1.1.9 | MIT OR Apache-2.0 |
 | flume | 0.12.0 | Apache-2.0/MIT |
 | fnv | 1.0.7 | Apache-2.0 / MIT |
+| foldhash | 0.1.5 | Zlib |
 | foldhash | 0.2.0 | Zlib |
 | foreign-types | 0.5.0 | MIT OR Apache-2.0 * |
 | foreign-types-macros | 0.2.3 | MIT OR Apache-2.0 * |
@@ -278,6 +285,8 @@ Thank you to the authors of the following Cargo crates:
 | gtk3-macros | 0.18.2 | MIT |
 | h2 | 0.4.15 | MIT |
 | hashbrown | 0.12.3 | MIT OR Apache-2.0 |
+| hashbrown | 0.14.5 | MIT OR Apache-2.0 |
+| hashbrown | 0.15.5 | MIT OR Apache-2.0 |
 | hashbrown | 0.16.1 | MIT OR Apache-2.0 |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | hashlink | 0.11.1 | MIT OR Apache-2.0 |
@@ -365,6 +374,8 @@ Thank you to the authors of the following Cargo crates:
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 (platform dep) |
 | new_debug_unreachable | 1.0.6 | MIT |
 | nix | 0.31.3 | MIT |
+| nom | 7.1.3 | MIT |
+| nom | 8.0.0 | MIT |
 | notify | 8.2.0 | CC0-1.0 |
 | notify-types | 2.1.0 | MIT OR Apache-2.0 |
 | num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 * |
@@ -393,6 +404,7 @@ Thank you to the authors of the following Cargo crates:
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
 | openssl-probe | 0.2.1 | MIT OR Apache-2.0 |
 | option-ext | 0.2.0 | MPL-2.0 |
+| os_pipe | 1.2.3 | MIT |
 | p256 | 0.14.0-rc.15 | Apache-2.0 OR MIT |
 | p384 | 0.14.0-rc.15 | Apache-2.0 OR MIT |
 | p521 | 0.14.0-rc.15 | Apache-2.0 OR MIT |
@@ -406,6 +418,7 @@ Thank you to the authors of the following Cargo crates:
 | pbkdf2 | 0.13.0 | MIT OR Apache-2.0 |
 | pem-rfc7468 | 1.0.0 | Apache-2.0 OR MIT |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 |
+| petgraph | 0.8.3 | MIT OR Apache-2.0 |
 | phc | 0.6.1 | Apache-2.0 OR MIT |
 | phf | 0.13.1 | MIT |
 | phf_codegen | 0.13.1 | MIT |
@@ -436,6 +449,7 @@ Thank you to the authors of the following Cargo crates:
 | proc-macro-error-attr | 1.0.4 | MIT OR Apache-2.0 |
 | proc-macro2 | 1.0.106 | MIT OR Apache-2.0 |
 | quick-xml | 0.39.4 | MIT |
+| quick-xml | 0.41.0 | MIT |
 | quinn | 0.11.11 | MIT OR Apache-2.0 |
 | quinn-proto | 0.11.15 | MIT OR Apache-2.0 |
 | quinn-udp | 0.5.14 | MIT OR Apache-2.0 |
@@ -598,6 +612,7 @@ Thank you to the authors of the following Cargo crates:
 | tracing-attributes | 0.1.31 | MIT |
 | tracing-core | 0.1.36 | MIT |
 | tray-icon | 0.24.1 | MIT OR Apache-2.0 |
+| tree_magic_mini | 3.2.2 | MIT |
 | try-lock | 0.2.5 | MIT |
 | twox-hash | 2.1.2 | MIT |
 | typed-path | 0.12.3 | MIT OR Apache-2.0 |
@@ -637,6 +652,12 @@ Thank you to the authors of the following Cargo crates:
 | wasm-bindgen-macro-support | 0.2.126 | MIT OR Apache-2.0 (platform dep) |
 | wasm-bindgen-shared | 0.2.126 | MIT OR Apache-2.0 (platform dep) |
 | wasm-streams | 0.5.0 | MIT OR Apache-2.0 * |
+| wayland-backend | 0.3.17 | MIT |
+| wayland-client | 0.31.15 | MIT |
+| wayland-protocols | 0.32.13 | MIT |
+| wayland-protocols-wlr | 0.3.12 | MIT |
+| wayland-scanner | 0.31.11 | MIT |
+| wayland-sys | 0.31.11 | MIT |
 | web_atoms | 0.2.5 | MIT OR Apache-2.0 |
 | web-sys | 0.3.103 | MIT OR Apache-2.0 (platform dep) |
 | web-time | 1.1.0 | MIT OR Apache-2.0 (platform dep) |
@@ -711,6 +732,7 @@ Thank you to the authors of the following Cargo crates:
 | winnow | 1.0.3 | MIT |
 | winreg | 0.55.0 | MIT OR Apache-2.0 (platform dep) |
 | wit-bindgen | 0.57.1 | Apache-2.0 WITH LLVM-exception * |
+| wl-clipboard-rs | 0.9.3 | MIT OR Apache-2.0 |
 | wnaf | 0.14.0 | Apache-2.0 OR MIT |
 | writeable | 0.6.3 | Unicode-3.0 |
 | wry | 0.55.1 | Apache-2.0 OR MIT |

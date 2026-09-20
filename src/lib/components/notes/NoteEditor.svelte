@@ -19,7 +19,7 @@
   import WikiLinkPicker from './WikiLinkPicker.svelte';
   import { applyAction, shiftIndent, continueList, type EditAction, type EditResult } from '$lib/markdown-edit';
   import { wordCount } from '$lib/markdown';
-  import { localFilePaths } from '$lib/notes-files';
+  import { pasteHasHiddenFiles } from '$lib/notes-files';
   import { t, locale } from '$lib/i18n';
   import { relTime } from '$lib/utils';
   import { onMount, tick, untrack } from 'svelte';
@@ -255,12 +255,17 @@
     await loadAttachments();
   }
 
-  // Source-mode paste: image bytes upload; file references (Linux/macOS) copy by path
+  /** Files copied in the OS file manager: the webview hides their paths, so read them via Rust. */
+  async function pasteClipboardFiles() {
+    const paths = await api.notes.clipboardFilePaths();
+    if (paths.length) await uploadPaths(paths);
+  }
+
+  // Source-mode paste: image bytes upload; hidden file references copied via the OS clipboard
   function onPaste(e: ClipboardEvent) {
     const files = Array.from(e.clipboardData?.files ?? []);
     if (files.length) { e.preventDefault(); void uploadFiles(files); return; }
-    const paths = localFilePaths(e.clipboardData);
-    if (paths.length) { e.preventDefault(); void uploadPaths(paths); }
+    if (pasteHasHiddenFiles(e.clipboardData)) { e.preventDefault(); void pasteClipboardFiles(); }
   }
 
   // OS file drops arrive via Tauri's native drag-drop (dragDropEnabled), not the webview.
@@ -272,11 +277,13 @@
     return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   }
 
-  async function onOsDrop(paths: string[], physX: number, physY: number) {
+  // Tauri reports the drop position in physical pixels, except on Linux (GTK logical pixels).
+  const dropScale = () => (navigator.userAgent.includes('Linux') ? 1 : window.devicePixelRatio || 1);
+
+  async function onOsDrop(paths: string[], posX: number, posY: number) {
     if (!note || readonly || paths.length === 0) return;
-    const dpr = window.devicePixelRatio || 1;
-    const x = physX / dpr;
-    const y = physY / dpr;
+    const x = posX / dropScale();
+    const y = posY / dropScale();
     if (!pointInEl(panesEl, x, y)) return;
     if (mode === 'rich') richEditor?.caretAtCoords(x, y);
     await uploadPaths(paths);
@@ -572,7 +579,7 @@
               onchange={setContent}
               onwikilink={openWikiLink}
               onfiles={uploadFiles}
-              onpaths={uploadPaths}
+              onclipboardfiles={pasteClipboardFiles}
               onhotkey={onRichHotkey}
             />
           {/key}
