@@ -416,7 +416,7 @@ export interface SmartViewInput {
 
 // ── Note History ──────────────────────────────────────────────────────────────
 
-export type VersionType = 'save' | 'autosave' | 'restore' | 'merge' | 'import';
+export type VersionType = 'save' | 'autosave' | 'restore' | 'merge' | 'import' | 'sync' | 'conflict';
 
 export interface NoteHistoryEntry {
   id: string;
@@ -432,9 +432,18 @@ export interface NoteHistoryEntry {
   created_at: string;
 }
 
+export interface MergeBlock {
+  kind: 'normal' | 'conflict';
+  /** Normal block text (keeps its trailing newline) */
+  text: string;
+  ours: string;
+  theirs: string;
+}
+
 export interface MergeResult {
   content: string;
   has_conflicts: boolean;
+  blocks: MergeBlock[];
 }
 
 export interface DiffLine {

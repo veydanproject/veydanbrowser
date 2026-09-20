@@ -5,6 +5,7 @@ use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use std::collections::HashMap;
 use super::files::*;
+use super::merge::{merge3, MergeResult};
 use super::models::*;
 use super::tags::*;
 use super::index::*;
@@ -36,12 +37,6 @@ pub struct NoteHistoryEntry {
     pub author: Option<String>,
     pub device: Option<String>,
     pub created_at: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct MergeResult {
-    pub content: String,
-    pub has_conflicts: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -85,6 +80,19 @@ pub(crate) async fn history_snapshot(
     parent_id: Option<String>,
     db: &sqlx::Pool<sqlx::Sqlite>,
 ) -> Result<String, AppError> {
+    history_snapshot_by(note_id, title, content, version_type, parent_id, None, db).await
+}
+
+/// Snapshot attributed to a device (sync versions coming from another machine).
+pub(crate) async fn history_snapshot_by(
+    note_id: &str,
+    title: &str,
+    content: &str,
+    version_type: &str,
+    parent_id: Option<String>,
+    device: Option<&str>,
+    db: &sqlx::Pool<sqlx::Sqlite>,
+) -> Result<String, AppError> {
     let now = Utc::now().to_rfc3339();
     let id = Uuid::new_v4().to_string();
     let content_hash = compute_hash(content);
@@ -100,8 +108,8 @@ pub(crate) async fn history_snapshot(
 
     sqlx::query(
         "INSERT INTO note_history
-         (id, note_id, parent_id, revision, version_type, title, content, content_hash, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         (id, note_id, parent_id, revision, version_type, title, content, content_hash, device, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(note_id)
@@ -111,6 +119,7 @@ pub(crate) async fn history_snapshot(
     .bind(title)
     .bind(&compressed)
     .bind(&content_hash)
+    .bind(device)
     .bind(&now)
     .execute(db)
     .await
@@ -484,14 +493,5 @@ pub async fn note_history_merge(
     };
 
     // 3-way merge: original=ancestor, ours=current, theirs=history
-    let (merged_content, has_conflicts) =
-        match diffy::merge(&ancestor, &current_content, &history_content) {
-            Ok(merged) => (merged, false),
-            Err(merged_with_conflicts) => (merged_with_conflicts, true),
-        };
-
-    Ok(MergeResult {
-        content: merged_content,
-        has_conflicts,
-    })
+    Ok(merge3(&ancestor, &current_content, &history_content))
 }

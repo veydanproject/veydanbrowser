@@ -70,8 +70,8 @@ use commands::ssh_keys::{
 use commands::workspaces::*;
 use sqlx::{Pool, Sqlite};
 use sync::{
-    start_sync_scheduler, sync_change_passphrase, sync_create_vault, sync_get_config, sync_join_vault, sync_leave,
-    sync_probe, sync_run_now, sync_set_config, sync_status, SyncManager,
+    start_sync_scheduler, sync_change_passphrase, sync_conflict_get, sync_conflict_resolve, sync_create_vault,
+    sync_get_config, sync_join_vault, sync_leave, sync_probe, sync_run_now, sync_set_config, sync_status, SyncManager,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -351,6 +351,8 @@ pub fn run() {
             sync_change_passphrase,
             sync_status,
             sync_run_now,
+            sync_conflict_get,
+            sync_conflict_resolve,
             // Profiles
             profiles_list,
             profile_get,

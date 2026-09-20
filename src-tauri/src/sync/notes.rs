@@ -13,12 +13,15 @@
 //!   the other side (holding the older version) is the one that merges.
 //! - delete: apply (fast-forward or newer-wins).
 //! - put whose parents include our head: fast-forward.
-//! - put that diverged: 3-way merge, push the result with both parents.
+//! - put that diverged: 3-way merge from the exact common ancestor; a clean
+//!   merge is pushed with both parents, overlapping edits become a conflict
+//!   that keeps the local file untouched and is resolved through the UI.
 
 use super::state::{load_note_state, save_note_state, NoteSyncState};
 use crate::commands::notes::{
-    effective_docs_dir, note_delete, note_restore, parse_note_file, resolve_note_abs_path, set_note_tag_links,
-    sync_notes_index, write_note_file, NoteRow,
+    effective_docs_dir, history_content_by_id, history_snapshot_by, merge3, note_delete, note_restore, parse_note_file,
+    resolve_note_abs_path, set_note_tag_links, sync_notes_index, update_note, write_note_file, MergeResult, NoteRow,
+    NoteUpdateInput,
 };
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
@@ -57,12 +60,8 @@ struct NoteHead {
 }
 
 /// Note ids are UUIDs; anything else must not become a file name.
-fn valid_id(id: &str) -> bool {
+pub(super) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
-pub fn has_conflict_markers(raw: &str) -> bool {
-    raw.lines().any(|l| l.starts_with("<<<<<<<")) && raw.lines().any(|l| l.starts_with(">>>>>>>"))
 }
 
 fn put_op(id: &str, hlc: Hlc, blob: String, parents: Vec<String>, format: &str, title: &str) -> Op {
@@ -86,7 +85,7 @@ fn delete_op(id: &str, hlc: Hlc, parents: Vec<String>) -> Op {
     }
 }
 
-fn docs_dir(state: &AppState) -> PathBuf {
+pub(super) fn docs_dir(state: &AppState) -> PathBuf {
     let custom = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
     effective_docs_dir(&state.app_data_dir, custom.as_ref())
 }
@@ -143,26 +142,34 @@ pub async fn collect_local_changes(engine: &Engine, state: &AppState, clock: &mu
             }
             continue;
         }
+        // An unresolved conflict holds the note back; resolving clears the flag.
+        if prev.as_ref().map(|s| s.conflict).unwrap_or(false) {
+            continue;
+        }
         let path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
         let Ok(raw) = std::fs::read(&path) else { continue };
         let hash = sha256_hex(&raw);
-        if prev.as_ref().map(|s| s.synced_hash == hash && !s.deleted).unwrap_or(false) {
+        // A resolved conflict is pushed even when the text stayed local, so the vault learns the merge.
+        let unchanged = prev.as_ref().map(|s| s.synced_hash == hash && !s.deleted && s.conflict_remote_blob.is_empty());
+        if unchanged.unwrap_or(false) {
             continue;
         }
         let blob = engine.put_blob(&raw).await.map_err(AppError::other)?;
-        let parents: Vec<String> = prev.iter().filter(|s| !s.head_blob.is_empty()).map(|s| s.head_blob.clone()).collect();
+        // Parents: our head, plus the remote version a resolved conflict merged in.
+        let parents: Vec<String> = prev
+            .iter()
+            .flat_map(|s| [s.head_blob.clone(), s.conflict_remote_blob.clone()])
+            .filter(|b| !b.is_empty())
+            .collect();
         let hlc = clock.now();
         out.ops.push(put_op(&row.id, hlc.clone(), blob.clone(), parents.clone(), &row.format, &row.title));
-        let still_conflicted = prev.as_ref().map(|s| s.conflict).unwrap_or(false)
-            && has_conflict_markers(&String::from_utf8_lossy(&raw));
         out.states.push(NoteSyncState {
             note_id: row.id.clone(),
             head_blob: blob,
             head_parents: parents,
             head_hlc: Some(hlc),
             synced_hash: hash,
-            deleted: false,
-            conflict: still_conflicted,
+            ..Default::default()
         });
     }
 
@@ -200,7 +207,8 @@ async fn load_head(db: &sqlx::Pool<sqlx::Sqlite>, id: &str) -> CmdResult<Option<
         .map_err(AppError::db)
 }
 
-fn write_raw(path: &PathBuf, raw: &[u8]) -> CmdResult<()> {
+/// Atomic write: tmp file next to the target, then rename.
+pub(super) fn write_raw(path: &PathBuf, raw: &[u8]) -> CmdResult<()> {
     use std::io::Write;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(AppError::io)?;
@@ -276,22 +284,16 @@ pub async fn apply_remote(
             None => docs_dir(&state).join(format!("{id}.{}", safe_format(&payload.format))),
         };
         let local_raw = std::fs::read(&path).ok();
-
-        let fast_forward = match &prev {
+        let local_changed = match (&prev, &local_raw) {
+            (Some(s), Some(raw)) if !s.deleted && !s.head_blob.is_empty() => sha256_hex(raw) != s.synced_hash,
+            _ => false,
+        };
+        let remote_includes_ours = match &prev {
             None => true,
             Some(s) => s.deleted || s.head_blob.is_empty() || s.head_blob == payload.blob || payload.parents.contains(&s.head_blob),
         };
 
-        if fast_forward {
-            if let (Some(r), Some(s)) = (&row, &prev) {
-                if r.deleted == 0 && !s.deleted {
-                    let local_hash = local_raw.as_deref().map(sha256_hex).unwrap_or_default();
-                    if local_hash != s.synced_hash {
-                        outcome.retry = Some(format!("note {id} changed during sync"));
-                        continue;
-                    }
-                }
-            }
+        if remote_includes_ours && !local_changed {
             let same_bytes = local_raw.as_deref() == Some(remote_raw.as_slice());
             if !same_bytes {
                 write_raw(&path, &remote_raw)?;
@@ -307,8 +309,7 @@ pub async fn apply_remote(
                     head_parents: payload.parents.clone(),
                     head_hlc: Some(op.hlc.clone()),
                     synced_hash: remote_hash,
-                    deleted: false,
-                    conflict: false,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -318,41 +319,66 @@ pub async fn apply_remote(
             continue;
         }
 
-        // Diverged: we hold the older version, so we merge.
-        let st = prev.expect("diverged implies a known head");
-        let local_raw = local_raw.unwrap_or_default();
-        if sha256_hex(&local_raw) != st.synced_hash {
+        let mut st = prev.expect("diverged implies a known head");
+        if remote_includes_ours && !st.conflict {
+            // Plain race with the editor: next cycle pushes the edit first, then merges.
             outcome.retry = Some(format!("note {id} changed during sync"));
             continue;
         }
-        let ancestor_name = payload
-            .parents
-            .iter()
-            .find(|p| st.head_parents.contains(p))
-            .or(payload.parents.first())
-            .or(st.head_parents.first())
-            .cloned();
-        let ancestor_raw = match ancestor_name {
-            Some(name) => engine.get_blob(&name).await.map_err(AppError::other)?.unwrap_or_default(),
+        let local_raw = local_raw.unwrap_or_default();
+        let remote_device = op.hlc.device_id.clone();
+
+        // A newer remote version of an already conflicted note replaces the remote side.
+        if st.conflict && !remote_includes_ours {
+            let (rk, _, rbody) = parse_note_file(&String::from_utf8_lossy(&remote_raw));
+            let title = rk.get("title").cloned().unwrap_or_default();
+            st.conflict_remote_id =
+                history_snapshot_by(&id, &title, &rbody, "conflict", None, Some(&remote_device), db).await?;
+            st.conflict_remote_blob = payload.blob.clone();
+            st.head_hlc = Some(op.hlc.clone());
+            save_note_state(db, &st).await?;
+            continue;
+        }
+
+        // Exact common ancestor only: our head when the remote builds on it,
+        // otherwise a blob both heads list as parent.
+        let ancestor_name = if remote_includes_ours {
+            Some(st.head_blob.clone())
+        } else {
+            payload.parents.iter().find(|p| st.head_parents.contains(p)).cloned()
+        };
+        let ancestor_raw = match &ancestor_name {
+            Some(name) => engine.get_blob(name).await.map_err(AppError::other)?.unwrap_or_default(),
             None => Vec::new(),
         };
 
         let (lk, ltags, lbody) = parse_note_file(&String::from_utf8_lossy(&local_raw));
         let (rk, rtags, rbody) = parse_note_file(&String::from_utf8_lossy(&remote_raw));
         let (ak, _, abody) = parse_note_file(&String::from_utf8_lossy(&ancestor_raw));
-
-        let (body, has_conflicts) = match diffy::merge(&abody, &lbody, &rbody) {
-            Ok(m) => (m, false),
-            Err(m) => (m, true),
-        };
         let local_title = lk.get("title").cloned().unwrap_or_default();
-        let title = if lk.get("title") != ak.get("title") {
-            local_title
-        } else {
-            rk.get("title").cloned().unwrap_or(local_title)
-        };
-        let tags = merge_tags(&ltags, &rtags);
+        let remote_title = rk.get("title").cloned().unwrap_or_default();
 
+        let merged = merge3(&abody, &lbody, &rbody);
+        if merged.has_conflicts || ancestor_name.is_none() {
+            // Keep the local file readable; both sides go to history for the UI.
+            let ancestor_id = history_snapshot_by(&id, &local_title, &abody, "conflict", None, None, db).await?;
+            let local_id = history_snapshot_by(&id, &local_title, &lbody, "conflict", Some(ancestor_id.clone()), None, db).await?;
+            let remote_id =
+                history_snapshot_by(&id, &remote_title, &rbody, "conflict", Some(ancestor_id.clone()), Some(&remote_device), db)
+                    .await?;
+            st.conflict = true;
+            st.conflict_ancestor_id = ancestor_id;
+            st.conflict_local_id = local_id;
+            st.conflict_remote_id = remote_id;
+            st.conflict_remote_blob = payload.blob.clone();
+            st.head_hlc = Some(op.hlc.clone());
+            save_note_state(db, &st).await?;
+            continue;
+        }
+
+        // Independent edits: apply the merge and keep every side restorable.
+        let title = if lk.get("title") != ak.get("title") { local_title.clone() } else { remote_title.clone() };
+        let tags = merge_tags(&ltags, &rtags);
         let mut note_row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
             .bind(&id)
             .fetch_optional(db)
@@ -361,7 +387,11 @@ pub async fn apply_remote(
             .ok_or_else(|| AppError::not_found(format!("Note {id}")))?;
         note_row.title = title.clone();
         note_row.updated_at = Utc::now().to_rfc3339();
-        write_note_file(&path, &note_row, &tags, &body)?;
+
+        let local_id = history_snapshot_by(&id, &local_title, &lbody, "sync", None, None, db).await?;
+        history_snapshot_by(&id, &remote_title, &rbody, "sync", None, Some(&remote_device), db).await?;
+        history_snapshot_by(&id, &title, &merged.content, "merge", Some(local_id), None, db).await?;
+        write_note_file(&path, &note_row, &tags, &merged.content)?;
 
         let merged_raw = std::fs::read(&path).map_err(AppError::io)?;
         let blob = engine.put_blob(&merged_raw).await.map_err(AppError::other)?;
@@ -380,14 +410,44 @@ pub async fn apply_remote(
                 head_parents: parents,
                 head_hlc: Some(hlc),
                 synced_hash: sha256_hex(&merged_raw),
-                deleted: false,
-                conflict: has_conflicts,
+                ..Default::default()
             },
         )
         .await?;
         outcome.changed.push(id);
     }
     Ok(outcome)
+}
+
+/// Merge data for the conflict UI: ancestor and remote from history, local from the file.
+pub async fn conflict_merge(state: &AppState, note_id: &str) -> CmdResult<MergeResult> {
+    let db = &state.db;
+    let st = load_note_state(db, note_id)
+        .await?
+        .filter(|s| s.conflict)
+        .ok_or_else(|| AppError::not_found(format!("conflict for note {note_id}")))?;
+    let row = load_head(db, note_id).await?.ok_or_else(|| AppError::not_found(format!("Note {note_id}")))?;
+    let path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
+    let (_, _, local) = parse_note_file(&std::fs::read_to_string(&path).unwrap_or_default());
+    let ancestor = history_content_by_id(&st.conflict_ancestor_id, db).await.unwrap_or_default();
+    let remote = history_content_by_id(&st.conflict_remote_id, db).await?;
+    Ok(merge3(&ancestor, &local, &remote))
+}
+
+/// Write the user's resolution and release the note for the next push,
+/// which records the remote version as second parent.
+pub async fn resolve_conflict(state: &AppState, note_id: &str, content: String) -> CmdResult<()> {
+    let db = &state.db;
+    let mut st = load_note_state(db, note_id)
+        .await?
+        .filter(|s| s.conflict)
+        .ok_or_else(|| AppError::not_found(format!("conflict for note {note_id}")))?;
+    update_note(note_id, NoteUpdateInput { title: None, content: Some(content), pinned: None }, state).await?;
+    st.conflict = false;
+    st.conflict_ancestor_id.clear();
+    st.conflict_local_id.clear();
+    st.conflict_remote_id.clear();
+    save_note_state(db, &st).await
 }
 
 /// Reindex changed files, relink tags from frontmatter, un-trash restored notes, notify UI.

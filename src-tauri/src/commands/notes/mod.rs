@@ -10,6 +10,7 @@
 //! - `folders`  — folder CRUD + note↔folder / note↔binding commands
 //! - `settings` — notes directory settings commands
 //! - `history`  — version history (snapshot, diff, restore, merge) + commands
+//! - `merge`    — EOL-normalized 3-way merge with structured conflict blocks
 //! - `window`   — standalone notes window
 //! - `attachments` — files stored next to notes, referenced by relative links
 //! - `transfer` — export/import of Markdown + attachments
@@ -34,6 +35,7 @@ mod smart_views;
 mod templates;
 mod history;
 mod index;
+mod merge;
 mod models;
 mod settings;
 mod tags;
@@ -71,7 +73,11 @@ pub use transfer::{note_export, note_import};
 pub use window::note_open_window;
 
 // Internals the sync module builds on (file format, index, tag links).
+pub(crate) use attachments::{attachments_dir_for, safe_file_name};
+pub(crate) use crud::update_note;
 pub(crate) use files::{effective_docs_dir, parse_note_file, resolve_note_abs_path, write_note_file};
+pub(crate) use history::{history_content_by_id, history_snapshot_by};
 pub(crate) use index::sync_notes_index;
-pub(crate) use models::NoteRow;
+pub(crate) use merge::{merge3, MergeResult};
+pub(crate) use models::{NoteRow, NoteUpdateInput};
 pub(crate) use tags::set_note_tag_links;

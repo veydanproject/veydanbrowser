@@ -184,6 +184,8 @@
     restore: 'rotate-ccw',
     merge: 'git-merge',
     import: 'upload',
+    sync: 'refresh-cw',
+    conflict: 'alert-triangle',
   };
 
   const versionTypeLabel: Record<string, string> = {
@@ -192,6 +194,8 @@
     restore: 'Восстановлено',
     merge: 'Слияние',
     import: 'Импорт',
+    sync: 'Синхронизация',
+    conflict: 'Конфликт',
   };
 
   const diffCountAdded = $derived(diffLines.filter(l => l.kind === 'added').length);
@@ -228,6 +232,8 @@
       <option value="restore">Восстановление</option>
       <option value="merge">Слияние</option>
       <option value="import">Импорт</option>
+      <option value="sync">Синхронизация</option>
+      <option value="conflict">Конфликт</option>
     </select>
     <input type="date" bind:value={filterDateFrom} class="filter-date" title="С" />
     <input type="date" bind:value={filterDateTo} class="filter-date" title="По" />

@@ -20,10 +20,19 @@ pub struct NoteSyncState {
     /// SHA-256 of the local file when `head_blob` was pushed/applied.
     pub synced_hash: String,
     pub deleted: bool,
+    /// A remote version overlaps local edits; the note is not pushed until resolved.
     pub conflict: bool,
+    pub conflict_ancestor_id: String,
+    pub conflict_local_id: String,
+    pub conflict_remote_id: String,
+    /// Remote blob to record as second parent once the conflict is resolved.
+    pub conflict_remote_blob: String,
 }
 
-type NoteStateRow = (String, String, String, String, String, i64, i64);
+type NoteStateRow = (String, String, String, String, String, i64, i64, String, String, String, String);
+
+const SELECT_NOTE_STATE: &str = "SELECT note_id, head_blob, head_parents, head_hlc, synced_hash, deleted, conflict,
+    conflict_ancestor_id, conflict_local_id, conflict_remote_id, conflict_remote_blob FROM sync_note_state";
 
 fn row_to_state(r: NoteStateRow) -> NoteSyncState {
     NoteSyncState {
@@ -34,36 +43,41 @@ fn row_to_state(r: NoteStateRow) -> NoteSyncState {
         synced_hash: r.4,
         deleted: r.5 != 0,
         conflict: r.6 != 0,
+        conflict_ancestor_id: r.7,
+        conflict_local_id: r.8,
+        conflict_remote_id: r.9,
+        conflict_remote_blob: r.10,
     }
 }
 
 pub async fn load_note_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<String, NoteSyncState>> {
-    let rows: Vec<NoteStateRow> =
-        sqlx::query_as("SELECT note_id, head_blob, head_parents, head_hlc, synced_hash, deleted, conflict FROM sync_note_state")
-            .fetch_all(db)
-            .await
-            .map_err(AppError::db)?;
+    let rows: Vec<NoteStateRow> = sqlx::query_as(SELECT_NOTE_STATE).fetch_all(db).await.map_err(AppError::db)?;
     Ok(rows.into_iter().map(row_to_state).map(|s| (s.note_id.clone(), s)).collect())
 }
 
 pub async fn load_note_state(db: &Pool<Sqlite>, note_id: &str) -> CmdResult<Option<NoteSyncState>> {
     let row: Option<NoteStateRow> = sqlx::query_as(
-        "SELECT note_id, head_blob, head_parents, head_hlc, synced_hash, deleted, conflict FROM sync_note_state WHERE note_id = ?",
+        "SELECT note_id, head_blob, head_parents, head_hlc, synced_hash, deleted, conflict,
+         conflict_ancestor_id, conflict_local_id, conflict_remote_id, conflict_remote_blob
+         FROM sync_note_state WHERE note_id = ?",
     )
     .bind(note_id)
-        .fetch_optional(db)
-        .await
-        .map_err(AppError::db)?;
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::db)?;
     Ok(row.map(row_to_state))
 }
 
 pub async fn save_note_state(db: &Pool<Sqlite>, s: &NoteSyncState) -> CmdResult<()> {
     sqlx::query(
-        "INSERT INTO sync_note_state (note_id, head_blob, head_parents, head_hlc, synced_hash, deleted, conflict)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO sync_note_state (note_id, head_blob, head_parents, head_hlc, synced_hash, deleted, conflict,
+           conflict_ancestor_id, conflict_local_id, conflict_remote_id, conflict_remote_blob)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(note_id) DO UPDATE SET
            head_blob = excluded.head_blob, head_parents = excluded.head_parents, head_hlc = excluded.head_hlc,
-           synced_hash = excluded.synced_hash, deleted = excluded.deleted, conflict = excluded.conflict",
+           synced_hash = excluded.synced_hash, deleted = excluded.deleted, conflict = excluded.conflict,
+           conflict_ancestor_id = excluded.conflict_ancestor_id, conflict_local_id = excluded.conflict_local_id,
+           conflict_remote_id = excluded.conflict_remote_id, conflict_remote_blob = excluded.conflict_remote_blob",
     )
     .bind(&s.note_id)
     .bind(&s.head_blob)
@@ -72,6 +86,10 @@ pub async fn save_note_state(db: &Pool<Sqlite>, s: &NoteSyncState) -> CmdResult<
     .bind(&s.synced_hash)
     .bind(s.deleted as i64)
     .bind(s.conflict as i64)
+    .bind(&s.conflict_ancestor_id)
+    .bind(&s.conflict_local_id)
+    .bind(&s.conflict_remote_id)
+    .bind(&s.conflict_remote_blob)
     .execute(db)
     .await
     .map_err(AppError::db)?;
@@ -80,11 +98,83 @@ pub async fn save_note_state(db: &Pool<Sqlite>, s: &NoteSyncState) -> CmdResult<
 
 pub async fn clear_note_states(db: &Pool<Sqlite>) -> CmdResult<()> {
     sqlx::query("DELETE FROM sync_note_state").execute(db).await.map_err(AppError::db)?;
+    sqlx::query("DELETE FROM sync_attachment_state").execute(db).await.map_err(AppError::db)?;
     sqlx::query("DELETE FROM sync_peers").execute(db).await.map_err(AppError::db)?;
     Ok(())
 }
 
-/// Notes currently carrying conflict markers: (id, title).
+// ── Attachments ──────────────────────────────────────────────────────────────
+
+/// Where a local attachment file stands relative to the vault (LWW, no merge).
+#[derive(Debug, Clone, Default)]
+pub struct AttachmentSyncState {
+    pub note_id: String,
+    pub name: String,
+    pub head_blob: String,
+    pub head_hlc: Option<Hlc>,
+    pub synced_hash: String,
+    pub deleted: bool,
+}
+
+type AttachmentStateRow = (String, String, String, String, String, i64);
+
+fn row_to_attachment_state(r: AttachmentStateRow) -> AttachmentSyncState {
+    AttachmentSyncState {
+        note_id: r.0,
+        name: r.1,
+        head_blob: r.2,
+        head_hlc: Hlc::decode(&r.3),
+        synced_hash: r.4,
+        deleted: r.5 != 0,
+    }
+}
+
+pub async fn load_attachment_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<(String, String), AttachmentSyncState>> {
+    let rows: Vec<AttachmentStateRow> =
+        sqlx::query_as("SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted FROM sync_attachment_state")
+            .fetch_all(db)
+            .await
+            .map_err(AppError::db)?;
+    Ok(rows
+        .into_iter()
+        .map(row_to_attachment_state)
+        .map(|s| ((s.note_id.clone(), s.name.clone()), s))
+        .collect())
+}
+
+pub async fn load_attachment_state(db: &Pool<Sqlite>, note_id: &str, name: &str) -> CmdResult<Option<AttachmentSyncState>> {
+    let row: Option<AttachmentStateRow> = sqlx::query_as(
+        "SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted FROM sync_attachment_state WHERE note_id = ? AND name = ?",
+    )
+    .bind(note_id)
+    .bind(name)
+    .fetch_optional(db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(row.map(row_to_attachment_state))
+}
+
+pub async fn save_attachment_state(db: &Pool<Sqlite>, s: &AttachmentSyncState) -> CmdResult<()> {
+    sqlx::query(
+        "INSERT INTO sync_attachment_state (note_id, name, head_blob, head_hlc, synced_hash, deleted)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(note_id, name) DO UPDATE SET
+           head_blob = excluded.head_blob, head_hlc = excluded.head_hlc,
+           synced_hash = excluded.synced_hash, deleted = excluded.deleted",
+    )
+    .bind(&s.note_id)
+    .bind(&s.name)
+    .bind(&s.head_blob)
+    .bind(s.head_hlc.as_ref().map(Hlc::encode).unwrap_or_default())
+    .bind(&s.synced_hash)
+    .bind(s.deleted as i64)
+    .execute(db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(())
+}
+
+/// Notes with an unresolved sync conflict: (id, title).
 pub async fn conflicts(db: &Pool<Sqlite>) -> CmdResult<Vec<(String, String)>> {
     sqlx::query_as::<_, (String, String)>(
         "SELECT s.note_id, COALESCE(n.title, s.note_id) FROM sync_note_state s

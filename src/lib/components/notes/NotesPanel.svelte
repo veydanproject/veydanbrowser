@@ -17,6 +17,7 @@
   import NoteEditor from './NoteEditor.svelte';
   import NoteFilters from './NoteFilters.svelte';
   import NoteTransferDialog, { type TransferMode } from './NoteTransferDialog.svelte';
+  import NoteSyncButton from './NoteSyncButton.svelte';
   import { t } from '$lib/i18n';
 
   interface Props {
@@ -336,9 +337,7 @@
               onexportfolder={exportFolder}
             />
             <div class="sidebar-footer">
-              <button class="icon-btn" title={$t('notes_btn_sync')} onclick={() => api.notes.sync()}>
-                <Icon name="refresh-cw" size={14} />
-              </button>
+              <NoteSyncButton />
               <button class="icon-btn" title={$t('notes_btn_open_folder')} onclick={() => api.notes.openFolder()}>
                 <Icon name="folder-open" size={14} />
               </button>

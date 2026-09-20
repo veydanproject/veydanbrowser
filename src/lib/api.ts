@@ -397,6 +397,9 @@ export const api = {
       call<void>('sync_change_passphrase', { old, new: newPassphrase }),
     status: () => call<SyncStatus>('sync_status'),
     runNow: () => call<SyncStatus>('sync_run_now'),
+    conflictGet: (noteId: string) => call<MergeResult>('sync_conflict_get', { noteId }),
+    conflictResolve: (noteId: string, content: string) =>
+      call<SyncStatus>('sync_conflict_resolve', { noteId, content }),
   },
 
   settings: {

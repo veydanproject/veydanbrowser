@@ -37,7 +37,45 @@
     { value: 'webdav', label: $t('settings_sync_backend_webdav') },
   ]);
 
-  const intervalMin = $derived(Math.max(1, Math.round(cfg.interval_sec / 60)));
+  const MAX_INTERVAL_SEC = 86400;
+  // Show minutes when the stored value is a whole number of minutes.
+  let intervalUnit = $state<'sec' | 'min'>('min');
+  const intervalValue = $derived(intervalUnit === 'min' ? Math.max(1, Math.round(cfg.interval_sec / 60)) : cfg.interval_sec);
+  const unitOptions = $derived([
+    { value: 'sec', label: $t('settings_sync_unit_seconds') },
+    { value: 'min', label: $t('settings_sync_unit_minutes') },
+  ]);
+  const presets = [1, 5, 10, 30, 60, 300, 900, 3600];
+  const remoteFastWarn = $derived(cfg.backend !== 'folder' && cfg.interval_sec < 60);
+
+  function unitFor(sec: number): 'sec' | 'min' {
+    return sec >= 60 && sec % 60 === 0 ? 'min' : 'sec';
+  }
+
+  function setIntervalSec(sec: number) {
+    cfg.interval_sec = Math.min(MAX_INTERVAL_SEC, Math.max(1, Math.floor(sec || 1)));
+  }
+
+  function setIntervalValue(v: number) {
+    setIntervalSec(intervalUnit === 'min' ? v * 60 : v);
+  }
+
+  function setIntervalUnit(unit: 'sec' | 'min') {
+    if (unit === intervalUnit) return;
+    // Keep the number, change the meaning: 5 min -> 5 s and back.
+    const n = intervalValue;
+    intervalUnit = unit;
+    setIntervalSec(unit === 'min' ? n * 60 : n);
+  }
+
+  function applyPreset(sec: number) {
+    intervalUnit = unitFor(sec);
+    setIntervalSec(sec);
+  }
+
+  function presetLabel(sec: number): string {
+    return sec >= 60 ? `${sec / 60} ${$t('settings_sync_unit_minutes')}` : `${sec} ${$t('settings_sync_unit_seconds')}`;
+  }
 
   async function refreshStatus() {
     try {
@@ -122,13 +160,10 @@
     } catch {}
   }
 
-  function setIntervalMin(v: number) {
-    cfg.interval_sec = Math.max(1, Math.floor(v || 1)) * 60;
-  }
-
   onMount(async () => {
     try {
       cfg = await api.sync.getConfig();
+      intervalUnit = unitFor(cfg.interval_sec);
     } catch {}
     await refreshStatus();
     if (isTauri) {
@@ -183,11 +218,21 @@
     </div>
   {/if}
 
-  <div class="grid">
-    <label class="field">
-      <span class="field-label">{$t('settings_sync_interval')}</span>
-      <input class="input" type="number" min="1" value={intervalMin} oninput={(e) => setIntervalMin(Number((e.currentTarget as HTMLInputElement).value))} />
-    </label>
+  <div class="field">
+    <span class="field-label">{$t('settings_sync_interval')}</span>
+    <div class="row">
+      <input class="input interval" type="number" min="1" max={intervalUnit === 'min' ? MAX_INTERVAL_SEC / 60 : MAX_INTERVAL_SEC} value={intervalValue} oninput={(e) => setIntervalValue(Number((e.currentTarget as HTMLInputElement).value))} />
+      <CustomSelect options={unitOptions} value={intervalUnit} onchange={(v) => setIntervalUnit(v === 'sec' ? 'sec' : 'min')} />
+    </div>
+    <div class="presets">
+      <span class="hint">{$t('settings_sync_interval_presets')}</span>
+      {#each presets as sec (sec)}
+        <button class="chip" class:on={cfg.interval_sec === sec} onclick={() => applyPreset(sec)}>{presetLabel(sec)}</button>
+      {/each}
+    </div>
+    {#if remoteFastWarn}
+      <p class="warn">{$t('settings_sync_interval_remote_warn')}</p>
+    {/if}
   </div>
 
   {#if status?.joined}
@@ -291,6 +336,15 @@
     font-size: 0.82rem; color: var(--text-body);
   }
   .input.mono { font-family: var(--font-mono); }
+  .input.interval { flex: 0 0 110px; }
+  .presets { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+  .chip {
+    font-size: var(--fs-sm); padding: 0.15rem 0.55rem; border-radius: var(--radius-field);
+    border: 1px solid var(--border); background: var(--surface-3); color: var(--text-dim); cursor: pointer;
+  }
+  .chip:hover { color: var(--text); border-color: var(--border-2); }
+  .chip.on { color: var(--accent-text); background: var(--accent-bg); border-color: var(--accent-border); }
+  .warn { font-size: var(--fs-sm); color: var(--warn-text); margin: 0; }
   .input:focus { border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-bg); outline: none; }
   .icon { width: var(--control-h-lg); height: var(--control-h-lg); justify-content: center; padding: 0; flex-shrink: 0; }
   .hint { font-size: var(--fs-sm); color: var(--text-dim); margin: 0; }

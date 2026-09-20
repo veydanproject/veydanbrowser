@@ -485,6 +485,26 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Pending sync conflict: history snapshots of both sides and the remote blob to merge with.
+    for col in ["conflict_ancestor_id", "conflict_local_id", "conflict_remote_id", "conflict_remote_blob"] {
+        add_column_if_not_exists(pool, "sync_note_state", col, "TEXT NOT NULL DEFAULT ''").await?;
+    }
+
+    // Per-attachment sync position: which vault blob the local file corresponds to.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_attachment_state (
+            note_id     TEXT NOT NULL,
+            name        TEXT NOT NULL,
+            head_blob   TEXT NOT NULL DEFAULT '',
+            head_hlc    TEXT NOT NULL DEFAULT '',
+            synced_hash TEXT NOT NULL DEFAULT '',
+            deleted     INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (note_id, name)
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // Reset stale running status on startup — no browsers are actually running yet
     sqlx::query("UPDATE profiles SET status = 'stopped' WHERE status = 'running'")
         .execute(pool)

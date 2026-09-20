@@ -9,7 +9,8 @@ use sqlx::{Pool, Sqlite};
 use veydan_sync::{LocalDir, S3Config, S3Storage, Storage, WebDavConfig, WebDavStorage};
 
 pub const DEFAULT_INTERVAL_SEC: u64 = 60;
-const MIN_INTERVAL_SEC: u64 = 10;
+const MIN_INTERVAL_SEC: u64 = 1;
+const MAX_INTERVAL_SEC: u64 = 86400;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct S3Settings {
@@ -136,7 +137,8 @@ pub async fn save_config(db: &Pool<Sqlite>, cfg: &SyncConfig) -> CmdResult<()> {
     set_setting(db, "sync_webdav_url", &cfg.webdav.url).await?;
     set_setting(db, "sync_webdav_username", &cfg.webdav.username).await?;
     set_setting(db, "sync_webdav_password", &cfg.webdav.password).await?;
-    set_setting(db, "sync_interval_sec", &cfg.interval_sec.max(MIN_INTERVAL_SEC).to_string()).await?;
+    let interval = cfg.interval_sec.clamp(MIN_INTERVAL_SEC, MAX_INTERVAL_SEC);
+    set_setting(db, "sync_interval_sec", &interval.to_string()).await?;
     Ok(())
 }
 
@@ -162,7 +164,16 @@ pub async fn save_binding(db: &Pool<Sqlite>, b: &VaultBinding) -> CmdResult<()> 
 }
 
 pub async fn clear_binding(db: &Pool<Sqlite>) -> CmdResult<()> {
-    for key in ["sync_vault_id", "sync_vault_key", "sync_own_seq", "sync_own_head", "sync_hlc", "sync_last_run", "sync_last_error"] {
+    for key in [
+        "sync_vault_id",
+        "sync_vault_key",
+        "sync_own_seq",
+        "sync_own_head",
+        "sync_hlc",
+        "sync_last_run",
+        "sync_last_started",
+        "sync_last_error",
+    ] {
         delete_setting(db, key).await?;
     }
     Ok(())

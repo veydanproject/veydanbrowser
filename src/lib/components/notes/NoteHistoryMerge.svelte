@@ -2,19 +2,20 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
-  import { api } from '$lib/api';
+  import type { MergeResult } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
 
   interface Props {
-    noteId: string;
-    historyId: string;
+    /** Fetches the merge; history merge and sync conflicts share this UI */
+    load: () => Promise<MergeResult>;
+    /** Name of the "theirs" side: history version or other device */
+    theirsLabel?: string;
+    theirsShort?: string;
     onresolved: (content: string) => void;
     oncancel: () => void;
   }
 
-  let { noteId, historyId, onresolved, oncancel }: Props = $props();
-
-  type BlockKind = 'normal' | 'conflict';
+  let { load, theirsLabel = 'Версия из истории', theirsShort = 'Из истории', onresolved, oncancel }: Props = $props();
 
   interface NormalBlock {
     kind: 'normal';
@@ -44,64 +45,18 @@
     loading = true;
     error = '';
     try {
-      const result = await api.notes.historyMerge(noteId, historyId);
+      const result = await load();
       hasConflicts = result.has_conflicts;
-      blocks = parseBlocks(result.content);
+      blocks = result.blocks.map((b) =>
+        b.kind === 'normal'
+          ? { kind: 'normal', text: b.text }
+          : { kind: 'conflict', current: b.ours, history: b.theirs, choice: null },
+      );
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
-  }
-
-  function parseBlocks(content: string): Block[] {
-    if (!content.includes('<<<<<<<')) {
-      return [{ kind: 'normal', text: content }];
-    }
-
-    const result: Block[] = [];
-    const lines = content.split('\n');
-    let i = 0;
-
-    while (i < lines.length) {
-      if (lines[i].startsWith('<<<<<<<')) {
-        // Start of conflict block
-        let currentLines: string[] = [];
-        let historyLines: string[] = [];
-        let inHistory = false;
-        i++;
-        while (i < lines.length && !lines[i].startsWith('>>>>>>>')) {
-          if (lines[i].startsWith('=======')) {
-            inHistory = true;
-          } else if (inHistory) {
-            historyLines.push(lines[i]);
-          } else {
-            currentLines.push(lines[i]);
-          }
-          i++;
-        }
-        i++; // skip >>>>>>>
-        result.push({
-          kind: 'conflict',
-          current: currentLines.join('\n'),
-          history: historyLines.join('\n'),
-          choice: null,
-        });
-      } else {
-        // Normal text — accumulate until next conflict marker
-        const normalLines: string[] = [];
-        while (i < lines.length && !lines[i].startsWith('<<<<<<<')) {
-          normalLines.push(lines[i]);
-          i++;
-        }
-        const text = normalLines.join('\n');
-        if (text) {
-          result.push({ kind: 'normal', text });
-        }
-      }
-    }
-
-    return result;
   }
 
   function setChoice(index: number, choice: 'current' | 'history' | 'both') {
@@ -119,6 +74,7 @@
     blocks.filter(b => b.kind === 'conflict' && b.choice === null).length
   );
 
+  /** Block texts keep their trailing newlines, so plain concatenation rebuilds the file. */
   function buildResult(): string {
     return blocks
       .map(b => {
@@ -126,8 +82,8 @@
         switch (b.choice) {
           case 'current': return b.current;
           case 'history': return b.history;
-          case 'both': return `${b.current}\n${b.history}`;
-          default: return `<<<<<<< Current\n${b.current}\n=======\n${b.history}\n>>>>>>> History`;
+          case 'both': return b.current + b.history;
+          default: return b.current;
         }
       })
       .join('');
@@ -185,7 +141,7 @@
         {/if}
         <span class="legend">
           <span class="l-current">Текущая</span>
-          <span class="l-history">Из истории</span>
+          <span class="l-history">{theirsShort}</span>
         </span>
       </div>
 
@@ -222,13 +178,13 @@
                   class:active={block.choice === 'history'}
                   onclick={() => setChoice(i, 'history')}
                 >
-                  Принять историю
+                  Принять: {theirsShort}
                 </button>
               </div>
               <div class="conflict-side side-history" class:chosen={block.choice === 'history' || block.choice === 'both'}>
                 <div class="side-label">
                   <Icon name="clock" size={10} />
-                  Версия из истории
+                  {theirsLabel}
                 </div>
                 <pre class="side-content">{block.history || '(пусто)'}</pre>
               </div>

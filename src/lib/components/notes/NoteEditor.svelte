@@ -3,6 +3,7 @@
 
 <script lang="ts">
   import { notesStore } from '$lib/store/notes.svelte';
+  import { syncStore } from '$lib/store/sync.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { api } from '$lib/api';
@@ -21,7 +22,7 @@
   import { wordCount } from '$lib/markdown';
   import { pasteHasHiddenFiles } from '$lib/notes-files';
   import { t, locale } from '$lib/i18n';
-  import { relTime } from '$lib/utils';
+  import { relTime, formatError } from '$lib/utils';
   import { onMount, tick, untrack } from 'svelte';
 
   interface Props {
@@ -55,6 +56,8 @@
   let showDeleteConfirm = $state(false);
   let showHistory = $state(false);
   let mergeHistoryId = $state<string | null>(null);
+  let showSyncConflict = $state(false);
+  const syncConflict = $derived(!!note && (syncStore.status?.conflicts ?? []).some((c) => c.note_id === note.id));
 
   // ── Editing modes: `rich` (WYSIWYG, default) and `source` (raw Markdown) ─────
   const MODE_KEY = 'notes-editor-mode';
@@ -292,14 +295,24 @@
   onMount(() => {
     if (!('__TAURI_INTERNALS__' in window)) return;
     let unlisten: (() => void) | null = null;
+    let unlistenSync: (() => void) | null = null;
+    let unlistenStatus: (() => void) | null = null;
     let disposed = false;
+    // Sync status drives the conflict banner
+    void syncStore.listen().then((un) => { if (disposed) un(); else unlistenStatus = un; });
     void import('@tauri-apps/api/webview').then(({ getCurrentWebview }) =>
       getCurrentWebview().onDragDropEvent((event) => {
         if (event.payload.type !== 'drop') return;
         void onOsDrop(event.payload.paths, event.payload.position.x, event.payload.position.y);
       }),
     ).then((un) => { if (disposed) un(); else unlisten = un; });
-    return () => { disposed = true; unlisten?.(); };
+    // Attachments pulled by vault sync for the open note
+    void import('@tauri-apps/api/event').then(({ listen }) =>
+      listen<string>('notes://attachments-changed', (event) => {
+        if (event.payload === note?.id) void loadAttachments();
+      }),
+    ).then((un) => { if (disposed) un(); else unlistenSync = un; });
+    return () => { disposed = true; unlisten?.(); unlistenSync?.(); unlistenStatus?.(); };
   });
 
   // Resizable history panel
@@ -420,6 +433,20 @@
     showHistory = false;
   }
 
+  async function onSyncConflictResolved(mergedContent: string) {
+    if (!note) return;
+    const id = note.id;
+    try {
+      await api.sync.conflictResolve(id, mergedContent);
+      const fresh = await api.notes.get(id);
+      onHistoryRestore(fresh);
+      await syncStore.refresh();
+    } catch (e) {
+      syncStore.error = formatError(e);
+    }
+    showSyncConflict = false;
+  }
+
   function onTitleChange() {
     notesStore.onTitleChange(titleValue);
   }
@@ -462,6 +489,16 @@
         <div class="banner-actions">
           <button onclick={() => notesStore.recoverDraft(note!.id)}>{$t('note_draft_recover')}</button>
           <button onclick={() => notesStore.discardDraft(note!.id)}>{$t('note_draft_discard')}</button>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Sync conflict banner: the file stays untouched until resolved -->
+    {#if syncConflict}
+      <div class="banner banner-warn">
+        <span>{$t('note_sync_conflict')}</span>
+        <div class="banner-actions">
+          <button onclick={() => (showSyncConflict = true)}>{$t('note_sync_conflict_resolve')}</button>
         </div>
       </div>
     {/if}
@@ -708,11 +745,21 @@
     {/if}
 
     {#if mergeHistoryId}
+      {@const noteId = note.id}
+      {@const historyId = mergeHistoryId}
       <NoteHistoryMerge
-        noteId={note.id}
-        historyId={mergeHistoryId}
+        load={() => api.notes.historyMerge(noteId, historyId)}
         onresolved={onMergeResolved}
         oncancel={() => (mergeHistoryId = null)}
+      />
+    {:else if showSyncConflict}
+      {@const noteId = note.id}
+      <NoteHistoryMerge
+        load={() => api.sync.conflictGet(noteId)}
+        theirsLabel={$t('note_sync_conflict_remote')}
+        theirsShort={$t('note_sync_conflict_remote_short')}
+        onresolved={onSyncConflictResolved}
+        oncancel={() => (showSyncConflict = false)}
       />
     {/if}
   </div>

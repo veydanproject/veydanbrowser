@@ -4,28 +4,34 @@
 //! Sync module (beta): notes replicated through an E2E-encrypted vault that
 //! lives in a plain folder, an S3 bucket or a WebDAV collection.
 //!
-//! - `config` — settings + storage adapter factory
-//! - `state`  — persistence of log positions and per-note state
-//! - `notes`  — notes as sync entity (push / pull / merge)
+//! - `config`      — settings + storage adapter factory
+//! - `state`       — persistence of log positions and per-entity state
+//! - `notes`       — notes as sync entity (push / pull / merge)
+//! - `attachments` — note attachments as sync entity (push / pull, LWW)
 //!
 //! Nothing here runs unless `sync_enabled` is "1" and a vault was joined.
 
+mod attachments;
 mod config;
 mod notes;
 mod state;
 
 pub use config::SyncConfig;
 
+use crate::commands::notes::MergeResult;
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use chrono::Utc;
 use config::{build_storage, load_binding, load_config, VaultBinding};
 use serde::Serialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use veydan_sync::{Engine, HlcClock, Probe, Vmk};
 
-const TICK_SEC: u64 = 10;
+const TICK_SEC: u64 = 1;
 const COMPACT_AFTER_CHUNKS: usize = 64;
 const TOMBSTONE_TTL_MS: u64 = 180 * 24 * 60 * 60 * 1000;
 pub const EVENT_STATUS: &str = "sync://status";
@@ -34,6 +40,8 @@ pub const EVENT_STATUS: &str = "sync://status";
 #[derive(Default)]
 pub struct SyncManager {
     running: AtomicBool,
+    /// Attachment hashes keyed by path, valid while mtime and size match.
+    attachment_hashes: Mutex<HashMap<PathBuf, attachments::FileStamp>>,
 }
 
 struct RunningGuard<'a>(&'a AtomicBool);
@@ -161,6 +169,28 @@ pub async fn sync_run_now(app: AppHandle, state: tauri::State<'_, AppState>) -> 
     status(&state).await
 }
 
+/// Structured merge blocks for the conflict UI.
+#[tauri::command]
+pub async fn sync_conflict_get(note_id: String, state: tauri::State<'_, AppState>) -> CmdResult<MergeResult> {
+    notes::conflict_merge(&state, &note_id).await
+}
+
+/// Store the resolved text and push it right away.
+#[tauri::command]
+pub async fn sync_conflict_resolve(
+    note_id: String,
+    content: String,
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<SyncStatus> {
+    notes::resolve_conflict(&state, &note_id, content).await?;
+    let _ = app.emit(EVENT_STATUS, ());
+    if !state.sync.running.load(Ordering::SeqCst) {
+        run_cycle(&app).await?;
+    }
+    status(&state).await
+}
+
 async fn status(state: &AppState) -> CmdResult<SyncStatus> {
     let db = &state.db;
     let cfg = load_config(db).await;
@@ -194,6 +224,9 @@ pub async fn run_cycle(app: &AppHandle) -> CmdResult<()> {
     }
     let _guard = RunningGuard(&state.sync.running);
     let db = &state.db;
+    config::set_setting(db, "sync_last_started", &Utc::now().to_rfc3339()).await?;
+    // Let the UI show the running state for scheduled cycles too.
+    let _ = app.emit(EVENT_STATUS, ());
 
     let result = cycle_inner(app, &state).await;
     let now = Utc::now().to_rfc3339();
@@ -223,11 +256,17 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     let (mut local, last_hlc) = state::load_local_state(db).await?;
     let mut clock = HlcClock::new(device.clone(), last_hlc.as_ref());
 
-    // Push
+    // Push: attachments first so a note never references a missing file.
+    let attachments = attachments::collect_local_changes(&engine, state, &mut clock).await?;
     let changes = notes::collect_local_changes(&engine, state, &mut clock).await?;
-    if !changes.ops.is_empty() {
-        engine.push(&mut local, changes.ops).await.map_err(AppError::other)?;
+    let mut ops = attachments.ops;
+    ops.extend(changes.ops);
+    if !ops.is_empty() {
+        engine.push(&mut local, ops).await.map_err(AppError::other)?;
         state::save_own_state(db, &local, &clock.last()).await?;
+        for st in &attachments.states {
+            state::save_attachment_state(db, st).await?;
+        }
         for st in &changes.states {
             state::save_note_state(db, st).await?;
         }
@@ -238,14 +277,16 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     for op in &pulled.ops {
         clock.observe(&op.hlc);
     }
+    let att_outcome = attachments::apply_remote(&engine, app, &pulled.ops).await?;
     let outcome = notes::apply_remote(&engine, app, pulled.ops, &mut clock, &mut local).await?;
     state::save_own_state(db, &local, &clock.last()).await?;
     let mut warnings: Vec<String> = pulled.errors.into_iter().map(|(peer, e)| format!("{peer}: {e}")).collect();
-    match &outcome.retry {
+    match outcome.retry.as_ref().or(att_outcome.retry.as_ref()) {
         None => state::save_peer_heads(db, &local).await?,
         Some(reason) => warnings.push(format!("retry next cycle: {reason}")),
     }
     notes::finish_apply(app, &outcome).await?;
+    attachments::notify(app, &att_outcome);
 
     // Compact own log once it grows past the threshold.
     if engine.own_chunk_count().await.map_err(AppError::other)? > COMPACT_AFTER_CHUNKS {
@@ -265,17 +306,23 @@ pub fn start_sync_scheduler(app: AppHandle) {
         loop {
             ticker.tick().await;
             let state = app.state::<AppState>();
-            let cfg = load_config(&state.db).await;
-            if !cfg.enabled || load_binding(&state.db).await.is_none() {
-                continue;
-            }
             if state.sync.running.load(Ordering::SeqCst) {
                 continue;
             }
-            let due = match config::get_setting(&state.db, "sync_last_run").await {
+            let db = &state.db;
+            if config::get_setting(db, "sync_enabled").await.as_deref() != Some("1") || load_binding(db).await.is_none() {
+                continue;
+            }
+            let interval_ms = config::get_setting(db, "sync_interval_sec")
+                .await
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(config::DEFAULT_INTERVAL_SEC as i64)
+                * 1000;
+            // Measured from the last cycle start so a failed cycle does not retry every tick.
+            let due = match config::get_setting(db, "sync_last_started").await {
                 None => true,
                 Some(last) => chrono::DateTime::parse_from_rfc3339(&last)
-                    .map(|t| (Utc::now() - t.with_timezone(&Utc)).num_seconds() >= cfg.interval_sec as i64)
+                    .map(|t| (Utc::now() - t.with_timezone(&Utc)).num_milliseconds() >= interval_ms)
                     .unwrap_or(true),
             };
             if due {

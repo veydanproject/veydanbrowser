@@ -17,6 +17,7 @@
   import NoteEditor from '$lib/components/notes/NoteEditor.svelte';
   import NoteFilters from '$lib/components/notes/NoteFilters.svelte';
   import NoteTransferDialog, { type TransferMode } from '$lib/components/notes/NoteTransferDialog.svelte';
+  import NoteSyncButton from '$lib/components/notes/NoteSyncButton.svelte';
   import { t } from '$lib/i18n';
 
   const standaloneNotes = isNotesWindow();
@@ -252,9 +253,7 @@
           onexportfolder={exportFolder}
         />
         <div class="sidebar-footer">
-          <button class="icon-btn" title={$t('notes_btn_sync')} onclick={() => api.notes.sync()}>
-            <Icon name="refresh-cw" size={14} />
-          </button>
+          <NoteSyncButton />
           <button class="icon-btn" title={$t('notes_btn_open_folder')} onclick={() => api.notes.openFolder()}>
             <Icon name="folder-open" size={14} />
           </button>
