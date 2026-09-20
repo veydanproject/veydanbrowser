@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 import { api } from '$lib/api';
-import type { SyncStatus } from '$lib/api';
+import type { SyncProgress, SyncStatus } from '$lib/api';
 import { formatError } from '$lib/utils';
 import { profilesStore } from './profiles.svelte';
 import { proxiesStore } from './proxies.svelte';
@@ -40,15 +40,18 @@ const reloaders: Record<string, () => Promise<unknown>> = {
 /** Vault sync status shared by the Notes sync button and Settings. */
 class SyncStore {
   status = $state<SyncStatus | null>(null);
+  progress = $state<SyncProgress | null>(null);
   busy = $state(false);
   error = $state('');
   private _unlisten: (() => void) | null = null;
+  private _unlistenProgress: (() => void) | null = null;
   private _listeners = 0;
 
   async refresh() {
     if (!isTauri) return;
     try {
       this.status = await api.sync.status();
+      if (!this.status?.running) this.progress = null;
     } catch {}
   }
 
@@ -60,12 +63,17 @@ class SyncStore {
     if (!this._unlisten) {
       const { listen } = await import('@tauri-apps/api/event');
       this._unlisten = await listen('sync://status', () => void this.refresh());
+      this._unlistenProgress = await listen<SyncProgress>('sync://progress', (e) => {
+        this.progress = e.payload;
+      });
     }
     return () => {
       this._listeners--;
-      if (this._listeners <= 0 && this._unlisten) {
-        this._unlisten();
+      if (this._listeners <= 0) {
+        this._unlisten?.();
         this._unlisten = null;
+        this._unlistenProgress?.();
+        this._unlistenProgress = null;
       }
     };
   }

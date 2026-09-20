@@ -4,7 +4,7 @@
 //! S3-compatible adapter (AWS S3, Cloudflare R2, MinIO, Backblaze B2) with
 //! hand-rolled SigV4 signing. Only four operations are needed.
 
-use crate::storage::{is_noise_key, Storage};
+use crate::storage::{http_client, is_noise_key, Storage};
 use crate::{sha256_hex, Result, SyncError};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -57,7 +57,7 @@ impl S3Storage {
             let vhost = format!("{}.{}", cfg.bucket, host);
             base.set_host(Some(&vhost)).map_err(|e| SyncError::Storage(e.to_string()))?;
         }
-        Ok(Self { cfg, client: Client::new(), base })
+        Ok(Self { cfg, client: http_client()?, base })
     }
 
     fn full_key(&self, key: &str) -> String {

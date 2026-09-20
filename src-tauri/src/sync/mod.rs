@@ -6,9 +6,9 @@
 //!
 //! - `config`      — settings + storage adapter factory
 //! - `state`       — persistence of log positions and per-entity state
-//! - `notes`       — notes as sync entity (push / pull / merge)
+//! - `notes`       — note files plus tags, folders, smart views and pin/archive
 //! - `attachments` — note attachments as sync entity (push / pull, LWW)
-//! - `rows`        — table rows (profiles, proxies, ssh, ...) as sync entities (LWW)
+//! - `rows`        — app table rows (profiles, proxies, ssh, ...) as sync entities (LWW)
 //! - `profile_files` — Firefox profile directories: lease + file snapshots
 //!
 //! Nothing here runs unless `sync_enabled` is "1" and a vault was joined.
@@ -38,6 +38,36 @@ const TICK_SEC: u64 = 1;
 const COMPACT_AFTER_CHUNKS: usize = 64;
 const TOMBSTONE_TTL_MS: u64 = 180 * 24 * 60 * 60 * 1000;
 pub const EVENT_STATUS: &str = "sync://status";
+pub const EVENT_PROGRESS: &str = "sync://progress";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncProgress {
+    pub phase: String,
+    pub percent: u32,
+    pub current: u32,
+    pub total: u32,
+    pub detail: String,
+}
+
+pub(crate) fn emit_progress(app: &AppHandle, phase: &str, percent: u32, current: u32, total: u32, detail: &str) {
+    let _ = app.emit(
+        EVENT_PROGRESS,
+        SyncProgress {
+            phase: phase.to_string(),
+            percent: percent.min(100),
+            current,
+            total,
+            detail: detail.to_string(),
+        },
+    );
+}
+
+pub(crate) fn progress_pct(lo: u32, hi: u32, current: u32, total: u32) -> u32 {
+    if total == 0 || hi <= lo {
+        return lo;
+    }
+    lo + (hi - lo).saturating_mul(current) / total
+}
 
 /// Guards against overlapping cycles (manual + scheduled).
 #[derive(Default)]
@@ -79,6 +109,7 @@ pub struct SyncStatus {
     pub peers: usize,
     pub last_run: Option<String>,
     pub last_error: Option<String>,
+    pub last_warning: Option<String>,
     pub conflicts: Vec<ConflictInfo>,
     /// Profiles whose files diverged (id, name).
     pub profile_conflicts: Vec<ConflictInfo>,
@@ -219,7 +250,7 @@ pub async fn sync_profile_files_take_remote(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<SyncStatus> {
     let engine = open_engine(&state).await?;
-    profile_files::take_remote(&engine, &state, &profile_id).await?;
+    profile_files::take_remote(&engine, &state, &app, &profile_id).await?;
     let _ = app.emit(EVENT_STATUS, ());
     status(&state).await
 }
@@ -271,6 +302,7 @@ async fn status(state: &AppState) -> CmdResult<SyncStatus> {
         peers: local.peers.len(),
         last_run: config::get_setting(db, "sync_last_run").await,
         last_error: config::get_setting(db, "sync_last_error").await.filter(|s| !s.is_empty()),
+        last_warning: config::get_setting(db, "sync_last_warning").await.filter(|s| !s.is_empty()),
         conflicts,
         profile_conflicts,
         profile_leases,
@@ -332,7 +364,7 @@ pub async fn before_profile_launch(app: &AppHandle, profile_id: &str, force: boo
         }
         if profile_files::has_pending(&state, profile_id).await? {
             let engine = open_engine(&state).await?;
-            profile_files::apply_pending(&engine, &state, profile_id).await?;
+            profile_files::apply_pending(&engine, &state, app, profile_id).await?;
         }
     }
     profile_files::acquire_lease(&state, profile_id).await?;
@@ -366,15 +398,19 @@ pub async fn run_cycle(app: &AppHandle) -> CmdResult<()> {
     // Let the UI show the running state for scheduled cycles too.
     let _ = app.emit(EVENT_STATUS, ());
 
+    emit_progress(app, "collect", 0, 0, 0, "");
     let result = cycle_inner(app, &state).await;
     let now = Utc::now().to_rfc3339();
     match &result {
         Ok(warnings) => {
             config::set_setting(db, "sync_last_run", &now).await?;
-            config::set_setting(db, "sync_last_error", &warnings.join("; ")).await?;
+            config::set_setting(db, "sync_last_error", "").await?;
+            config::set_setting(db, "sync_last_warning", &warnings.join("; ")).await?;
+            emit_progress(app, "done", 100, 0, 0, "");
         }
         Err(e) => {
             config::set_setting(db, "sync_last_error", &e.to_string()).await?;
+            emit_progress(app, "error", 0, 0, 0, &e.to_string());
         }
     }
     let _ = app.emit(EVENT_STATUS, ());
@@ -391,22 +427,24 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     let (mut local, last_hlc) = state::load_local_state(db).await?;
     let mut clock = HlcClock::new(engine.device_id().to_string(), last_hlc.as_ref());
 
-    // Push: attachments first so a note never references a missing file.
-    let table_rows = rows::collect_local_changes(state, &mut clock).await?;
+    // Data first so a stuck profile upload cannot block notes.
+    emit_progress(app, "collect", 8, 0, 0, "");
+    let note_rows = rows::collect_local_changes(state, &mut clock, rows::RowScope::Notes).await?;
+    emit_progress(app, "collect", 12, 0, 0, "");
     let attachments = attachments::collect_local_changes(&engine, state, &mut clock).await?;
+    emit_progress(app, "collect", 16, 0, 0, "");
     let changes = notes::collect_local_changes(&engine, state, &mut clock).await?;
-    let files = match cfg.profile_files {
-        true => profile_files::collect_local_changes(&engine, state, &mut clock).await?,
-        false => profile_files::LocalChanges { ops: Vec::new(), states: Vec::new() },
-    };
-    let mut ops = table_rows.ops;
+    emit_progress(app, "collect", 18, 0, 0, "");
+    let table_rows = rows::collect_local_changes(state, &mut clock, rows::RowScope::App).await?;
+    let mut ops = note_rows.ops;
     ops.extend(attachments.ops);
     ops.extend(changes.ops);
-    ops.extend(files.ops);
+    ops.extend(table_rows.ops);
+    emit_progress(app, "push", 22, 0, 0, "");
     if !ops.is_empty() {
         engine.push(&mut local, ops).await.map_err(AppError::other)?;
         state::save_own_state(db, &local, &clock.last()).await?;
-        for st in &table_rows.states {
+        for st in note_rows.states.iter().chain(&table_rows.states) {
             state::save_row_state(db, st).await?;
         }
         for st in &attachments.states {
@@ -415,51 +453,82 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
         for st in &changes.states {
             state::save_note_state(db, st).await?;
         }
-        for st in &files.states {
-            state::save_profile_files_state(db, st).await?;
-        }
     }
 
-    // Pull
+    emit_progress(app, "pull", 30, 0, 0, "");
     let pulled = engine.pull(&mut local).await.map_err(AppError::other)?;
     for op in &pulled.ops {
         clock.observe(&op.hlc);
     }
     config::set_setting(db, "sync_last_applied", &pulled.ops.len().to_string()).await?;
+    emit_progress(app, "apply", 40, 0, 0, "");
     let att_outcome = attachments::apply_remote(&engine, app, &pulled.ops).await?;
+    emit_progress(app, "apply", 44, 0, 0, "");
+    let note_catalog = rows::apply_remote(app, &pulled.ops, rows::RowScope::NotesCatalog).await?;
+    emit_progress(app, "apply", 48, 0, 0, "");
     let outcome = notes::apply_remote(&engine, app, pulled.ops.clone(), &mut clock, &mut local).await?;
-    // Reindex first: note flags need the note rows that new files create.
     notes::finish_apply(app, &outcome).await?;
-    let rows_outcome = rows::apply_remote(app, &pulled.ops).await?;
-    // Files last: a snapshot needs the profile row from `rows`.
-    let files_outcome = match cfg.profile_files {
-        true => profile_files::apply_remote(&engine, app, &pulled.ops).await?,
-        false => profile_files::ApplyOutcome::default(),
-    };
-    state::save_own_state(db, &local, &clock.last()).await?;
+    emit_progress(app, "apply", 52, 0, 0, "");
+    let note_meta = rows::apply_remote(app, &pulled.ops, rows::RowScope::NotesMeta).await?;
+    emit_progress(app, "apply", 54, 0, 0, "");
+    let rows_outcome = rows::apply_remote(app, &pulled.ops, rows::RowScope::App).await?;
+    attachments::notify(app, &att_outcome);
+    let mut notes_rows_out = note_catalog;
+    notes_rows_out.changed.extend(note_meta.changed.iter().cloned());
+    if notes_rows_out.retry.is_none() {
+        notes_rows_out.retry = note_meta.retry.clone();
+    }
+    rows::finish_apply(app, &notes_rows_out).await;
+    rows::finish_apply(app, &rows_outcome).await;
+
     let mut warnings: Vec<String> = pulled.errors.into_iter().map(|(peer, e)| format!("{peer}: {e}")).collect();
+    let mut files_retry = None;
+    if cfg.profile_files {
+        emit_progress(app, "profiles_up", 55, 0, 0, "");
+        match profile_files::collect_local_changes(&engine, state, &mut clock, app).await {
+            Ok(files) => {
+                if !files.ops.is_empty() {
+                    if let Err(e) = engine.push(&mut local, files.ops).await {
+                        warnings.push(format!("profiles upload: {e}"));
+                    } else {
+                        state::save_own_state(db, &local, &clock.last()).await?;
+                        for st in &files.states {
+                            state::save_profile_files_state(db, st).await?;
+                        }
+                    }
+                }
+            }
+            Err(e) => warnings.push(format!("profiles upload: {e}")),
+        }
+        emit_progress(app, "profiles_down", 78, 0, 0, "");
+        match profile_files::apply_remote(&engine, app, &pulled.ops).await {
+            Ok(o) => files_retry = o.retry,
+            Err(e) => warnings.push(format!("profiles download: {e}")),
+        }
+    }
+
+    state::save_own_state(db, &local, &clock.last()).await?;
     let retry = outcome
         .retry
         .as_ref()
         .or(att_outcome.retry.as_ref())
+        .or(notes_rows_out.retry.as_ref())
         .or(rows_outcome.retry.as_ref())
-        .or(files_outcome.retry.as_ref());
+        .or(files_retry.as_ref());
     let clean = retry.is_none() && warnings.is_empty();
     match retry {
         None => state::save_peer_heads(db, &local).await?,
         Some(reason) => warnings.push(format!("retry next cycle: {reason}")),
     }
-    attachments::notify(app, &att_outcome);
-    rows::finish_apply(app, &rows_outcome).await;
 
-    // Compact own log once it grows past the threshold.
     if engine.own_chunk_count().await.map_err(AppError::other)? > COMPACT_AFTER_CHUNKS {
+        emit_progress(app, "compact", 94, 0, 0, "");
         let now_ms = Utc::now().timestamp_millis().max(0) as u64;
         engine.compact(&local, now_ms, TOMBSTONE_TTL_MS).await.map_err(AppError::other)?;
     }
 
-    // Blob GC only after a fully clean cycle, so every reference was seen.
     if clean && gc::due(db).await {
+        emit_progress(app, "gc", 97, 0, 0, "");
         if let Err(e) = gc::run(&engine, db).await {
             warnings.push(format!("gc skipped: {e}"));
         }

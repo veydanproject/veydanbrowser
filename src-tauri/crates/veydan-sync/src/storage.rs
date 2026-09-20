@@ -6,6 +6,25 @@
 use crate::{Result, SyncError};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// HTTP client for S3 / WebDAV: fail instead of hanging forever.
+pub fn http_client() -> Result<reqwest::Client> {
+    let builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(90));
+    #[cfg(target_os = "android")]
+    let builder = builder.use_preconfigured_tls(android_tls_config());
+    builder.build().map_err(|e| SyncError::Storage(e.to_string()))
+}
+
+/// Android has no usable system root store for rustls without a Java bridge.
+#[cfg(target_os = "android")]
+fn android_tls_config() -> rustls::ClientConfig {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth()
+}
 
 /// Minimal storage contract. Keys are `/`-separated, relative to the vault root.
 #[async_trait]

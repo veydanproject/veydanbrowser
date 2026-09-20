@@ -3,7 +3,7 @@
 
 //! WebDAV adapter (Nextcloud, Yandex Disk, generic servers) with basic auth.
 
-use crate::storage::{is_noise_key, Storage};
+use crate::storage::{http_client, is_noise_key, Storage};
 use crate::{Result, SyncError};
 use async_trait::async_trait;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
@@ -43,7 +43,7 @@ impl WebDavStorage {
             let p = format!("{}/", base.path());
             base.set_path(&p);
         }
-        Ok(Self { cfg, client: Client::new(), base, known_dirs: Mutex::new(HashSet::new()) })
+        Ok(Self { cfg, client: http_client()?, base, known_dirs: Mutex::new(HashSet::new()) })
     }
 
     fn url_for(&self, key: &str) -> Url {
@@ -109,19 +109,20 @@ impl WebDavStorage {
             return Err(Self::fail(resp, "propfind").await);
         }
         let body = resp.bytes().await?;
-        let base_path = self.base.path().to_string();
-        let self_path = format!("{}{}", base_path, if dir.is_empty() { String::new() } else { format!("{dir}/") });
+        let base_norm = decode_path(self.base.path());
+        let self_norm = if dir.is_empty() {
+            base_norm.clone()
+        } else {
+            format!("{base_norm}/{dir}")
+        };
 
         let mut out = Vec::new();
         for (href, is_dir) in parse_multistatus(&body)? {
-            let decoded = percent_decode_str(&href).decode_utf8_lossy().to_string();
-            // href may be absolute URL or absolute path
-            let path = Url::parse(&decoded).map(|u| u.path().to_string()).unwrap_or(decoded);
-            let path_norm = path.trim_end_matches('/');
-            if path_norm == self_path.trim_end_matches('/') {
+            let path_norm = decode_path(&href_path(&href));
+            if path_norm == self_norm {
                 continue;
             }
-            let Some(rel) = path_norm.strip_prefix(&base_path) else { continue };
+            let Some(rel) = path_norm.strip_prefix(&base_norm) else { continue };
             let rel = rel.trim_matches('/').to_string();
             if rel.is_empty() || is_noise_key(&rel) {
                 continue;
@@ -168,6 +169,16 @@ fn parse_multistatus(xml: &[u8]) -> Result<Vec<(String, bool)>> {
         }
     }
     Ok(out)
+}
+
+/// Path of an href that may be a full URL or an absolute path.
+fn href_path(href: &str) -> String {
+    Url::parse(href).map(|u| u.path().to_string()).unwrap_or_else(|_| href.to_string())
+}
+
+/// Compare WebDAV paths after percent-decoding so Cyrillic collections match.
+fn decode_path(p: &str) -> String {
+    percent_decode_str(p).decode_utf8_lossy().trim_end_matches('/').to_string()
 }
 
 #[async_trait]

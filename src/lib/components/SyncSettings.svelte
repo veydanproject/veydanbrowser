@@ -6,6 +6,7 @@
   import { t } from '$lib/i18n';
   import { api } from '$lib/api';
   import type { SyncConfig, SyncStatus } from '$lib/api';
+  import { syncStore } from '$lib/store/sync.svelte';
   import { formatError } from '$lib/utils';
   import CustomSelect from '$lib/components/CustomSelect.svelte';
   import Icon from '$lib/Icon.svelte';
@@ -49,6 +50,22 @@
   ]);
   const presets = [1, 5, 10, 30, 60, 300, 900, 3600];
   const remoteFastWarn = $derived(cfg.backend !== 'folder' && cfg.interval_sec < 60);
+  const progress = $derived(syncStore.progress);
+  const progressText = $derived.by(() => {
+    const p = progress;
+    if (!p) return '';
+    const key = `settings_sync_phase_${p.phase}` as 'settings_sync_phase_collect';
+    const phase = $t(key);
+    if (p.total > 0) {
+      return $t('settings_sync_progress_files', {
+        phase,
+        current: String(p.current),
+        total: String(p.total),
+        percent: String(p.percent),
+      });
+    }
+    return $t('settings_sync_progress', { phase, percent: String(p.percent) });
+  });
 
   function unitFor(sec: number): 'sec' | 'min' {
     return sec >= 60 && sec % 60 === 0 ? 'min' : 'sec';
@@ -171,6 +188,13 @@
     if (isTauri) {
       const { listen } = await import('@tauri-apps/api/event');
       unlisten = await listen('sync://status', () => void refreshStatus());
+      void syncStore.listen().then((fn) => {
+        const prev = unlisten;
+        unlisten = () => {
+          prev?.();
+          fn();
+        };
+      });
     }
   });
 
@@ -265,7 +289,7 @@
     <button class="btn btn-primary btn-sm" disabled={busy} onclick={save}>{$t('settings_backup_save')}</button>
     {#if status?.joined}
       <button class="btn btn-ghost btn-sm" disabled={busy || !isTauri || status.running} onclick={syncNow}>
-        {status.running ? $t('settings_sync_running') : $t('settings_sync_now')}
+        {status.running ? (progress ? `${progress.percent}%` : $t('settings_sync_running')) : $t('settings_sync_now')}
       </button>
       <button class="btn btn-ghost btn-sm" disabled={busy} onclick={() => (confirmLeave = true)}>{$t('settings_sync_leave')}</button>
     {:else}
@@ -296,6 +320,16 @@
     </div>
   {/if}
 
+  {#if status?.running && progress}
+    <div class="progress-wrap">
+      <div class="progress-bar"><div class="progress-fill" style="width: {progress.percent}%"></div></div>
+      <span class="progress-label">
+        {progressText}
+        {#if progress.detail}<span class="progress-detail">{progress.detail}</span>{/if}
+      </span>
+    </div>
+  {/if}
+
   {#if info}<p class="ok">{info}</p>{/if}
   {#if error}<p class="error">{error}</p>{/if}
 
@@ -309,6 +343,9 @@
         <div class="trow"><span class="tlabel">{$t('settings_sync_last_run')}</span><span class="tvalue">{status.last_run ? new Date(status.last_run).toLocaleString() : $t('settings_backup_never')}</span></div>
         {#if status.last_error}
           <div class="trow"><span class="tlabel">{$t('settings_sync_last_error')}</span><span class="tvalue error">{status.last_error}</span></div>
+        {/if}
+        {#if status.last_warning}
+          <div class="trow"><span class="tlabel">{$t('settings_sync_last_warning')}</span><span class="tvalue warn">{status.last_warning}</span></div>
         {/if}
         {#if status.blobs_total !== null}
           <div class="trow" title={$t('settings_sync_gc_hint')}>
@@ -384,6 +421,12 @@
   .hint { font-size: var(--fs-sm); color: var(--text-dim); margin: 0; }
   .ok { font-size: var(--fs-sm); color: var(--success-text); margin: 0; }
   .error { font-size: var(--fs-sm); color: var(--danger-text); margin: 0; }
+  .tvalue.warn { color: var(--warn-text); }
+  .progress-wrap { display: flex; flex-direction: column; gap: 0.3rem; }
+  .progress-bar { height: 6px; background: var(--surface-3); border-radius: 999px; overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.2s ease; }
+  .progress-label { font-size: var(--fs-sm); color: var(--text-body); }
+  .progress-detail { display: block; font-family: var(--font-mono); color: var(--text-dim); word-break: break-all; }
   .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); }
   .toggle-info { display: flex; flex-direction: column; gap: 0.2rem; font-size: var(--fs-base); }
   .confirm { display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3); border: 1px solid var(--danger-border); border-radius: var(--radius); background: var(--danger-bg); font-size: var(--fs-sm); }

@@ -212,32 +212,39 @@ pub struct LocalChanges {
     pub states: Vec<ProfileFilesState>,
 }
 
-/// Blobs already in the vault, fetched once per cycle and only when needed.
+/// Names uploaded in this cycle; skip a second PUT of the same content.
 struct BlobIndex<'a> {
     engine: &'a Engine,
-    existing: Option<BTreeSet<String>>,
+    uploaded: BTreeSet<String>,
 }
 
 impl<'a> BlobIndex<'a> {
     async fn put(&mut self, data: &[u8]) -> CmdResult<String> {
-        if self.existing.is_none() {
-            self.existing = Some(self.engine.list_blobs().await.map_err(AppError::other)?);
-        }
         let name = self.engine.blob_name(data);
-        let existing = self.existing.as_mut().expect("filled above");
-        if !existing.contains(&name) {
-            self.engine.put_blob(data).await.map_err(AppError::other)?;
-            existing.insert(name.clone());
+        if self.uploaded.contains(&name) {
+            return Ok(name);
         }
+        self.engine.put_blob(data).await.map_err(AppError::other)?;
+        self.uploaded.insert(name.clone());
         Ok(name)
     }
 }
 
 /// Manifest of the directory; only files whose hash is new are read and uploaded.
-async fn build_manifest(cache: &HashCache, blobs: &mut BlobIndex<'_>, dir: &Path, prev: &Manifest) -> CmdResult<Manifest> {
+async fn build_manifest(
+    cache: &HashCache,
+    blobs: &mut BlobIndex<'_>,
+    dir: &Path,
+    prev: &Manifest,
+    app: &AppHandle,
+) -> CmdResult<Manifest> {
     let known = prev.blob_by_hash();
+    let entries = scan(dir);
+    let total = entries.len() as u32;
     let mut files = Vec::new();
-    for (rel, abs) in scan(dir) {
+    for (i, (rel, abs)) in entries.into_iter().enumerate() {
+        let current = i as u32 + 1;
+        super::emit_progress(app, "profiles_up", super::progress_pct(55, 75, current, total.max(1)), current, total, &rel);
         let Some(hash) = cache.file_hash(&abs) else { continue };
         let size = std::fs::metadata(&abs).map(|m| m.len()).unwrap_or(0);
         let blob = match known.get(hash.as_str()) {
@@ -253,14 +260,19 @@ async fn build_manifest(cache: &HashCache, blobs: &mut BlobIndex<'_>, dir: &Path
 }
 
 /// Publish lease changes and snapshots of profiles that ran since the last one.
-pub async fn collect_local_changes(engine: &Engine, state: &AppState, clock: &mut HlcClock) -> CmdResult<LocalChanges> {
+pub async fn collect_local_changes(
+    engine: &Engine,
+    state: &AppState,
+    clock: &mut HlcClock,
+    app: &AppHandle,
+) -> CmdResult<LocalChanges> {
     let db = &state.db;
     let device = super::config::device_id(db).await?;
     let mut out = LocalChanges { ops: Vec::new(), states: Vec::new() };
     let mut states = load_profile_files_states(db).await?;
     let rows: Vec<(String, String, Option<String>)> =
         sqlx::query_as("SELECT id, profile_path, last_launch_at FROM profiles").fetch_all(db).await.map_err(AppError::db)?;
-    let mut blobs = BlobIndex { engine, existing: None };
+    let mut blobs = BlobIndex { engine, uploaded: BTreeSet::new() };
 
     for (id, profile_path, last_launch_at) in rows {
         let mut st = states.remove(&id).unwrap_or_else(|| ProfileFilesState::new(&id));
@@ -302,7 +314,7 @@ pub async fn collect_local_changes(engine: &Engine, state: &AppState, clock: &mu
         }
 
         let prev = Manifest::parse(&st.manifest_json);
-        let manifest = build_manifest(&state.sync.file_hashes, &mut blobs, &dir, &prev).await?;
+        let manifest = build_manifest(&state.sync.file_hashes, &mut blobs, &dir, &prev, app).await?;
         let json = manifest.to_json();
         let hash = sha256_hex(json.as_bytes());
         let now = Utc::now().to_rfc3339();
@@ -349,10 +361,27 @@ pub struct ApplyOutcome {
 
 /// Bring `dir` to the manifest: download changed files, drop files it does not list.
 /// Returns the reason when a blob is not available yet.
-async fn apply_manifest(engine: &Engine, cache: &HashCache, dir: &Path, manifest: &Manifest) -> CmdResult<Option<String>> {
+async fn apply_manifest(
+    engine: &Engine,
+    cache: &HashCache,
+    dir: &Path,
+    manifest: &Manifest,
+    app: &AppHandle,
+) -> CmdResult<Option<String>> {
     std::fs::create_dir_all(dir).map_err(AppError::io)?;
     let mut keep: HashSet<&str> = HashSet::new();
-    for f in manifest.files.iter().filter(|f| valid_rel_path(&f.path)) {
+    let listed: Vec<&ManifestFile> = manifest.files.iter().filter(|f| valid_rel_path(&f.path)).collect();
+    let total = listed.len() as u32;
+    for (i, f) in listed.into_iter().enumerate() {
+        let current = i as u32 + 1;
+        super::emit_progress(
+            app,
+            "profiles_down",
+            super::progress_pct(78, 93, current, total.max(1)),
+            current,
+            total,
+            &f.path,
+        );
         keep.insert(f.path.as_str());
         let dest = dir.join(&f.path);
         if cache.file_hash(&dest).as_deref() == Some(f.hash.as_str()) {
@@ -372,10 +401,16 @@ async fn apply_manifest(engine: &Engine, cache: &HashCache, dir: &Path, manifest
 }
 
 /// Download and apply a manifest blob; `Ok(None)` means it is not available yet.
-async fn fetch_and_apply(engine: &Engine, state: &AppState, dir: &Path, manifest_blob: &str) -> CmdResult<Option<Manifest>> {
+async fn fetch_and_apply(
+    engine: &Engine,
+    state: &AppState,
+    app: &AppHandle,
+    dir: &Path,
+    manifest_blob: &str,
+) -> CmdResult<Option<Manifest>> {
     let Some(raw) = engine.get_blob(manifest_blob).await.map_err(AppError::other)? else { return Ok(None) };
     let manifest = Manifest::parse(&String::from_utf8_lossy(&raw));
-    match apply_manifest(engine, &state.sync.file_hashes, dir, &manifest).await? {
+    match apply_manifest(engine, &state.sync.file_hashes, dir, &manifest, app).await? {
         None => Ok(Some(manifest)),
         Some(_) => Ok(None),
     }
@@ -455,7 +490,7 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
                     save_profile_files_state(db, &st).await?;
                     continue;
                 }
-                match fetch_and_apply(engine, &state, &dir, &p.manifest_blob).await? {
+                match fetch_and_apply(engine, &state, app, &dir, &p.manifest_blob).await? {
                     Some(manifest) => {
                         record_applied(&mut st, &manifest);
                         st.head_hlc = Some(op.hlc.clone());
@@ -473,14 +508,14 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
 // ── Explicit actions (launch, conflict UI) ───────────────────────────────────
 
 /// Apply the snapshot that waited while the browser ran. No-op without one.
-pub async fn apply_pending(engine: &Engine, state: &AppState, profile_id: &str) -> CmdResult<()> {
+pub async fn apply_pending(engine: &Engine, state: &AppState, app: &AppHandle, profile_id: &str) -> CmdResult<()> {
     let db = &state.db;
     let Some(mut st) = load_profile_files_state(db, profile_id).await? else { return Ok(()) };
     if st.pending_manifest.is_empty() {
         return Ok(());
     }
     let dir = profile_dir(state, profile_id).await?.ok_or_else(|| AppError::not_found("Profile not found"))?;
-    match fetch_and_apply(engine, state, &dir, &st.pending_manifest).await? {
+    match fetch_and_apply(engine, state, app, &dir, &st.pending_manifest).await? {
         Some(manifest) => {
             record_applied(&mut st, &manifest);
             save_profile_files_state(db, &st).await
@@ -490,11 +525,11 @@ pub async fn apply_pending(engine: &Engine, state: &AppState, profile_id: &str) 
 }
 
 /// Conflict choice: replace local files with the remote snapshot.
-pub async fn take_remote(engine: &Engine, state: &AppState, profile_id: &str) -> CmdResult<()> {
+pub async fn take_remote(engine: &Engine, state: &AppState, app: &AppHandle, profile_id: &str) -> CmdResult<()> {
     if state.browser.is_running(profile_id).await {
         return Err(AppError::other("Stop the profile first"));
     }
-    apply_pending(engine, state, profile_id).await
+    apply_pending(engine, state, app, profile_id).await
 }
 
 /// Conflict choice: keep local files and publish them as the new snapshot.

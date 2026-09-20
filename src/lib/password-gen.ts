@@ -78,7 +78,16 @@ export function generatePassword(s: PwSettings): string {
     throw new Error('pwgen_error_no_charset');
   }
 
-  const buf = new Uint32Array(s.length);
-  crypto.getRandomValues(buf);
-  return Array.from(buf, (n) => chars[n % chars.length]).join('');
+  // Rejection sampling: `n % chars.length` alone skews toward the first chars.
+  const limit = 0x100000000 - (0x100000000 % chars.length);
+  const out: string[] = [];
+  const buf = new Uint32Array(s.length * 2);
+  while (out.length < s.length) {
+    crypto.getRandomValues(buf);
+    for (const n of buf) {
+      if (n < limit) out.push(chars[n % chars.length]);
+      if (out.length === s.length) break;
+    }
+  }
+  return out.join('');
 }

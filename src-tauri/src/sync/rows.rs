@@ -237,6 +237,28 @@ fn spec_for(entity: &str) -> Option<&'static TableSpec> {
     SPECS.iter().find(|s| s.entity == entity)
 }
 
+/// Tags, folders, smart views and note flags belong to the notes stream.
+#[derive(Clone, Copy)]
+pub enum RowScope {
+    App,
+    Notes,
+    NotesCatalog,
+    NotesMeta,
+}
+
+fn is_note_row(entity: &str) -> bool {
+    matches!(entity, "note_tag" | "note_folder" | "note_smart_view" | "note_meta")
+}
+
+fn in_scope(entity: &str, scope: RowScope) -> bool {
+    match scope {
+        RowScope::App => !is_note_row(entity),
+        RowScope::Notes => is_note_row(entity),
+        RowScope::NotesCatalog => matches!(entity, "note_tag" | "note_folder" | "note_smart_view"),
+        RowScope::NotesMeta => entity == "note_meta",
+    }
+}
+
 /// Ids are UUIDs, setting keys or the literal `default`; nothing else is accepted.
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
@@ -330,11 +352,11 @@ fn make_op(spec: &TableSpec, id: &str, hlc: Hlc, payload: Value, deleted: bool) 
 
 /// Rows whose synced columns differ from what the vault has, plus tombstones
 /// for rows that disappeared.
-pub async fn collect_local_changes(state: &AppState, clock: &mut HlcClock) -> CmdResult<LocalChanges> {
+pub async fn collect_local_changes(state: &AppState, clock: &mut HlcClock, scope: RowScope) -> CmdResult<LocalChanges> {
     let db = &state.db;
     let mut out = LocalChanges { ops: Vec::new(), states: Vec::new() };
 
-    for spec in SPECS {
+    for spec in SPECS.iter().filter(|s| in_scope(s.entity, scope)) {
         let mut states = load_row_states(db, spec.entity).await?;
         for (id, payload) in read_rows(db, spec).await? {
             let hash = payload_hash(&payload);
@@ -517,12 +539,15 @@ async fn delete_row(app: &AppHandle, spec: &TableSpec, id: &str) -> CmdResult<bo
 }
 
 /// Apply remote row ops (LWW by HLC). Ops are already HLC-sorted.
-pub async fn apply_remote(app: &AppHandle, ops: &[Op]) -> CmdResult<ApplyOutcome> {
+pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdResult<ApplyOutcome> {
     let state = app.state::<AppState>();
     let db = &state.db;
     let mut outcome = ApplyOutcome::default();
 
     for op in ops {
+        if !in_scope(&op.entity_type, scope) {
+            continue;
+        }
         let Some(spec) = spec_for(&op.entity_type) else { continue };
         if !valid_id(&op.entity_id) {
             continue;

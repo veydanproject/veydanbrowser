@@ -479,6 +479,14 @@ export interface SyncLease {
   own: boolean;
 }
 
+export interface SyncProgress {
+  phase: string;
+  percent: number;
+  current: number;
+  total: number;
+  detail: string;
+}
+
 export interface SyncStatus {
   enabled: boolean;
   joined: boolean;
@@ -488,6 +496,7 @@ export interface SyncStatus {
   peers: number;
   last_run: string | null;
   last_error: string | null;
+  last_warning: string | null;
   conflicts: { note_id: string; title: string }[];
   /** Profiles whose files changed on both sides; `note_id` holds the profile id. */
   profile_conflicts: { note_id: string; title: string }[];

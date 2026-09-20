@@ -206,6 +206,7 @@ pub async fn clear_binding(db: &Pool<Sqlite>) -> CmdResult<()> {
         "sync_last_run",
         "sync_last_started",
         "sync_last_error",
+        "sync_last_warning",
         "sync_last_applied",
         "sync_gc_last",
         "sync_gc_blobs_total",
