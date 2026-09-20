@@ -46,12 +46,13 @@
     error = '';
     try {
       const result = await load();
-      hasConflicts = result.has_conflicts;
       blocks = result.blocks.map((b) =>
         b.kind === 'normal'
           ? { kind: 'normal', text: b.text }
           : { kind: 'conflict', current: b.ours, history: b.theirs, choice: null },
       );
+      // Only blocks the user can act on count; never claim "all resolved" over plain text
+      hasConflicts = blocks.some((b) => b.kind === 'conflict');
     } catch (e) {
       error = String(e);
     } finally {

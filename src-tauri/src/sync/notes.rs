@@ -431,7 +431,7 @@ pub async fn conflict_merge(state: &AppState, note_id: &str) -> CmdResult<MergeR
     let (_, _, local) = parse_note_file(&std::fs::read_to_string(&path).unwrap_or_default());
     let ancestor = history_content_by_id(&st.conflict_ancestor_id, db).await.unwrap_or_default();
     let remote = history_content_by_id(&st.conflict_remote_id, db).await?;
-    Ok(merge3(&ancestor, &local, &remote))
+    Ok(merge3(&ancestor, &local, &remote).or_whole_texts(&local, &remote))
 }
 
 /// Write the user's resolution and release the note for the next push,

@@ -191,6 +191,10 @@ pub(crate) fn atomic_write(path: &PathBuf, content: &str) -> Result<(), AppError
 /// Parse frontmatter + body from file content.
 /// Returns (kv map, tags list, body).
 pub(crate) fn parse_note_file(raw: &str) -> (HashMap<String, String>, Vec<String>, String) {
+    // CRLF files (edited on Windows) are parsed as LF; note files are always written with LF.
+    if raw.starts_with("---\r\n") {
+        return parse_note_file(&raw.replace("\r\n", "\n"));
+    }
     if !raw.starts_with("---\n") {
         return (HashMap::new(), vec![], raw.to_string());
     }
