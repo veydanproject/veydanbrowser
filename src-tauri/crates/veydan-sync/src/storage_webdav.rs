@@ -3,7 +3,7 @@
 
 //! WebDAV adapter (Nextcloud, Yandex Disk, generic servers) with basic auth.
 
-use crate::storage::{http_client, is_noise_key, Storage};
+use crate::storage::{http_client, is_noise_key, send_retry, Storage};
 use crate::{Result, SyncError};
 use async_trait::async_trait;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
@@ -75,7 +75,7 @@ impl WebDavStorage {
         let mut url = self.url_for(dir);
         let p = format!("{}/", url.path());
         url.set_path(&p);
-        let resp = self.req(Method::from_bytes(b"MKCOL").expect("valid method"), url).send().await?;
+        let resp = send_retry(|| self.req(Method::from_bytes(b"MKCOL").expect("valid method"), url.clone())).await?;
         // 405 = already exists; 301/302 some servers use for existing collections.
         match resp.status() {
             s if s.is_success() => {}
@@ -95,13 +95,13 @@ impl WebDavStorage {
             let p = format!("{}/", url.path());
             url.set_path(&p);
         }
-        let resp = self
-            .req(Method::from_bytes(b"PROPFIND").expect("valid method"), url)
-            .header("Depth", "1")
-            .header("Content-Type", "application/xml")
-            .body(PROPFIND_BODY)
-            .send()
-            .await?;
+        let resp = send_retry(|| {
+            self.req(Method::from_bytes(b"PROPFIND").expect("valid method"), url.clone())
+                .header("Depth", "1")
+                .header("Content-Type", "application/xml")
+                .body(PROPFIND_BODY)
+        })
+        .await?;
         if resp.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -205,7 +205,8 @@ impl Storage for WebDavStorage {
     }
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let resp = self.req(Method::GET, self.url_for(key)).send().await?;
+        let url = self.url_for(key);
+        let resp = send_retry(|| self.req(Method::GET, url.clone())).await?;
         match resp.status() {
             StatusCode::NOT_FOUND => Ok(None),
             s if s.is_success() => Ok(Some(resp.bytes().await?.to_vec())),
@@ -217,12 +218,15 @@ impl Storage for WebDavStorage {
         if let Some((dir, _)) = key.rsplit_once('/') {
             self.ensure_dir(dir).await?;
         }
-        let resp = self.req(Method::PUT, self.url_for(key)).body(data.to_vec()).send().await?;
+        let url = self.url_for(key);
+        let body = data.to_vec();
+        let resp = send_retry(|| self.req(Method::PUT, url.clone()).body(body.clone())).await?;
         if resp.status().is_success() { Ok(()) } else { Err(Self::fail(resp, "put").await) }
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
-        let resp = self.req(Method::DELETE, self.url_for(key)).send().await?;
+        let url = self.url_for(key);
+        let resp = send_retry(|| self.req(Method::DELETE, url.clone())).await?;
         match resp.status() {
             StatusCode::NOT_FOUND => Ok(()),
             s if s.is_success() => Ok(()),

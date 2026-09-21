@@ -245,6 +245,8 @@ pub async fn apply_remote(
     let state = app.state::<AppState>();
     let db = &state.db;
     let mut outcome = ApplyOutcome::default();
+    let total = ops.iter().filter(|op| op.entity_type == ENTITY && !op.deleted && valid_id(&op.entity_id)).count() as u32;
+    let mut current = 0u32;
 
     for op in ops {
         if op.entity_type != ENTITY || !valid_id(&op.entity_id) {
@@ -272,6 +274,15 @@ pub async fn apply_remote(
             continue;
         }
 
+        current += 1;
+        super::emit_progress(
+            app,
+            "apply",
+            super::progress_pct(48, 52, current, total.max(1)),
+            current,
+            total,
+            &id,
+        );
         let Some(remote_raw) = engine.get_blob(&payload.blob).await.map_err(AppError::other)? else {
             // Chunk arrived before its blob; deliver the rest again next cycle.
             outcome.retry = Some(format!("blob for note {id} not available yet"));
@@ -293,7 +304,8 @@ pub async fn apply_remote(
             Some(s) => s.deleted || s.head_blob.is_empty() || s.head_blob == payload.blob || payload.parents.contains(&s.head_blob),
         };
 
-        if remote_includes_ours && !local_changed {
+        // No DB row yet: the file came from an earlier op of this pull, nothing local to merge.
+        if (remote_includes_ours || row.is_none()) && !local_changed {
             let same_bytes = local_raw.as_deref() == Some(remote_raw.as_slice());
             if !same_bytes {
                 write_raw(&path, &remote_raw)?;

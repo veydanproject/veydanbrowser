@@ -166,6 +166,8 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
     let state = app.state::<AppState>();
     let db = &state.db;
     let mut outcome = ApplyOutcome::default();
+    let total = ops.iter().filter(|op| op.entity_type == ENTITY && !op.deleted).count() as u32;
+    let mut current = 0u32;
 
     for op in ops.iter().filter(|op| op.entity_type == ENTITY) {
         let payload: AttachmentPayload = serde_json::from_value(op.payload.clone()).unwrap_or_default();
@@ -194,6 +196,15 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
             continue;
         }
 
+        current += 1;
+        super::emit_progress(
+            app,
+            "apply",
+            super::progress_pct(40, 44, current, total.max(1)),
+            current,
+            total,
+            &payload.name,
+        );
         let Some(raw) = engine.get_blob(&payload.blob).await.map_err(AppError::other)? else {
             outcome.retry = Some(format!("blob for attachment {} not available yet", op.entity_id));
             continue;

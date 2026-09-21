@@ -70,9 +70,23 @@ impl From<std::io::Error> for SyncError {
     }
 }
 
+fn reqwest_msg(e: &reqwest::Error) -> String {
+    let mut msg = e.to_string();
+    let mut src = std::error::Error::source(e);
+    while let Some(err) = src {
+        let next = err.to_string();
+        if !msg.contains(&next) {
+            msg.push_str(": ");
+            msg.push_str(&next);
+        }
+        src = err.source();
+    }
+    msg
+}
+
 impl From<reqwest::Error> for SyncError {
     fn from(e: reqwest::Error) -> Self {
-        SyncError::Storage(e.to_string())
+        SyncError::Storage(reqwest_msg(&e))
     }
 }
 

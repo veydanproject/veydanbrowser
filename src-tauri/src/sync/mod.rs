@@ -65,7 +65,6 @@ pub(crate) fn emit_progress(app: &AppHandle, phase: &str, percent: u32, current:
     );
 }
 
-#[cfg(desktop)]
 pub(crate) fn progress_pct(lo: u32, hi: u32, current: u32, total: u32) -> u32 {
     if total == 0 || hi <= lo {
         return lo;
@@ -457,6 +456,7 @@ pub async fn run_cycle(app: &AppHandle) -> CmdResult<()> {
     let _guard = RunningGuard(&state.sync.running);
     let db = &state.db;
     config::set_setting(db, "sync_last_started", &Utc::now().to_rfc3339()).await?;
+    config::set_setting(db, "sync_last_error", "").await?;
     // Let the UI show the running state for scheduled cycles too.
     let _ = app.emit(EVENT_STATUS, ());
 
@@ -477,6 +477,18 @@ pub async fn run_cycle(app: &AppHandle) -> CmdResult<()> {
     }
     let _ = app.emit(EVENT_STATUS, ());
     result.map(|_| ())
+}
+
+/// FOREIGN KEY failure in an apply step: record it as "retry next cycle" and go on.
+fn fk_retry<T: Default>(step: &str, result: CmdResult<T>, deferred: &mut Option<String>) -> CmdResult<T> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) if rows::is_fk_error(&e) => {
+            deferred.get_or_insert_with(|| format!("{step}: {e}"));
+            Ok(T::default())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Returns non-fatal warnings (per-peer integrity problems).
@@ -527,23 +539,35 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
         }
     }
 
-    emit_progress(app, "pull", 30, 0, 0, "");
-    let pulled = engine.pull(&mut local).await.map_err(AppError::other)?;
+    emit_progress(app, "pull", 30, 0, 0, "devices/");
+    let pulled = engine
+        .pull(&mut local, |current, total, key| {
+            emit_progress(app, "pull", progress_pct(30, 40, current, total), current, total, key);
+        })
+        .await
+        .map_err(AppError::other)?;
     for op in &pulled.ops {
         clock.observe(&op.hlc);
     }
     config::set_setting(db, "sync_last_applied", &pulled.ops.len().to_string()).await?;
+    // A parent row missing on this device is not fatal: the ops come again next cycle.
+    let mut deferred: Option<String> = None;
     emit_progress(app, "apply", 40, 0, 0, "");
-    let att_outcome = attachments::apply_remote(&engine, app, &pulled.ops).await?;
+    let att_outcome = fk_retry("attachments", attachments::apply_remote(&engine, app, &pulled.ops).await, &mut deferred)?;
     emit_progress(app, "apply", 44, 0, 0, "");
-    let note_catalog = rows::apply_remote(app, &pulled.ops, rows::RowScope::NotesCatalog).await?;
+    let note_catalog =
+        fk_retry("notes catalog", rows::apply_remote(app, &pulled.ops, rows::RowScope::NotesCatalog).await, &mut deferred)?;
     emit_progress(app, "apply", 48, 0, 0, "");
-    let outcome = notes::apply_remote(&engine, app, pulled.ops.clone(), &mut clock, &mut local).await?;
-    notes::finish_apply(app, &outcome).await?;
+    let outcome = fk_retry(
+        "notes",
+        notes::apply_remote(&engine, app, pulled.ops.clone(), &mut clock, &mut local).await,
+        &mut deferred,
+    )?;
+    fk_retry("notes index", notes::finish_apply(app, &outcome).await, &mut deferred)?;
     emit_progress(app, "apply", 52, 0, 0, "");
-    let note_meta = rows::apply_remote(app, &pulled.ops, rows::RowScope::NotesMeta).await?;
+    let note_meta = fk_retry("notes meta", rows::apply_remote(app, &pulled.ops, rows::RowScope::NotesMeta).await, &mut deferred)?;
     emit_progress(app, "apply", 54, 0, 0, "");
-    let rows_outcome = rows::apply_remote(app, &pulled.ops, rows::RowScope::App).await?;
+    let rows_outcome = fk_retry("app rows", rows::apply_remote(app, &pulled.ops, rows::RowScope::App).await, &mut deferred)?;
     attachments::notify(app, &att_outcome);
     let mut notes_rows_out = note_catalog;
     notes_rows_out.changed.extend(note_meta.changed.iter().cloned());
@@ -563,7 +587,8 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
         .or(att_outcome.retry.as_ref())
         .or(notes_rows_out.retry.as_ref())
         .or(rows_outcome.retry.as_ref())
-        .or(files_retry.as_ref());
+        .or(files_retry.as_ref())
+        .or(deferred.as_ref());
     let clean = retry.is_none() && warnings.is_empty();
     match retry {
         None => state::save_peer_heads(db, &local).await?,

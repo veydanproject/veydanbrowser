@@ -7,7 +7,7 @@
   import { theme, type Theme } from '$lib/theme';
   import { api as shared } from '$lib/api';
   import type { HostInfo } from '$lib/types';
-  import { api, type SyncStatus } from '$lib/mobile/api';
+  import { api, onSyncStatus, type SyncStatus } from '$lib/mobile/api';
   import { t, locale, type Locale } from '$lib/mobile/i18n';
   import { APPS, loadDefaultApp, saveDefaultApp } from '$lib/mobile/apps';
   import PickerSheet from '$lib/components/mobile/PickerSheet.svelte';
@@ -33,16 +33,22 @@
   const defaultAppLabel = $derived(appOptions.find((o) => o.id === defaultApp)?.label ?? '');
   const themeLabel = $derived(themeOptions.find((o) => o.id === $theme)?.label ?? '');
   const localeLabel = $derived(locales.find((l) => l.id === $locale)?.label ?? '');
-  const syncLabel = $derived(sync?.enabled && sync.joined ? $t('settings_sync_connected') : $t('settings_sync_disconnected'));
+  const syncLabel = $derived(
+    sync?.running ? $t('settings_sync_running')
+    : sync?.enabled && sync.joined ? $t('settings_sync_connected')
+    : $t('settings_sync_disconnected'),
+  );
 
   function pickApp(id: string) {
     defaultApp = id;
     saveDefaultApp(id);
   }
 
-  onMount(async () => {
-    info = await shared.system.hostInfo();
-    sync = await api.sync.status().catch(() => null);
+  onMount(() => {
+    void shared.system.hostInfo().then((h) => (info = h));
+    void api.sync.status().then((s) => (sync = s)).catch(() => {});
+    const un = onSyncStatus(() => api.sync.status().then((s) => (sync = s)).catch(() => {}));
+    return () => un.then((f) => f());
   });
 </script>
 

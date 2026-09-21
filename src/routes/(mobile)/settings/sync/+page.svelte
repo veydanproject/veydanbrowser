@@ -4,17 +4,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Icon from '$lib/Icon.svelte';
-  import { api, formatError, onSyncStatus, type SyncConfig, type SyncProbe, type SyncStatus } from '$lib/mobile/api';
+  import { api, formatError, onSyncProgress, onSyncStatus, syncProgressText, type SyncConfig, type SyncProbe, type SyncProgress, type SyncStatus } from '$lib/mobile/api';
   import { t, locale } from '$lib/mobile/i18n';
 
   let cfg = $state<SyncConfig | null>(null);
   let status = $state<SyncStatus | null>(null);
   let probe = $state<SyncProbe | null>(null);
+  let progress = $state<SyncProgress | null>(null);
   let passphrase = $state('');
   let busy = $state(false);
   let error = $state('');
   let toast = $state('');
   let toastTimer: ReturnType<typeof setTimeout>;
+
+  const running = $derived(!!status?.running);
+  const progressLine = $derived(progress ? syncProgressText($t, progress) : '');
 
   const intervals = [30, 60, 300, 900, 3600];
 
@@ -101,8 +105,17 @@
 
   onMount(() => {
     load();
-    const unlisten = onSyncStatus(() => api.sync.status().then((s) => (status = s)).catch(() => {}));
-    return () => unlisten.then((f) => f());
+    const unStatus = onSyncStatus(() =>
+      api.sync.status().then((s) => {
+        status = s;
+        if (!s.running) progress = null;
+      }).catch(() => {}),
+    );
+    const unProgress = onSyncProgress((p) => (progress = p));
+    return () => {
+      unStatus.then((f) => f());
+      unProgress.then((f) => f());
+    };
   });
 </script>
 
@@ -137,9 +150,18 @@
         </div>
         <div class="m-row">
           <span class="m-row-label">{$t('settings_sync_last_run')}</span>
-          <span class="m-row-value">{status.running ? $t('settings_sync_running') : formatTime(status.last_run)}</span>
+          <span class="m-row-value">{running ? (progressLine || $t('settings_sync_running')) : formatTime(status.last_run)}</span>
         </div>
-        {#if status.last_error}
+        {#if running && progress}
+          <div class="m-row prog">
+            <div class="bar"><div class="fill" style="width: {progress.percent}%"></div></div>
+            <span class="prog-label">
+              {progressLine}
+              {#if progress.detail}<span class="prog-detail">{progress.detail}</span>{/if}
+            </span>
+          </div>
+        {/if}
+        {#if status.last_error && !running}
           <div class="m-row msg danger">{status.last_error}</div>
         {:else if status.last_warning}
           <div class="m-row msg warn">{status.last_warning}</div>
@@ -151,9 +173,9 @@
       </div>
 
       <div class="actions group">
-        <button class="btn btn-primary" onclick={doSyncNow} disabled={busy || status.running}>
+        <button class="btn btn-primary" onclick={doSyncNow} disabled={busy || running}>
           <Icon name="refresh-cw" size={16} />
-          {$t('settings_sync_now')}
+          {running ? (progress ? `${progress.percent}%` : $t('settings_sync_running')) : $t('settings_sync_now')}
         </button>
         <button class="btn btn-ghost danger" onclick={doLeave} disabled={busy}>
           <Icon name="shield-off" size={16} />
@@ -286,4 +308,9 @@
   .danger { color: var(--danger-text); }
   .warn { color: var(--warn-text); }
   .probe { font-size: var(--fs-sm); color: var(--text-2); margin: var(--sp-3) 0; }
+  .prog { flex-direction: column; align-items: stretch; gap: 6px; padding-top: 10px; padding-bottom: 12px; }
+  .bar { height: 6px; background: var(--surface-3); border-radius: 999px; overflow: hidden; }
+  .fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.2s ease; }
+  .prog-label { font-size: var(--fs-sm); color: var(--text-body); }
+  .prog-detail { display: block; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-3); word-break: break-all; }
 </style>

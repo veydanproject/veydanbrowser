@@ -629,7 +629,7 @@ async fn update_row(db: &Pool<Sqlite>, spec: &TableSpec, id: &str, cols: &[(&str
     Ok(exec(db, sql, &values).await? > 0)
 }
 
-fn is_fk_error(e: &AppError) -> bool {
+pub fn is_fk_error(e: &AppError) -> bool {
     let s = e.to_string();
     s.contains("787") || s.contains("FOREIGN KEY")
 }

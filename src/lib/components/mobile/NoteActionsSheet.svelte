@@ -4,7 +4,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Icon from '$lib/Icon.svelte';
-  import { api, formatError, onSyncStatus, type NoteSyncInfo, type SyncStatus } from '$lib/mobile/api';
+  import { api, formatError, onSyncProgress, onSyncStatus, syncProgressText, type NoteSyncInfo, type SyncProgress, type SyncStatus } from '$lib/mobile/api';
   import { locale, t } from '$lib/mobile/i18n';
   import { fmtDateTime } from '$lib/mobile/notes-editor';
   import BottomSheet from './BottomSheet.svelte';
@@ -30,6 +30,7 @@
 
   let status = $state<SyncStatus | null>(null);
   let info = $state<NoteSyncInfo | null>(null);
+  let progress = $state<SyncProgress | null>(null);
   let syncing = $state(false);
   let error = $state('');
 
@@ -47,13 +48,23 @@
   });
 
   onMount(() => {
-    const unlisten = onSyncStatus(() => { if (open) void refresh(); });
-    return () => unlisten.then((f) => f());
+    const unStatus = onSyncStatus(() => {
+      if (open) void refresh();
+    });
+    const unProgress = onSyncProgress((p) => (progress = p));
+    return () => {
+      unStatus.then((f) => f());
+      unProgress.then((f) => f());
+    };
+  });
+
+  $effect(() => {
+    if (status && !status.running) progress = null;
   });
 
   const syncLine = $derived.by(() => {
     if (!status?.enabled || !status.joined) return $t('notes_sync_off');
-    if (status.running || syncing) return $t('notes_sync_running');
+    if (status.running || syncing) return progress ? syncProgressText($t, progress) : $t('notes_sync_running');
     if (status.last_error) return `${$t('notes_sync_error')}: ${status.last_error}`;
     const last = status.last_run ? fmtDateTime(status.last_run, $locale) : $t('notes_sync_never');
     const note = !info ? '' : !info.tracked ? $t('notes_sync_untracked') : info.pending ? $t('notes_sync_pending') : $t('notes_sync_uptodate');

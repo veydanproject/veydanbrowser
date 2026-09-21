@@ -20,7 +20,7 @@ import type {
   NoteSyncInfo,
   SmartViewInput,
 } from '$lib/types';
-import type { SyncConfig, SyncStatus } from '$lib/api';
+import type { SyncConfig, SyncProgress, SyncStatus } from '$lib/api';
 
 export { formatError };
 export type {
@@ -33,6 +33,7 @@ export type {
   NoteSyncInfo,
   SmartViewInput,
   SyncConfig,
+  SyncProgress,
   SyncStatus,
 };
 
@@ -201,6 +202,26 @@ export async function onSyncChanged(entities: string[], cb: () => void): Promise
 
 export function onSyncStatus(cb: () => void): Promise<UnlistenFn> {
   return listen('sync://status', cb);
+}
+
+export function onSyncProgress(cb: (p: SyncProgress) => void): Promise<UnlistenFn> {
+  return listen<SyncProgress>('sync://progress', (e) => cb(e.payload));
+}
+
+export function syncProgressText(
+  t: (key: string, vars?: Record<string, string>) => string,
+  p: SyncProgress,
+): string {
+  const phase = t(`settings_sync_phase_${p.phase}`);
+  if (p.total > 0) {
+    return t('settings_sync_progress_files', {
+      phase,
+      current: String(p.current),
+      total: String(p.total),
+      percent: String(p.percent),
+    });
+  }
+  return t('settings_sync_progress', { phase, percent: String(p.percent) });
 }
 
 // ── API ──────────────────────────────────────────────────────────────────────

@@ -37,6 +37,23 @@ pub struct Engine {
     keys: Keys,
 }
 
+/// Snapshot (if the chain has a gap) plus every chunk past `head`.
+fn planned_gets(peer: &str, head: &PeerHead, all: &[String]) -> Vec<String> {
+    let log_prefix = format!("devices/{peer}/log/");
+    let mut seqs: Vec<u64> = all.iter().filter(|k| k.starts_with(&log_prefix)).filter_map(|k| seq_from_key(k)).collect();
+    seqs.sort_unstable();
+    let mut keys = Vec::new();
+    if seqs.iter().copied().find(|s| *s > head.seq) != Some(head.seq + 1) {
+        keys.push(snapshot_key(peer));
+    }
+    for seq in seqs {
+        if seq > head.seq {
+            keys.push(chunk_key(peer, seq));
+        }
+    }
+    keys
+}
+
 impl Engine {
     pub async fn probe(storage: &dyn Storage) -> Result<Probe> {
         if let Some(bytes) = storage.get(MANIFEST_KEY).await? {
@@ -184,7 +201,9 @@ impl Engine {
 
     /// Read every peer's log past the remembered head. Verifies the hash chain;
     /// a peer whose chain breaks is reported in `errors` and its head is left as is.
-    pub async fn pull(&self, state: &mut LocalState) -> Result<PullResult> {
+    /// `on_file(current, total, key)` is called before each GET.
+    pub async fn pull(&self, state: &mut LocalState, mut on_file: impl FnMut(u32, u32, &str)) -> Result<PullResult> {
+        on_file(0, 0, "devices/");
         let mut result = PullResult::default();
         let all = self.storage.list("devices/").await?;
         let peers: BTreeSet<String> = all
@@ -194,9 +213,18 @@ impl Engine {
             .map(str::to_string)
             .collect();
 
-        for peer in peers {
+        let mut planned: Vec<(String, Vec<String>)> = Vec::new();
+        for peer in &peers {
+            let head = state.peers.get(peer).cloned().unwrap_or_default();
+            planned.push((peer.clone(), planned_gets(peer, &head, &all)));
+        }
+        let total = planned.iter().map(|(_, keys)| keys.len() as u32).sum::<u32>();
+        let mut current = 0u32;
+        on_file(0, total, "devices/");
+
+        for (peer, keys) in planned {
             let mut head = state.peers.get(&peer).cloned().unwrap_or_default();
-            match self.pull_peer(&peer, &mut head, &all).await {
+            match self.pull_peer(&peer, &mut head, &all, &keys, &mut current, total, &mut on_file).await {
                 Ok(ops) => {
                     result.ops.extend(ops);
                     state.peers.insert(peer, head);
@@ -208,16 +236,29 @@ impl Engine {
         Ok(result)
     }
 
-    async fn pull_peer(&self, peer: &str, head: &mut PeerHead, all_keys: &[String]) -> Result<Vec<Op>> {
+    async fn pull_peer(
+        &self,
+        peer: &str,
+        head: &mut PeerHead,
+        all_keys: &[String],
+        planned: &[String],
+        current: &mut u32,
+        total: u32,
+        on_file: &mut impl FnMut(u32, u32, &str),
+    ) -> Result<Vec<Op>> {
         let log_prefix = format!("devices/{peer}/log/");
         let mut seqs: Vec<u64> = all_keys.iter().filter(|k| k.starts_with(&log_prefix)).filter_map(|k| seq_from_key(k)).collect();
         seqs.sort_unstable();
         let mut ops = Vec::new();
+        let start = *current;
 
         // No chunk continues our head: either nothing new, or the peer compacted
         // and the snapshot now carries what we miss.
         let first_available = seqs.iter().copied().find(|s| *s > head.seq);
         if first_available != Some(head.seq + 1) {
+            let snap_key = snapshot_key(peer);
+            on_file(*current, total, &snap_key);
+            *current += 1;
             if let Some(snap) = self.read_snapshot(peer).await? {
                 if snap.up_to_seq < head.seq {
                     return Err(SyncError::Integrity(format!("snapshot older than known head ({} < {})", snap.up_to_seq, head.seq)));
@@ -235,6 +276,8 @@ impl Engine {
         let mut next = head.seq + 1;
         while seqs.binary_search(&next).is_ok() {
             let key = chunk_key(peer, next);
+            on_file(*current, total, &key);
+            *current += 1;
             // Listed but not readable yet: the cloud client is still delivering it.
             let Some(bytes) = self.storage.get(&key).await? else { break };
             let chunk = match self.open_chunk(peer, next, &bytes) {
@@ -252,6 +295,7 @@ impl Engine {
             *head = PeerHead { seq: next, hash: sha256_hex(&bytes) };
             next += 1;
         }
+        *current = (*current).max(start + planned.len() as u32);
         Ok(ops)
     }
 
