@@ -5,9 +5,12 @@
 // the mobile screens (chips on cards, plain tag names, list filters by kind).
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { api as shared } from '$lib/api';
+import { api as shared, downloadNoteAttachment } from '$lib/api';
+import { pickNativeFiles } from '$lib/attachmentTransfer';
 import { formatError } from '$lib/utils';
 import type {
+  ConflictView,
+  MergeBlock,
   NavChild,
   Note as SharedNote,
   NoteAttachment,
@@ -24,6 +27,8 @@ import type { SyncConfig, SyncProgress, SyncStatus } from '$lib/api';
 
 export { formatError };
 export type {
+  ConflictView,
+  MergeBlock,
   NavChild,
   NoteAttachment,
   NoteFilter,
@@ -237,6 +242,10 @@ export const api = {
     status: () => shared.sync.status(),
     runNow: () => shared.sync.runNow(),
     trigger: () => shared.sync.trigger(),
+    conflictGet: (noteId: string) => shared.sync.conflictGet(noteId),
+    conflictResolve: (noteId: string, token: string, content: string) =>
+      shared.sync.conflictResolve(noteId, token, content),
+    attachmentCancel: (noteId: string, name: string) => shared.sync.attachmentCancel(noteId, name),
   },
   notes: {
     nav: () => shared.notes.nav(),
@@ -328,8 +337,15 @@ export const api = {
   },
   attachments: {
     list: (noteId: string) => shared.notes.attachmentList(noteId),
-    /** Bytes travel as base64: Android IPC has no raw bodies. */
-    add: (noteId: string, file: File) => shared.notes.attachmentAddBase64(noteId, file, file.name),
+    fetch: (noteId: string, name: string) => shared.notes.attachmentFetch(noteId, name),
+    /** System save dialog; on Android the `content://` target is written by Rust. */
+    save: (noteId: string, name: string) => downloadNoteAttachment(noteId, name),
+    /** Native picker; the `content://` URIs are streamed by Rust, nothing crosses IPC as bytes. */
+    pick: async (noteId: string, imagesOnly: boolean): Promise<NoteAttachment[]> => {
+      const out: NoteAttachment[] = [];
+      for (const uri of await pickNativeFiles(imagesOnly)) out.push(await shared.notes.attachmentAddFromPath(noteId, uri));
+      return out;
+    },
     read: (noteId: string, name: string) => shared.notes.attachmentRead(noteId, name),
     delete: (noteId: string, name: string) => shared.notes.attachmentDelete(noteId, name),
   },

@@ -6,6 +6,12 @@
 //! deleted only when it was already a candidate one grace period earlier, so a
 //! blob uploaded just before its op is pushed is never lost.
 //!
+//! Large files v2 are swept by the same pass: the roots are the `lf_refs` of
+//! the latest op of every entity type, known or not, so a client that does not
+//! understand a future entity still keeps its files. Any unreadable op or
+//! manifest aborts the whole pass (fail-closed). Ledger rows for v2 objects
+//! store the full storage key, which tells them apart from v1 blob names.
+//!
 //! Runs on desktop only: mobile does not know profile-file snapshots and would
 //! treat their blobs as garbage. Status keys are still read there.
 #![cfg_attr(mobile, allow(dead_code, unused_imports))]
@@ -18,7 +24,7 @@ use crate::error::{AppError, CmdResult};
 use chrono::Utc;
 use sqlx::{Pool, Sqlite};
 use std::collections::{BTreeSet, HashMap};
-use veydan_sync::{Engine, Op};
+use veydan_sync::{refs_from_payload, Engine, LargeFileStore, Op};
 
 const GRACE_MS: i64 = 24 * 60 * 60 * 1000;
 const INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
@@ -26,11 +32,16 @@ const INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
 pub const LAST_RUN_KEY: &str = "sync_gc_last";
 pub const BLOBS_TOTAL_KEY: &str = "sync_gc_blobs_total";
 pub const REMOVED_KEY: &str = "sync_gc_removed";
+pub const LF_TOTAL_KEY: &str = "sync_gc_lf_total";
+pub const LF_REMOVED_KEY: &str = "sync_gc_lf_removed";
 
 #[derive(Debug, Default)]
 pub struct Outcome {
     pub blobs_total: usize,
     pub removed: usize,
+    /// v2 manifests + chunks after the pass.
+    pub lf_total: usize,
+    pub lf_removed: usize,
 }
 
 fn now_ms() -> i64 {
@@ -67,6 +78,11 @@ async fn blob_refs(engine: &Engine, op: &Op) -> CmdResult<Vec<String>> {
     })
 }
 
+/// Manifest ids every non-deleted op keeps alive, regardless of entity type.
+fn large_file_roots(ops: &[Op]) -> BTreeSet<String> {
+    ops.iter().filter(|op| !op.deleted).flat_map(|op| refs_from_payload(&op.payload)).collect()
+}
+
 /// One GC pass. Fails (and changes nothing) when some device's log is not fully readable.
 pub async fn run(engine: &Engine, db: &Pool<Sqlite>) -> CmdResult<Outcome> {
     let ops = engine.all_latest_ops().await.map_err(AppError::other)?;
@@ -78,9 +94,26 @@ pub async fn run(engine: &Engine, db: &Pool<Sqlite>) -> CmdResult<Outcome> {
 
     let rows: Vec<(String, i64)> =
         sqlx::query_as("SELECT blob, first_seen FROM sync_gc_candidates").fetch_all(db).await.map_err(AppError::db)?;
-    let mut candidates: HashMap<String, i64> = rows.into_iter().collect();
+    let (lf_candidates, candidates): (HashMap<String, i64>, HashMap<String, i64>) =
+        rows.into_iter().partition(|(k, _)| LargeFileStore::is_v2_key(k));
+    let mut candidates = candidates;
     let now = now_ms();
-    let mut outcome = Outcome { blobs_total: all.len(), removed: 0 };
+    let mut outcome = Outcome { blobs_total: all.len(), ..Default::default() };
+
+    // v2 first: it is fail-closed and must not run after v1 already deleted objects.
+    let store = engine.large_files(Default::default()).map_err(AppError::other)?;
+    let lf = store
+        .gc_with_complete_root_set(&large_file_roots(&ops), &lf_candidates, now, GRACE_MS)
+        .await
+        .map_err(AppError::other)?;
+    for (key, first_seen) in &lf.remembered {
+        remember(db, key, *first_seen).await?;
+    }
+    for key in &lf.forgotten {
+        forget(db, key).await?;
+    }
+    outcome.lf_removed = lf.removed.len();
+    outcome.lf_total = lf.manifests_total + lf.chunks_total - lf.removed.len();
 
     for blob in &all {
         if live.contains(blob) {
@@ -108,6 +141,8 @@ pub async fn run(engine: &Engine, db: &Pool<Sqlite>) -> CmdResult<Outcome> {
     set_setting(db, LAST_RUN_KEY, &now.to_string()).await?;
     set_setting(db, BLOBS_TOTAL_KEY, &outcome.blobs_total.to_string()).await?;
     set_setting(db, REMOVED_KEY, &outcome.removed.to_string()).await?;
+    set_setting(db, LF_TOTAL_KEY, &outcome.lf_total.to_string()).await?;
+    set_setting(db, LF_REMOVED_KEY, &outcome.lf_removed.to_string()).await?;
     Ok(outcome)
 }
 

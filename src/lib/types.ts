@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 export type AppError = {
-  code: 'db' | 'io' | 'browser' | 'proxy' | 'not_found' | 'other';
+  code: 'db' | 'io' | 'browser' | 'proxy' | 'not_found' | 'conflict_changed' | 'other';
   message: string;
 };
 
@@ -336,6 +336,8 @@ export interface NoteAttachment {
   rel_path: string;
   size: number;
   is_image: boolean;
+  /** False for a chunked file that is still only in the vault. */
+  present: boolean;
 }
 
 export interface OrphanAttachment {
@@ -490,6 +492,12 @@ export interface MergeResult {
   content: string;
   has_conflicts: boolean;
   blocks: MergeBlock[];
+}
+
+/** Sync conflict snapshot; `token` must be sent back with the resolution. */
+export interface ConflictView {
+  token: string;
+  merge: MergeResult;
 }
 
 export interface DiffLine {

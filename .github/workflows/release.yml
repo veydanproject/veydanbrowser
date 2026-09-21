@@ -1,4 +1,9 @@
 name: Release
+run-name: >-
+  ${{ contains(github.ref_name, '-alpha.') && 'Alpha'
+      || contains(github.ref_name, '-beta.') && 'Beta'
+      || contains(github.ref_name, '-rc.') && 'RC'
+      || 'Release' }} ${{ github.ref_name }}
 
 # Triggered by `make push release` (vX.Y.Z → linux/windows/macos/android) or
 # `make push alpha|beta|rc [linux] [windows] [macos] [android] [ios]`

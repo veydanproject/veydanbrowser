@@ -4,7 +4,7 @@
 //! S3-compatible adapter (AWS S3, Cloudflare R2, MinIO, Backblaze B2) with
 //! hand-rolled SigV4 signing. Only four operations are needed.
 
-use crate::storage::{http_client, is_noise_key, Storage};
+use crate::storage::{http_client, is_noise_key, status_error, Storage};
 use crate::{sha256_hex, Result, SyncError};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -87,6 +87,18 @@ impl S3Storage {
     }
 
     async fn request(&self, method: Method, path: &str, query: &[(String, String)], body: Vec<u8>) -> Result<reqwest::Response> {
+        self.request_with(method, path, query, body, &[]).await
+    }
+
+    /// `extra` headers are sent unsigned (SigV4 only requires host/date/content-sha256).
+    async fn request_with(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(String, String)],
+        body: Vec<u8>,
+        extra: &[(&str, &str)],
+    ) -> Result<reqwest::Response> {
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date = now.format("%Y%m%d").to_string();
@@ -120,22 +132,22 @@ impl S3Storage {
         url.set_path(path);
         url.set_query(if canonical_query.is_empty() { None } else { Some(&canonical_query) });
 
-        let resp = self
+        let mut req = self
             .client
             .request(method, url)
             .header("x-amz-date", amz_date)
             .header("x-amz-content-sha256", payload_hash)
-            .header("authorization", authorization)
-            .body(body)
-            .send()
-            .await?;
-        Ok(resp)
+            .header("authorization", authorization);
+        for (k, v) in extra {
+            req = req.header(*k, *v);
+        }
+        Ok(req.body(body).send().await?)
     }
 
     async fn fail(resp: reqwest::Response, what: &str) -> SyncError {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        SyncError::Storage(format!("s3 {what}: {status} {}", text.chars().take(300).collect::<String>()))
+        status_error(status, &format!("s3 {what}"), &text)
     }
 }
 
@@ -218,6 +230,33 @@ impl Storage for S3Storage {
             StatusCode::NOT_FOUND => Ok(()),
             s if s.is_success() => Ok(()),
             _ => Err(Self::fail(resp, "delete").await),
+        }
+    }
+
+    async fn exists(&self, key: &str) -> Result<bool> {
+        let resp = self.request(Method::HEAD, &self.object_path(&self.full_key(key)), &[], Vec::new()).await?;
+        match resp.status() {
+            StatusCode::NOT_FOUND => Ok(false),
+            s if s.is_success() => Ok(true),
+            _ => Err(Self::fail(resp, "head").await),
+        }
+    }
+
+    /// Conditional PUT; servers without `If-None-Match` fall back to HEAD + PUT.
+    async fn put_if_absent(&self, key: &str, data: &[u8]) -> Result<bool> {
+        let path = self.object_path(&self.full_key(key));
+        let resp = self.request_with(Method::PUT, &path, &[], data.to_vec(), &[("If-None-Match", "*")]).await?;
+        match resp.status() {
+            s if s.is_success() => Ok(true),
+            StatusCode::PRECONDITION_FAILED => Ok(false),
+            StatusCode::NOT_IMPLEMENTED | StatusCode::BAD_REQUEST => {
+                if self.exists(key).await? {
+                    return Ok(false);
+                }
+                self.put(key, data).await?;
+                Ok(true)
+            }
+            _ => Err(Self::fail(resp, "put").await),
         }
     }
 }

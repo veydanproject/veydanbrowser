@@ -7,7 +7,7 @@ use super::config::{get_setting, set_setting};
 use crate::error::{AppError, CmdResult};
 use sqlx::{Pool, Sqlite};
 use std::collections::HashMap;
-use veydan_sync::{Hlc, LocalState, PeerHead};
+use veydan_sync::{Hlc, LargeFileRef, LocalState, PeerHead};
 
 /// Where the local note file stands relative to the vault.
 #[derive(Debug, Clone, Default)]
@@ -183,9 +183,11 @@ pub struct AttachmentSyncState {
     pub head_hlc: Option<Hlc>,
     pub synced_hash: String,
     pub deleted: bool,
+    /// Chunked file accepted from the vault but kept remote until the user asks for it.
+    pub deferred: Option<LargeFileRef>,
 }
 
-type AttachmentStateRow = (String, String, String, String, String, i64);
+type AttachmentStateRow = (String, String, String, String, String, i64, String);
 
 fn row_to_attachment_state(r: AttachmentStateRow) -> AttachmentSyncState {
     AttachmentSyncState {
@@ -195,12 +197,13 @@ fn row_to_attachment_state(r: AttachmentStateRow) -> AttachmentSyncState {
         head_hlc: Hlc::decode(&r.3),
         synced_hash: r.4,
         deleted: r.5 != 0,
+        deferred: serde_json::from_str(&r.6).ok(),
     }
 }
 
 pub async fn load_attachment_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<(String, String), AttachmentSyncState>> {
     let rows: Vec<AttachmentStateRow> =
-        sqlx::query_as("SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted FROM sync_attachment_state")
+        sqlx::query_as("SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted, deferred_ref FROM sync_attachment_state")
             .fetch_all(db)
             .await
             .map_err(AppError::db)?;
@@ -213,7 +216,8 @@ pub async fn load_attachment_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<(Str
 
 pub async fn load_attachment_state(db: &Pool<Sqlite>, note_id: &str, name: &str) -> CmdResult<Option<AttachmentSyncState>> {
     let row: Option<AttachmentStateRow> = sqlx::query_as(
-        "SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted FROM sync_attachment_state WHERE note_id = ? AND name = ?",
+        "SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted, deferred_ref FROM sync_attachment_state
+         WHERE note_id = ? AND name = ?",
     )
     .bind(note_id)
     .bind(name)
@@ -223,13 +227,28 @@ pub async fn load_attachment_state(db: &Pool<Sqlite>, note_id: &str, name: &str)
     Ok(row.map(row_to_attachment_state))
 }
 
+/// Deferred (not yet downloaded) attachments of one note.
+pub async fn load_deferred_attachments(db: &Pool<Sqlite>, note_id: &str) -> CmdResult<Vec<AttachmentSyncState>> {
+    let rows: Vec<AttachmentStateRow> = sqlx::query_as(
+        "SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted, deferred_ref FROM sync_attachment_state
+         WHERE note_id = ? AND deleted = 0 AND deferred_ref != ''",
+    )
+    .bind(note_id)
+    .fetch_all(db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(rows.into_iter().map(row_to_attachment_state).collect())
+}
+
 pub async fn save_attachment_state(db: &Pool<Sqlite>, s: &AttachmentSyncState) -> CmdResult<()> {
+    let deferred = s.deferred.as_ref().map(|r| serde_json::to_string(r).unwrap_or_default()).unwrap_or_default();
     sqlx::query(
-        "INSERT INTO sync_attachment_state (note_id, name, head_blob, head_hlc, synced_hash, deleted)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO sync_attachment_state (note_id, name, head_blob, head_hlc, synced_hash, deleted, deferred_ref)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(note_id, name) DO UPDATE SET
            head_blob = excluded.head_blob, head_hlc = excluded.head_hlc,
-           synced_hash = excluded.synced_hash, deleted = excluded.deleted",
+           synced_hash = excluded.synced_hash, deleted = excluded.deleted,
+           deferred_ref = excluded.deferred_ref",
     )
     .bind(&s.note_id)
     .bind(&s.name)
@@ -237,6 +256,7 @@ pub async fn save_attachment_state(db: &Pool<Sqlite>, s: &AttachmentSyncState) -
     .bind(s.head_hlc.as_ref().map(Hlc::encode).unwrap_or_default())
     .bind(&s.synced_hash)
     .bind(s.deleted as i64)
+    .bind(deferred)
     .execute(db)
     .await
     .map_err(AppError::db)?;

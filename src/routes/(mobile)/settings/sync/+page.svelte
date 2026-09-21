@@ -6,8 +6,13 @@
   import Icon from '$lib/Icon.svelte';
   import { api, formatError, onSyncProgress, onSyncStatus, syncProgressText, type SyncConfig, type SyncProbe, type SyncProgress, type SyncStatus } from '$lib/mobile/api';
   import { t, locale } from '$lib/mobile/i18n';
+  import { api as shared, LARGE_FILE_LIMITS, largeFilePeakMib, type NoteAttachmentPolicy } from '$lib/api';
 
   let cfg = $state<SyncConfig | null>(null);
+  /** Device-local attachment download policy; saved with the form. */
+  let policy = $state<NoteAttachmentPolicy | null>(null);
+
+  const clampNum = (raw: string, [lo, hi]: readonly [number, number]) => Math.min(hi, Math.max(lo, Math.floor(Number(raw) || lo)));
   let status = $state<SyncStatus | null>(null);
   let probe = $state<SyncProbe | null>(null);
   let progress = $state<SyncProgress | null>(null);
@@ -39,7 +44,7 @@
 
   async function load() {
     try {
-      [cfg, status] = await Promise.all([api.sync.getConfig(), api.sync.status()]);
+      [cfg, status, policy] = await Promise.all([api.sync.getConfig(), api.sync.status(), shared.notes.attachmentPolicyGet()]);
     } catch (e) {
       error = formatError(e);
     }
@@ -47,6 +52,7 @@
 
   async function save() {
     if (cfg) await api.sync.setConfig(cfg);
+    if (policy) policy = await shared.notes.attachmentPolicySet($state.snapshot(policy));
   }
 
   /** Save the form, then run `fn`; errors land in the banner. */
@@ -172,6 +178,20 @@
         </button>
       </div>
 
+      {#if status.conflicts.length > 0}
+        <div class="m-section">{$t('settings_sync_conflicts')}</div>
+        <p class="m-hint">{$t('settings_sync_conflicts_hint')}</p>
+        <div class="m-list group">
+          {#each status.conflicts as c (c.note_id)}
+            <a class="m-row" href="/notes/{c.note_id}?conflict=1">
+              <Icon name="alert-triangle" size={18} />
+              <span class="m-row-label">{c.title || $t('notes_untitled')}</span>
+              <span class="chev"><Icon name="chevron-right" size={16} /></span>
+            </a>
+          {/each}
+        </div>
+      {/if}
+
       <div class="actions group">
         <button class="btn btn-primary" onclick={doSyncNow} disabled={busy || running}>
           <Icon name="refresh-cw" size={16} />
@@ -254,6 +274,48 @@
       <label for="device">{$t('settings_sync_device_name')}</label>
       <input id="device" bind:value={cfg.device_name} autocomplete="off" />
     </div>
+
+    <div class="m-section">{$t('settings_sync_lf_section')}</div>
+    <p class="m-hint">{$t('settings_sync_lf_hint')}</p>
+    <div class="two">
+      <div class="m-field">
+        <label for="lf-chunk">{$t('settings_sync_lf_chunk')}</label>
+        <input id="lf-chunk" type="number" inputmode="numeric" min={LARGE_FILE_LIMITS.chunkMib[0]} max={LARGE_FILE_LIMITS.chunkMib[1]}
+          value={cfg.large_files.chunk_mib}
+          oninput={(e) => (cfg!.large_files.chunk_mib = clampNum((e.currentTarget as HTMLInputElement).value, LARGE_FILE_LIMITS.chunkMib))} />
+      </div>
+      <div class="m-field">
+        <label for="lf-par">{$t('settings_sync_lf_parallelism')}</label>
+        <input id="lf-par" type="number" inputmode="numeric" min={LARGE_FILE_LIMITS.parallelism[0]} max={LARGE_FILE_LIMITS.parallelism[1]}
+          value={cfg.large_files.parallelism}
+          oninput={(e) => (cfg!.large_files.parallelism = clampNum((e.currentTarget as HTMLInputElement).value, LARGE_FILE_LIMITS.parallelism))} />
+      </div>
+    </div>
+    <div class="m-list group">
+      <button class="m-row" onclick={() => (cfg!.large_files.resume = !cfg!.large_files.resume)}>
+        <span class="m-row-label">{$t('settings_sync_lf_resume')}</span>
+        <span class="toggle" class:on={cfg.large_files.resume}></span>
+      </button>
+    </div>
+    <p class="m-hint">{$t('settings_sync_lf_ram', { mib: String(largeFilePeakMib(cfg.large_files)) })}</p>
+
+    {#if policy}
+      <div class="m-section">{$t('settings_att_section')}</div>
+      <div class="m-list group">
+        <button class="m-row" onclick={() => (policy!.download_on_sync = !policy!.download_on_sync)}>
+          <span class="m-row-label">{$t('settings_att_download_on_sync')}</span>
+          <span class="toggle" class:on={policy.download_on_sync}></span>
+        </button>
+      </div>
+      <p class="m-hint">{$t('settings_att_download_on_sync_hint')}</p>
+      <div class="m-field">
+        <label for="att-ask">{$t('settings_att_ask_above')}</label>
+        <input id="att-ask" type="number" inputmode="numeric" min="1" max="4096"
+          value={policy.ask_above_mib}
+          oninput={(e) => (policy!.ask_above_mib = clampNum((e.currentTarget as HTMLInputElement).value, [1, 4096]))} />
+      </div>
+      <p class="m-hint">{$t('settings_att_ask_above_hint')}</p>
+    {/if}
 
     {#if !status.joined}
       <button class="btn btn-ghost wide" onclick={doProbe} disabled={busy}>

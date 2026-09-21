@@ -5,6 +5,7 @@ import type {
   BulkImportResult,
   BulkProxyItem,
   CamoufoxStatus,
+  ConflictView,
   CreateProfileRequest,
   CreateProxyRequest,
   CreateWorkspaceColumnRequest,
@@ -109,16 +110,6 @@ export async function call<T>(cmd: string, args?: Record<string, unknown>): Prom
   }
   console.warn(`[dev-browser] invoke('${cmd}')`, args ?? '');
   return (cmd in devMocks ? devMocks[cmd] : []) as T;
-}
-
-function blobToBase64(file: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    // Data URL prefix ends at the first comma.
-    r.onload = () => resolve((r.result as string).slice((r.result as string).indexOf(',') + 1));
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(file);
-  });
 }
 
 function base64ToBytes(s: string): Uint8Array<ArrayBuffer> {
@@ -307,15 +298,19 @@ export const api = {
         headers: { 'x-note-id': noteId, 'x-file-name': encodeURIComponent(fileName) },
       });
     },
-    /** Base64 upload for platforms without raw IPC bodies (Android / iOS). */
-    attachmentAddBase64: async (noteId: string, file: Blob, fileName: string) =>
-      call<NoteAttachment>('note_attachment_add_base64', { noteId, name: fileName, data: await blobToBase64(file) }),
     attachmentRead: async (noteId: string, name: string) =>
       base64ToBytes(await call<string>('note_attachment_read', { noteId, name })),
+    /** Streaming copy of a native path or Android `content://` URI; no size limit from IPC. */
     attachmentAddFromPath: (noteId: string, srcPath: string) =>
       call<NoteAttachment>('note_attachment_add_from_path', { noteId, srcPath }),
+    attachmentPolicyGet: () => call<NoteAttachmentPolicy>('notes_attachment_policy_get'),
+    attachmentPolicySet: (policy: NoteAttachmentPolicy) =>
+      call<NoteAttachmentPolicy>('notes_attachment_policy_set', { policy }),
     clipboardFilePaths: () => call<string[]>('clipboard_file_paths'),
     attachmentList: (noteId: string) => call<NoteAttachment[]>('note_attachment_list', { noteId }),
+    /** Download a vault-only attachment; progress arrives via transfer events. */
+    attachmentFetch: (noteId: string, name: string) =>
+      call<NoteAttachment>('note_attachment_fetch', { noteId, name }),
     attachmentDelete: (noteId: string, name: string) => call<void>('note_attachment_delete', { noteId, name }),
     attachmentOpen: (noteId: string, name: string) => call<void>('note_attachment_open', { noteId, name }),
     attachmentSave: (noteId: string, name: string, dest: string) =>
@@ -432,11 +427,15 @@ export const api = {
       call<void>('sync_change_passphrase', { old, new: newPassphrase }),
     status: () => call<SyncStatus>('sync_status'),
     runNow: () => call<SyncStatus>('sync_run_now'),
+    /** Stop a large attachment upload/download; it is retried on the next cycle. */
+    attachmentCancel: (noteId: string, name: string) =>
+      call<boolean>('sync_attachment_cancel', { noteId, name }),
     /** Background cycle if a vault is joined and the rate limit allows. */
     trigger: () => call<void>('sync_trigger'),
-    conflictGet: (noteId: string) => call<MergeResult>('sync_conflict_get', { noteId }),
-    conflictResolve: (noteId: string, content: string) =>
-      call<SyncStatus>('sync_conflict_resolve', { noteId, content }),
+    conflictGet: (noteId: string) => call<ConflictView>('sync_conflict_get', { noteId }),
+    /** Fails with `conflict_changed` when the conflict moved since `conflictGet`. */
+    conflictResolve: (noteId: string, token: string, content: string) =>
+      call<SyncStatus>('sync_conflict_resolve', { noteId, token, content }),
     profileTakeRemote: (profileId: string) => call<SyncStatus>('sync_profile_files_take_remote', { profileId }),
     profilePushMine: (profileId: string) => call<SyncStatus>('sync_profile_files_push_mine', { profileId }),
   },
@@ -507,7 +506,59 @@ export interface SyncConfig {
   /** Replicate firefox-profile directories, not only metadata. */
   profile_files: boolean;
   device_name: string;
+  /** Device-local chunked transfer settings; new files only. */
+  large_files: LargeFileSettings;
 }
+
+export interface LargeFileSettings {
+  /** 1..64 */
+  chunk_mib: number;
+  /** 1..8 */
+  parallelism: number;
+  resume: boolean;
+}
+
+export const LARGE_FILE_LIMITS = { chunkMib: [1, 64], parallelism: [1, 8] } as const;
+
+/** Rough peak RAM of a transfer: one buffer per in-flight chunk plus crypto copies. */
+export function largeFilePeakMib(s: LargeFileSettings): number {
+  return s.chunk_mib * (s.parallelism + 1) * 2;
+}
+
+/** Notes-domain policy: when an attachment goes through chunked storage. */
+export interface NoteAttachmentPolicy {
+  large_files_enabled: boolean;
+  /** Files at or above this size use chunked storage; smaller stay one blob. */
+  threshold_mib: number;
+  /** 0 = no product limit. */
+  max_file_gib: number;
+  /** Off: chunked attachments at or above `ask_above_mib` stay in the vault until requested. */
+  download_on_sync: boolean;
+  /** Missing attachments at or above this size prompt for download when the note opens. */
+  ask_above_mib: number;
+}
+
+export const DEFAULT_ATTACHMENT_POLICY: NoteAttachmentPolicy = {
+  large_files_enabled: true,
+  threshold_mib: 16,
+  max_file_gib: 10,
+  download_on_sync: true,
+  ask_above_mib: 16,
+};
+
+/** Progress of one attachment upload/download (`notes://attachment-transfer`). */
+export interface AttachmentTransfer {
+  note_id: string;
+  name: string;
+  direction: 'up' | 'down';
+  phase: string;
+  done: number;
+  total: number | null;
+  error: string | null;
+  finished: boolean;
+}
+
+export const ATTACHMENT_TRANSFER_EVENT = 'notes://attachment-transfer';
 
 export interface SyncLease {
   profile_id: string;
@@ -543,6 +594,9 @@ export interface SyncStatus {
   gc_last: string | null;
   blobs_total: number | null;
   blobs_removed_last_gc: number | null;
+  /** Chunked large-file objects (manifests + chunks) after the last cleanup. */
+  lf_total: number | null;
+  lf_removed_last_gc: number | null;
 }
 
 /** Device name from a `profile_launch` lease error, or null for other errors. */

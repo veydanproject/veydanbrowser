@@ -6,7 +6,8 @@
   import { syncStore } from '$lib/store/sync.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
-  import { api } from '$lib/api';
+  import { api, DEFAULT_ATTACHMENT_POLICY, type AttachmentTransfer } from '$lib/api';
+  import { onAttachmentTransfer, pickNativeFiles } from '$lib/attachmentTransfer';
   import type { NoteTag, NoteFolder, Note, NoteAttachment } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import NoteTagsInput from './NoteTagsInput.svelte';
@@ -23,7 +24,7 @@
   import { wordCount } from '$lib/markdown';
   import { pasteHasHiddenFiles } from '$lib/notes-files';
   import { t, locale } from '$lib/i18n';
-  import { relTime, formatError } from '$lib/utils';
+  import { relTime, formatError, formatBytes, hasErrorCode } from '$lib/utils';
   import { onMount, tick, untrack } from 'svelte';
 
   interface Props {
@@ -58,6 +59,9 @@
   let showHistory = $state(false);
   let mergeHistoryId = $state<string | null>(null);
   let showSyncConflict = $state(false);
+  // Token of the loaded conflict snapshot; bumping the key reloads a stale one.
+  let syncConflictToken = '';
+  let syncConflictKey = $state(0);
   const syncConflict = $derived(!!note && (syncStore.status?.conflicts ?? []).some((c) => c.note_id === note.id));
 
   // ── Editing modes: `rich` (WYSIWYG, default) and `source` (raw Markdown) ─────
@@ -215,6 +219,15 @@
   // ── Attachments: paste, OS drag-and-drop, panel ──────────────────────────────
   let attachments = $state<NoteAttachment[]>([]);
   let attachmentsOpen = $state(false);
+  /** Large uploads/downloads in flight, keyed by `note_id/name`. */
+  let transfers = $state<Map<string, AttachmentTransfer>>(new Map());
+  let attachError = $state<string | null>(null);
+  /** Vault-only attachments at or above this size ask before downloading. */
+  let askAboveBytes = $state(DEFAULT_ATTACHMENT_POLICY.ask_above_mib * 1024 * 1024);
+  /** Note whose download prompt the user dismissed. */
+  let fetchDismissed = $state<string | null>(null);
+  const pendingFetch = $derived(attachments.filter((a) => !a.present && a.size >= askAboveBytes));
+  const pendingFetchBytes = $derived(pendingFetch.reduce((n, a) => n + a.size, 0));
 
   async function loadAttachments() {
     attachments = note ? await api.notes.attachmentList(note.id) : [];
@@ -223,6 +236,27 @@
   $effect(() => {
     if (note?.id) void loadAttachments();
   });
+
+  /** Download a vault-only attachment into the note's directory. */
+  async function fetchAttachment(a: NoteAttachment) {
+    if (!note) return;
+    attachError = null;
+    try {
+      await api.notes.attachmentFetch(note.id, a.name);
+    } catch (e) {
+      attachError = formatError(e);
+      attachmentsOpen = true;
+    }
+    await loadAttachments();
+  }
+
+  async function fetchPending() {
+    const id = note?.id;
+    for (const a of pendingFetch) {
+      if (note?.id !== id) return;
+      await fetchAttachment(a);
+    }
+  }
 
   /** Insert a Markdown link to the attachment at the cursor. */
   function insertAttachmentLink(a: NoteAttachment) {
@@ -236,27 +270,39 @@
     applyEdit({ text: before + snippet + contentValue.slice(pos), selStart: pos + snippet.length, selEnd: pos + snippet.length });
   }
 
+  /** Small clipboard payloads only (pasted images); files from disk go through `uploadPaths`. */
   async function uploadFiles(files: File[]) {
     if (!note || readonly) return;
-    for (const f of files) {
-      const bytes = new Uint8Array(await f.arrayBuffer());
-      const name = f.name || `pasted-${Date.now()}.${f.type.split('/')[1] ?? 'bin'}`;
-      insertAttachmentLink(await api.notes.attachmentAdd(note.id, name, bytes));
+    attachError = null;
+    try {
+      for (const f of files) {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        const name = f.name || `pasted-${Date.now()}.${f.type.split('/')[1] ?? 'bin'}`;
+        insertAttachmentLink(await api.notes.attachmentAdd(note.id, name, bytes));
+      }
+    } catch (e) {
+      attachError = formatError(e);
     }
     await loadAttachments();
   }
 
-  /** Copy local files (paste/drop of file references) into the note's attachments. */
+  /** Stream local files (picker, paste/drop of file references) into the note's attachments. */
   async function uploadPaths(paths: string[]) {
     if (!note || readonly) return;
+    attachError = null;
     for (const p of paths) {
       try {
         insertAttachmentLink(await api.notes.attachmentAddFromPath(note.id, p));
       } catch (e) {
-        console.error('attachment copy failed', p, e);
+        attachError = formatError(e);
+        attachmentsOpen = true;
       }
     }
     await loadAttachments();
+  }
+
+  async function pickFiles() {
+    await uploadPaths(await pickNativeFiles());
   }
 
   /** Files copied in the OS file manager: the webview hides their paths, so read them via Rust. */
@@ -298,7 +344,14 @@
     let unlisten: (() => void) | null = null;
     let unlistenSync: (() => void) | null = null;
     let unlistenStatus: (() => void) | null = null;
+    let unlistenTransfer: (() => void) | null = null;
     let disposed = false;
+    void api.notes.attachmentPolicyGet().then((p) => (askAboveBytes = p.ask_above_mib * 1024 * 1024)).catch(() => {});
+    void onAttachmentTransfer((all) => {
+      const id = note?.id;
+      transfers = new Map([...all].filter(([, x]) => x.note_id === id));
+      if ([...all.values()].some((x) => x.note_id === id && x.finished)) void loadAttachments();
+    }).then((un) => { if (disposed) un(); else unlistenTransfer = un; });
     // Sync status drives the conflict banner
     void syncStore.listen().then((un) => { if (disposed) un(); else unlistenStatus = un; });
     void import('@tauri-apps/api/webview').then(({ getCurrentWebview }) =>
@@ -313,7 +366,7 @@
         if (event.payload === note?.id) void loadAttachments();
       }),
     ).then((un) => { if (disposed) un(); else unlistenSync = un; });
-    return () => { disposed = true; unlisten?.(); unlistenSync?.(); unlistenStatus?.(); };
+    return () => { disposed = true; unlisten?.(); unlistenSync?.(); unlistenStatus?.(); unlistenTransfer?.(); };
   });
 
   // Resizable history panel
@@ -434,18 +487,29 @@
     showHistory = false;
   }
 
+  async function loadSyncConflict(id: string) {
+    const view = await api.sync.conflictGet(id);
+    syncConflictToken = view.token;
+    return view.merge;
+  }
+
+  /** Closes only after the note and status reloaded; a stale conflict is reloaded instead. */
   async function onSyncConflictResolved(mergedContent: string) {
     if (!note) return;
     const id = note.id;
     try {
-      await api.sync.conflictResolve(id, mergedContent);
+      await api.sync.conflictResolve(id, syncConflictToken, mergedContent);
       const fresh = await api.notes.get(id);
       onHistoryRestore(fresh);
       await syncStore.refresh();
+      showSyncConflict = false;
     } catch (e) {
+      if (hasErrorCode(e, 'conflict_changed')) {
+        syncConflictKey++;
+        return;
+      }
       syncStore.error = formatError(e);
     }
-    showSyncConflict = false;
   }
 
   function onTitleChange() {
@@ -500,6 +564,17 @@
         <span>{$t('note_sync_conflict')}</span>
         <div class="banner-actions">
           <button onclick={() => (showSyncConflict = true)}>{$t('note_sync_conflict_resolve')}</button>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Vault-only attachments above the prompt size -->
+    {#if pendingFetch.length && fetchDismissed !== note.id}
+      <div class="banner banner-info">
+        <span>{$t('note_att_fetch_prompt', { n: String(pendingFetch.length), size: formatBytes(pendingFetchBytes) })}</span>
+        <div class="banner-actions">
+          <button onclick={fetchPending}>{$t('note_att_fetch_yes')}</button>
+          <button onclick={() => (fetchDismissed = note!.id)}>{$t('note_att_fetch_later')}</button>
         </div>
       </div>
     {/if}
@@ -654,9 +729,12 @@
           noteId={note.id}
           {attachments}
           {readonly}
+          {transfers}
+          error={attachError}
           oninsert={insertAttachmentLink}
           onchanged={loadAttachments}
-          onpick={uploadFiles}
+          onpick={pickFiles}
+          onfetch={fetchAttachment}
         />
       {/if}
     </div>
@@ -755,13 +833,15 @@
       />
     {:else if showSyncConflict}
       {@const noteId = note.id}
-      <NoteHistoryMerge
-        load={() => api.sync.conflictGet(noteId)}
-        theirsLabel={$t('note_sync_conflict_remote')}
-        theirsShort={$t('note_sync_conflict_remote_short')}
-        onresolved={onSyncConflictResolved}
-        oncancel={() => (showSyncConflict = false)}
-      />
+      {#key syncConflictKey}
+        <NoteHistoryMerge
+          load={() => loadSyncConflict(noteId)}
+          theirsLabel={$t('note_sync_conflict_remote')}
+          theirsShort={$t('note_sync_conflict_remote_short')}
+          onresolved={onSyncConflictResolved}
+          oncancel={() => (showSyncConflict = false)}
+        />
+      {/key}
     {/if}
   </div>
 

@@ -604,6 +604,8 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     )
     .execute(pool)
     .await?;
+    // Chunked attachment accepted from the vault but not downloaded yet (LargeFileRef JSON).
+    add_column_if_not_exists(pool, "sync_attachment_state", "deferred_ref", "TEXT NOT NULL DEFAULT ''").await?;
 
     // Per-row sync position for table entities (profiles, proxies, ...).
     sqlx::query(

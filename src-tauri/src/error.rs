@@ -16,6 +16,9 @@ pub enum AppError {
     Proxy(String),
     #[error("Not found: {0}")]
     NotFound(String),
+    /// The conflict the caller resolved no longer matches the stored one.
+    #[error("Conflict changed: {0}")]
+    ConflictChanged(String),
     #[error("{0}")]
     Other(String),
 }
@@ -70,6 +73,9 @@ impl AppError {
     }
     pub fn not_found(e: impl std::fmt::Display) -> Self {
         Self::NotFound(e.to_string())
+    }
+    pub fn conflict_changed(e: impl std::fmt::Display) -> Self {
+        Self::ConflictChanged(e.to_string())
     }
     pub fn other(e: impl std::fmt::Display) -> Self {
         Self::Other(e.to_string())

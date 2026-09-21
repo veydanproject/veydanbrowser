@@ -504,9 +504,11 @@
     border-radius: 2px;
     z-index: 2;
     display: none;
-    transform: translate(30%, 30%);
   }
-  .host :global([data-resize-handle="bottom-right"]) { cursor: nwse-resize; }
+  .host :global([data-resize-handle="bottom-right"]) { cursor: nwse-resize; transform: translate(30%, 30%); }
+  .host :global([data-resize-handle="bottom-left"]) { cursor: nesw-resize; transform: translate(-30%, 30%); }
+  .host :global([data-resize-handle="top-right"]) { cursor: nesw-resize; transform: translate(30%, -30%); }
+  .host :global([data-resize-handle="top-left"]) { cursor: nwse-resize; transform: translate(-30%, -30%); }
   .host :global(.ProseMirror-selectednode [data-resize-handle]),
   .host :global([data-resize-container].ProseMirror-selectednode [data-resize-handle]) {
     display: block;

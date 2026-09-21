@@ -112,7 +112,7 @@ export const NoteImage = Image.extend<ImageOptions & { resolveSrc: ResolveSrc }>
       resolveSrc: (s: string) => s,
       resize: {
         enabled: true,
-        directions: ['bottom-right'],
+        directions: ['top-left', 'top-right', 'bottom-left', 'bottom-right'],
         minWidth: 40,
         minHeight: 40,
         alwaysPreserveAspectRatio: true,

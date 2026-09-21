@@ -70,6 +70,129 @@ pub async fn notes_capture_rules_set(
     Ok(rules)
 }
 
+// ── Attachment policy: when a note attachment becomes a large file ───────────
+
+const POLICY_KEY: &str = "notes_attachment_policy";
+const MAX_THRESHOLD_MIB: u64 = 4096;
+const MAX_FILE_GIB: u64 = 1024;
+const MIB: u64 = 1024 * 1024;
+const GIB: u64 = 1024 * MIB;
+
+/// Notes-domain policy; the large-files module never reads it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteAttachmentPolicy {
+    /// Off: every attachment stays a v1 blob, whatever its size.
+    pub large_files_enabled: bool,
+    /// Files at or above this size sync as v2 large files.
+    pub threshold_mib: u64,
+    /// Product limit for one attachment; 0 = no limit (backend quota still applies).
+    pub max_file_gib: u64,
+    /// Off: chunked attachments at or above `ask_above_mib` stay in the vault until requested.
+    #[serde(default = "default_true")]
+    pub download_on_sync: bool,
+    /// Size from which a missing attachment prompts for download when the note opens.
+    #[serde(default = "default_ask_above_mib")]
+    pub ask_above_mib: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_ask_above_mib() -> u64 {
+    16
+}
+
+impl Default for NoteAttachmentPolicy {
+    fn default() -> Self {
+        Self {
+            large_files_enabled: true,
+            threshold_mib: 16,
+            max_file_gib: 10,
+            download_on_sync: true,
+            ask_above_mib: default_ask_above_mib(),
+        }
+    }
+}
+
+impl NoteAttachmentPolicy {
+    pub fn validate(&self) -> CmdResult<()> {
+        if !(1..=MAX_THRESHOLD_MIB).contains(&self.threshold_mib) {
+            return Err(AppError::other(format!("threshold must be 1..{MAX_THRESHOLD_MIB} MiB")));
+        }
+        if self.max_file_gib > MAX_FILE_GIB {
+            return Err(AppError::other(format!("max file size must be 0..{MAX_FILE_GIB} GiB")));
+        }
+        if !(1..=MAX_THRESHOLD_MIB).contains(&self.ask_above_mib) {
+            return Err(AppError::other(format!("download prompt threshold must be 1..{MAX_THRESHOLD_MIB} MiB")));
+        }
+        Ok(())
+    }
+
+    pub fn uses_large_files(&self, size: u64) -> bool {
+        self.large_files_enabled && size >= self.threshold_mib * MIB
+    }
+
+    /// Whether a remote chunked attachment of `size` is fetched during sync.
+    pub fn downloads_on_sync(&self, size: u64) -> bool {
+        self.download_on_sync || size < self.ask_above_mib * MIB
+    }
+
+    pub fn ask_above_bytes(&self) -> u64 {
+        self.ask_above_mib * MIB
+    }
+
+    /// Product limit in bytes; `None` when unlimited.
+    pub fn max_file_bytes(&self) -> Option<u64> {
+        (self.max_file_gib > 0).then(|| self.max_file_gib * GIB)
+    }
+
+    /// Product limit check; `None` size (unknown source length) passes.
+    pub fn check_size(&self, size: Option<u64>) -> CmdResult<()> {
+        match (size, self.max_file_bytes()) {
+            (Some(n), Some(max)) if n > max => {
+                Err(AppError::other(format!("attachment exceeds the {} GiB limit", self.max_file_gib)))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+pub(crate) async fn load_attachment_policy(db: &sqlx::Pool<sqlx::Sqlite>) -> NoteAttachmentPolicy {
+    sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = ?")
+        .bind(POLICY_KEY)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn notes_attachment_policy_get(state: tauri::State<'_, AppState>) -> CmdResult<NoteAttachmentPolicy> {
+    Ok(load_attachment_policy(&state.db).await)
+}
+
+#[tauri::command]
+pub async fn notes_attachment_policy_set(
+    policy: NoteAttachmentPolicy,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<NoteAttachmentPolicy> {
+    policy.validate()?;
+    let json = serde_json::to_string(&policy).map_err(AppError::other)?;
+    sqlx::query(
+        "INSERT INTO app_settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(POLICY_KEY)
+    .bind(&json)
+    .execute(&state.db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(policy)
+}
+
 // ── Notes directory settings ──────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]

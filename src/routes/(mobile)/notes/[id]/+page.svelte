@@ -7,12 +7,14 @@
   import { page } from '$app/state';
   import Icon from '$lib/Icon.svelte';
   import {
-    api, formatError, onSyncChanged,
+    api, formatError, onSyncChanged, onSyncStatus,
     type NavChild, type Note, type NoteAttachment, type NoteChip, type NoteListItem, type NoteTag,
   } from '$lib/mobile/api';
   import { locale, t } from '$lib/mobile/i18n';
+  import { api as shared, DEFAULT_ATTACHMENT_POLICY, type AttachmentTransfer } from '$lib/api';
+  import { onAttachmentTransfer } from '$lib/attachmentTransfer';
   import { AttachmentUrls, attachmentHref } from '$lib/mobile/markdown';
-  import { fmtDateTime, loadEditorMode, saveEditorMode, type EditorMode } from '$lib/mobile/notes-editor';
+  import { fmtDateTime, fmtSize, loadEditorMode, saveEditorMode, type EditorMode } from '$lib/mobile/notes-editor';
   import NoteRichEditor from '$lib/components/mobile/NoteRichEditor.svelte';
   import WikiLinkSheet from '$lib/components/mobile/WikiLinkSheet.svelte';
   import NoteActionsSheet from '$lib/components/mobile/NoteActionsSheet.svelte';
@@ -20,6 +22,7 @@
   import NoteLinksSheet from '$lib/components/mobile/NoteLinksSheet.svelte';
   import MoveFolderSheet from '$lib/components/mobile/MoveFolderSheet.svelte';
   import NoteAttachSheet from '$lib/components/mobile/NoteAttachSheet.svelte';
+  import NoteConflictSheet from '$lib/components/mobile/NoteConflictSheet.svelte';
   import { WIKI_MARK, unclosedWikiAt, wikiMarkup } from '$lib/tiptap-ext';
 
   // "new" means nothing is stored yet; the note is created on the first edit.
@@ -39,7 +42,9 @@
   let ready = $state(untrack(() => id) === 'new');
 
   let mode = $state<EditorMode>(loadEditorMode());
-  let sheet = $state<'none' | 'actions' | 'links' | 'history' | 'move' | 'attach'>('none');
+  let sheet = $state<'none' | 'actions' | 'links' | 'history' | 'move' | 'attach' | 'conflict'>('none');
+  // Unresolved sync conflict on this note; drives the banner.
+  let hasConflict = $state(false);
   let allTags = $state<NoteTag[]>([]);
   let allNotes = $state<NoteListItem[]>([]);
   let folders = $state<NavChild[]>([]);
@@ -55,8 +60,17 @@
 
   let rich = $state<NoteRichEditor>();
   let body = $state<HTMLTextAreaElement>();
-  let fileInput = $state<HTMLInputElement>();
-  let imageInput = $state<HTMLInputElement>();
+  /** Large vault transfers of this note's attachments, keyed by `note_id/name`. */
+  let transfers = $state<Map<string, AttachmentTransfer>>(new Map());
+  /** Vault-only attachments at or above this size ask before downloading. */
+  const askAboveBytes = shared.notes.attachmentPolicyGet()
+    .then((p) => p.ask_above_mib * 1024 * 1024)
+    .catch(() => DEFAULT_ATTACHMENT_POLICY.ask_above_mib * 1024 * 1024);
+  /** Note already prompted for downloads in this session. */
+  let fetchAsked: string | null = null;
+  /** Vault-only attachments offered for download in the card under the header. */
+  let fetchOffer = $state<NoteAttachment[]>([]);
+  const fetchOfferBytes = $derived(fetchOffer.reduce((n, a) => n + a.size, 0));
 
   let saveTimer: ReturnType<typeof setTimeout>;
   let saving: Promise<void> | null = null;
@@ -83,8 +97,36 @@
       applyNote(n);
       if (status !== 'dirty' && status !== 'saving') status = 'saved';
       ready = true;
+      void promptFetch();
     } catch (e) {
       error = formatError(e);
+    }
+  }
+
+  /** Once per note: show the download card for vault-only attachments above the prompt size. */
+  async function promptFetch() {
+    if (fetchAsked === id) return;
+    fetchAsked = id;
+    const minSize = await askAboveBytes;
+    fetchOffer = attachments.filter((a) => !a.present && a.size >= minSize);
+  }
+
+  async function fetchOffered() {
+    const noteId = id;
+    const list = fetchOffer;
+    fetchOffer = [];
+    for (const a of list) {
+      if (id !== noteId) return;
+      await fetchAttachment(a);
+    }
+  }
+
+  async function fetchAttachment(a: NoteAttachment) {
+    try {
+      await api.attachments.fetch(id, a.name);
+      await loadAttachments();
+    } catch (err) {
+      error = formatError(err);
     }
   }
 
@@ -99,7 +141,7 @@
       }
     }
     for (const a of attachments) {
-      if (a.is_image && !thumbs[a.name]) {
+      if (a.is_image && a.present && !thumbs[a.name]) {
         const url = await urls.get(a.name);
         if (url) thumbs[a.name] = url;
       }
@@ -112,15 +154,47 @@
     api.notes.nav().then((x) => (folders = x.folders)).catch(() => {});
   }
 
+  async function refreshConflict() {
+    if (id === 'new') return;
+    try {
+      const s = await api.sync.status();
+      hasConflict = s.conflicts.some((c) => c.note_id === id);
+    } catch {
+      hasConflict = false;
+    }
+  }
+
+  /** Flush pending edits first so the "mine" side is the text on screen. */
+  async function openConflict() {
+    await save();
+    sheet = 'conflict';
+  }
+
   onMount(() => {
-    load();
+    const fromSettings = page.url.searchParams.has('conflict');
+    load().then(async () => {
+      await refreshConflict();
+      if (fromSettings && id !== 'new') {
+        replaceState(`/notes/${id}`, {});
+        await openConflict();
+      }
+    });
     loadCatalogs();
     // Remote edit arrived while open: reload unless local edits are pending.
     const unlisten = onSyncChanged(['note', 'note_attachment', 'note_tag', 'workspace', 'profile', 'note_folder'], () => {
       if (status !== 'dirty' && status !== 'saving') load();
       loadCatalogs();
     });
-    return () => unlisten.then((f) => f());
+    const unStatus = onSyncStatus(() => void refreshConflict());
+    const unTransfer = onAttachmentTransfer((all) => {
+      transfers = new Map([...all].filter(([, x]) => x.note_id === id));
+      if ([...all.values()].some((x) => x.note_id === id && x.finished)) void loadAttachments();
+    });
+    return () => {
+      unlisten.then((f) => f());
+      unStatus.then((f) => f());
+      unTransfer.then((f) => f());
+    };
   });
 
   // Following a wiki link keeps this component; reload when the route param changes.
@@ -151,7 +225,10 @@
     sheet = 'none';
     ready = next === 'new';
     status = 'idle';
+    hasConflict = false;
+    fetchOffer = [];
     await load();
+    await refreshConflict();
   }
 
   // ── Editor ──
@@ -264,19 +341,15 @@
 
   // ── Attachments ──
 
-  async function attach(e: Event) {
-    const input = e.currentTarget as HTMLInputElement;
-    const files = Array.from(input.files ?? []);
-    input.value = '';
-    if (!files.length) return;
+  /** Native picker; files are streamed into the note by Rust. */
+  async function attach(imagesOnly: boolean) {
     try {
       if (id === 'new') {
         status = 'dirty';
         await save();
         if (id === 'new') return;
       }
-      const added: NoteAttachment[] = [];
-      for (const f of files) added.push(await api.attachments.add(id, f));
+      const added = await api.attachments.pick(id, imagesOnly);
       await loadAttachments();
       for (const a of added) if (a.is_image) insertAttachment(a);
     } catch (err) {
@@ -298,6 +371,14 @@
 
   function insertAttachment(a: NoteAttachment) {
     insertText(a.is_image ? `![${a.name}](${attachmentHref(a.rel_path)})` : `[${a.name}](${attachmentHref(a.rel_path)})`);
+  }
+
+  async function saveAttachment(a: NoteAttachment) {
+    try {
+      await api.attachments.save(id, a.name);
+    } catch (err) {
+      error = formatError(err);
+    }
   }
 
   async function removeAttachment(a: NoteAttachment) {
@@ -452,9 +533,6 @@
       </button>
     </div>
   </div>
-  <input class="hidden" type="file" multiple bind:this={fileInput} onchange={attach} />
-  <input class="hidden" type="file" accept="image/*" multiple bind:this={imageInput} onchange={attach} />
-
   <div class="meta">
     {#if error}
       <div class="m-error">{error}</div>
@@ -495,6 +573,23 @@
     {/if}
     {#if updatedAt}
       <span class="when">{fmtDateTime(updatedAt, $locale)}</span>
+    {/if}
+    {#if hasConflict}
+      <div class="conflict-banner">
+        <Icon name="alert-triangle" size={16} />
+        <span>{$t('note_sync_conflict')}</span>
+        <button type="button" class="btn btn-primary" onclick={openConflict}>{$t('note_sync_conflict_resolve')}</button>
+      </div>
+    {/if}
+    {#if fetchOffer.length}
+      <div class="fetch-card">
+        <span class="m-doc"><Icon name="download" size={16} /></span>
+        <span class="fetch-text">{$t('note_att_fetch_prompt', { n: String(fetchOffer.length), size: fmtSize(fetchOfferBytes) })}</span>
+        <div class="fetch-actions">
+          <button type="button" class="btn btn-ghost" onclick={() => (fetchOffer = [])}>{$t('note_att_fetch_later')}</button>
+          <button type="button" class="btn btn-primary" onclick={fetchOffered}>{$t('note_att_fetch_yes')}</button>
+        </div>
+      </div>
     {/if}
   </div>
 
@@ -576,10 +671,20 @@
   folderLabel={folderChip?.label ?? ''}
   {tags}
   onclose={() => (sheet = 'none')}
-  onfile={() => fileInput?.click()}
-  onimage={() => imageInput?.click()}
+  onfile={() => attach(false)}
+  onimage={() => attach(true)}
+  {transfers}
+  oncancel={(name) => api.sync.attachmentCancel(id, name)}
   oninsert={(a) => { insertAttachment(a); sheet = 'none'; }}
   onremove={removeAttachment}
+  onfetch={fetchAttachment}
+  onsave={saveAttachment}
+/>
+<NoteConflictSheet
+  open={sheet === 'conflict'}
+  noteId={id}
+  onclose={() => (sheet = 'none')}
+  onresolved={async () => { await load(); await refreshConflict(); }}
 />
 <WikiLinkSheet
   open={wikiOpen}
@@ -609,6 +714,37 @@
     padding: 0 var(--sp-4) var(--sp-2);
     background: var(--bg);
   }
+  .conflict-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin-top: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--warn-border, var(--border));
+    border-radius: var(--m-radius, 12px);
+    background: var(--warn-bg, var(--surface-2));
+    color: var(--warn-text, var(--text));
+    font-size: 13px;
+  }
+  .conflict-banner span { flex: 1; min-width: 0; }
+  .conflict-banner .btn { min-height: 36px; padding: 0 var(--sp-3); flex-shrink: 0; }
+  .fetch-card {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: var(--sp-2) var(--sp-3);
+    margin-top: var(--sp-2);
+    padding: var(--sp-3);
+    border: 1px solid var(--accent-border, var(--m-card-border));
+    border-radius: var(--m-radius, 12px);
+    background: var(--accent-bg);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .fetch-card .m-doc { color: var(--accent); }
+  .fetch-text { min-width: 0; line-height: 1.35; }
+  .fetch-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: var(--sp-2); }
+  .fetch-actions .btn { min-height: 36px; padding: 0 var(--sp-3); }
   .scroll {
     flex: 1;
     min-height: 0;
@@ -678,7 +814,6 @@
   .body:focus { box-shadow: none; }
   .editor :global(.rich) { flex: none; }
   .editor :global(.ProseMirror) { overflow: visible; min-height: 200px; font-size: 16px; line-height: 1.55; }
-  .hidden { display: none; }
 
   .tags { margin-bottom: var(--sp-2); }
   .cloud { margin-bottom: var(--sp-2); }

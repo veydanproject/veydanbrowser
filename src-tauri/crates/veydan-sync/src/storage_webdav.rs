@@ -3,8 +3,8 @@
 
 //! WebDAV adapter (Nextcloud, Yandex Disk, generic servers) with basic auth.
 
-use crate::storage::{http_client, is_noise_key, send_retry, Storage};
-use crate::{Result, SyncError};
+use crate::storage::{http_client, is_noise_key, send_retry, status_error, Storage, TMP_SUFFIX};
+use crate::{random_hex, Result, SyncError};
 use async_trait::async_trait;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
 use quick_xml::events::Event;
@@ -62,7 +62,35 @@ impl WebDavStorage {
     async fn fail(resp: reqwest::Response, what: &str) -> SyncError {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        SyncError::Storage(format!("webdav {what}: {status} {}", text.chars().take(300).collect::<String>()))
+        status_error(status, &format!("webdav {what}"), &text)
+    }
+
+    async fn put_raw(&self, key: &str, data: &[u8]) -> Result<()> {
+        if let Some((dir, _)) = key.rsplit_once('/') {
+            self.ensure_dir(dir).await?;
+        }
+        let url = self.url_for(key);
+        let body = data.to_vec();
+        let resp = send_retry(|| self.req(Method::PUT, url.clone()).body(body.clone())).await?;
+        if resp.status().is_success() { Ok(()) } else { Err(Self::fail(resp, "put").await) }
+    }
+
+    /// MOVE without overwrite: 412 means the destination already exists.
+    /// `Ok(None)` when the server does not support MOVE at all.
+    async fn move_no_overwrite(&self, from: &str, to: &str) -> Result<Option<bool>> {
+        let dest = self.url_for(to);
+        let resp = send_retry(|| {
+            self.req(Method::from_bytes(b"MOVE").expect("valid method"), self.url_for(from))
+                .header("Destination", dest.as_str())
+                .header("Overwrite", "F")
+        })
+        .await?;
+        match resp.status() {
+            s if s.is_success() => Ok(Some(true)),
+            StatusCode::PRECONDITION_FAILED => Ok(Some(false)),
+            StatusCode::NOT_IMPLEMENTED | StatusCode::METHOD_NOT_ALLOWED => Ok(None),
+            _ => Err(Self::fail(resp, "move").await),
+        }
     }
 
     async fn ensure_dir(&self, dir: &str) -> Result<()> {
@@ -215,13 +243,7 @@ impl Storage for WebDavStorage {
     }
 
     async fn put(&self, key: &str, data: &[u8]) -> Result<()> {
-        if let Some((dir, _)) = key.rsplit_once('/') {
-            self.ensure_dir(dir).await?;
-        }
-        let url = self.url_for(key);
-        let body = data.to_vec();
-        let resp = send_retry(|| self.req(Method::PUT, url.clone()).body(body.clone())).await?;
-        if resp.status().is_success() { Ok(()) } else { Err(Self::fail(resp, "put").await) }
+        self.put_raw(key, data).await
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
@@ -231,6 +253,42 @@ impl Storage for WebDavStorage {
             StatusCode::NOT_FOUND => Ok(()),
             s if s.is_success() => Ok(()),
             _ => Err(Self::fail(resp, "delete").await),
+        }
+    }
+
+    async fn exists(&self, key: &str) -> Result<bool> {
+        let url = self.url_for(key);
+        let resp = send_retry(|| self.req(Method::HEAD, url.clone())).await?;
+        match resp.status() {
+            StatusCode::NOT_FOUND => Ok(false),
+            s if s.is_success() => Ok(true),
+            _ => Err(Self::fail(resp, "head").await),
+        }
+    }
+
+    /// PUT is not atomic on WebDAV: write a temp key, then MOVE it into place.
+    async fn put_if_absent(&self, key: &str, data: &[u8]) -> Result<bool> {
+        if self.exists(key).await? {
+            return Ok(false);
+        }
+        let tmp = format!("{key}.{}{TMP_SUFFIX}", random_hex(4));
+        self.put_raw(&tmp, data).await?;
+        match self.move_no_overwrite(&tmp, key).await {
+            Ok(Some(moved)) => {
+                if !moved {
+                    self.delete(&tmp).await?;
+                }
+                Ok(moved)
+            }
+            Ok(None) => {
+                self.delete(&tmp).await?;
+                self.put_raw(key, data).await?;
+                Ok(true)
+            }
+            Err(e) => {
+                let _ = self.delete(&tmp).await;
+                Err(e)
+            }
         }
     }
 }

@@ -2,8 +2,16 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
-  import type { MergeResult } from '$lib/types';
+  import type { MergeBlock, MergeResult } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
+  import {
+    buildMergeContent,
+    emptySelections,
+    isComplete,
+    unresolvedCount as countUnresolved,
+    type MergeChoice,
+    type MergeSelections,
+  } from '$lib/notes/merge-result';
 
   interface Props {
     /** Fetches the merge; history merge and sync conflicts share this UI */
@@ -17,22 +25,8 @@
 
   let { load, theirsLabel = 'Версия из истории', theirsShort = 'Из истории', onresolved, oncancel }: Props = $props();
 
-  interface NormalBlock {
-    kind: 'normal';
-    text: string;
-  }
-
-  interface ConflictBlock {
-    kind: 'conflict';
-    current: string;
-    history: string;
-    // resolved choice: 'current' | 'history' | 'both' | null
-    choice: 'current' | 'history' | 'both' | null;
-  }
-
-  type Block = NormalBlock | ConflictBlock;
-
-  let blocks = $state<Block[]>([]);
+  let blocks = $state<MergeBlock[]>([]);
+  let choices = $state<MergeSelections>([]);
   let loading = $state(true);
   let error = $state('');
   let hasConflicts = $state(false);
@@ -46,11 +40,8 @@
     error = '';
     try {
       const result = await load();
-      blocks = result.blocks.map((b) =>
-        b.kind === 'normal'
-          ? { kind: 'normal', text: b.text }
-          : { kind: 'conflict', current: b.ours, history: b.theirs, choice: null },
-      );
+      blocks = result.blocks;
+      choices = emptySelections(blocks);
       // Only blocks the user can act on count; never claim "all resolved" over plain text
       hasConflicts = blocks.some((b) => b.kind === 'conflict');
     } catch (e) {
@@ -60,38 +51,16 @@
     }
   }
 
-  function setChoice(index: number, choice: 'current' | 'history' | 'both') {
-    const block = blocks[index];
-    if (block.kind !== 'conflict') return;
-    blocks[index] = { ...block, choice };
+  function setChoice(index: number, choice: MergeChoice) {
+    if (blocks[index]?.kind !== 'conflict') return;
+    choices[index] = choice;
   }
 
-  const allResolved = $derived(
-    !hasConflicts ||
-    blocks.every(b => b.kind !== 'conflict' || b.choice !== null)
-  );
-
-  const unresolvedCount = $derived(
-    blocks.filter(b => b.kind === 'conflict' && b.choice === null).length
-  );
-
-  /** Block texts keep their trailing newlines, so plain concatenation rebuilds the file. */
-  function buildResult(): string {
-    return blocks
-      .map(b => {
-        if (b.kind === 'normal') return b.text;
-        switch (b.choice) {
-          case 'current': return b.current;
-          case 'history': return b.history;
-          case 'both': return b.current + b.history;
-          default: return b.current;
-        }
-      })
-      .join('');
-  }
+  const allResolved = $derived(isComplete(blocks, choices));
+  const unresolvedCount = $derived(countUnresolved(blocks, choices));
 
   function apply() {
-    onresolved(buildResult());
+    onresolved(buildMergeContent(blocks, choices));
   }
 </script>
 
@@ -151,43 +120,44 @@
           {#if block.kind === 'normal'}
             <pre class="normal-block">{block.text}</pre>
           {:else}
-            <div class="conflict-block" class:resolved={block.choice !== null}>
-              <div class="conflict-side side-current" class:chosen={block.choice === 'current' || block.choice === 'both'}>
+            {@const choice = choices[i]}
+            <div class="conflict-block" class:resolved={choice !== null}>
+              <div class="conflict-side side-current" class:chosen={choice === 'ours' || choice === 'both'}>
                 <div class="side-label">
                   <Icon name="arrow-up" size={10} />
                   Текущая версия
                 </div>
-                <pre class="side-content">{block.current || '(пусто)'}</pre>
+                <pre class="side-content">{block.ours || '(пусто)'}</pre>
               </div>
               <div class="conflict-actions">
                 <button
                   class="choice-btn"
-                  class:active={block.choice === 'current'}
-                  onclick={() => setChoice(i, 'current')}
+                  class:active={choice === 'ours'}
+                  onclick={() => setChoice(i, 'ours')}
                 >
                   Принять текущую
                 </button>
                 <button
                   class="choice-btn choice-both"
-                  class:active={block.choice === 'both'}
+                  class:active={choice === 'both'}
                   onclick={() => setChoice(i, 'both')}
                 >
                   Обе версии
                 </button>
                 <button
                   class="choice-btn"
-                  class:active={block.choice === 'history'}
-                  onclick={() => setChoice(i, 'history')}
+                  class:active={choice === 'theirs'}
+                  onclick={() => setChoice(i, 'theirs')}
                 >
                   Принять: {theirsShort}
                 </button>
               </div>
-              <div class="conflict-side side-history" class:chosen={block.choice === 'history' || block.choice === 'both'}>
+              <div class="conflict-side side-history" class:chosen={choice === 'theirs' || choice === 'both'}>
                 <div class="side-label">
                   <Icon name="clock" size={10} />
                   {theirsLabel}
                 </div>
-                <pre class="side-content">{block.history || '(пусто)'}</pre>
+                <pre class="side-content">{block.theirs || '(пусто)'}</pre>
               </div>
             </div>
           {/if}

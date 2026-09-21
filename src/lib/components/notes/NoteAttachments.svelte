@@ -3,7 +3,8 @@
 
 <script lang="ts">
   import type { NoteAttachment } from '$lib/types';
-  import { api, downloadNoteAttachment } from '$lib/api';
+  import { api, downloadNoteAttachment, type AttachmentTransfer } from '$lib/api';
+  import { transferKey, transferPercent } from '$lib/attachmentTransfer';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/i18n';
 
@@ -11,16 +12,35 @@
     noteId: string;
     attachments: NoteAttachment[];
     readonly?: boolean;
+    /** Vault uploads/downloads in flight for this note, keyed by `note_id/name`. */
+    transfers?: Map<string, AttachmentTransfer>;
+    error?: string | null;
     oninsert: (a: NoteAttachment) => void;
     onchanged: () => void;
-    onpick: (files: File[]) => void;
+    /** Opens the native file picker. */
+    onpick: () => void;
+    /** Downloads a vault-only attachment. */
+    onfetch: (a: NoteAttachment) => void;
   }
 
-  let { noteId, attachments, readonly = false, oninsert, onchanged, onpick }: Props = $props();
+  let { noteId, attachments, readonly = false, transfers = new Map(), error = null, oninsert, onchanged, onpick, onfetch }: Props = $props();
 
-  let fileInput: HTMLInputElement | null = $state(null);
   let gcResult = $state<string | null>(null);
   let gcBusy = $state(false);
+
+  const transferOf = (name: string) => transfers.get(transferKey(noteId, name));
+  /** Transfers of files not on disk yet (remote downloads in progress). */
+  const pendingDownloads = $derived([...transfers.values()].filter((x) => !attachments.some((a) => a.name === x.name)));
+
+  function transferLabel(x: AttachmentTransfer): string {
+    if (x.error) return $t('note_att_transfer_failed', { error: x.error });
+    const pct = transferPercent(x);
+    return $t(x.direction === 'up' ? 'note_att_uploading' : 'note_att_downloading', { pct: pct === null ? '…' : `${pct}%` });
+  }
+
+  async function cancel(name: string) {
+    await api.sync.attachmentCancel(noteId, name);
+  }
 
   function fmtSize(n: number): string {
     if (n < 1024) return `${n} B`;
@@ -45,11 +65,6 @@
     }
   }
 
-  function onFiles(e: Event) {
-    const input = e.currentTarget as HTMLInputElement;
-    if (input.files?.length) onpick(Array.from(input.files));
-    input.value = '';
-  }
 </script>
 
 <div class="att-panel">
@@ -57,10 +72,9 @@
     <span class="att-title"><Icon name="paperclip" size={12} /> {$t('note_att_title')} ({attachments.length})</span>
     <div class="att-actions">
       {#if !readonly}
-        <button class="att-btn" title={$t('note_att_add')} onclick={() => fileInput?.click()}>
+        <button class="att-btn" title={$t('note_att_add')} onclick={onpick}>
           <Icon name="plus" size={12} />
         </button>
-        <input bind:this={fileInput} type="file" multiple hidden onchange={onFiles} />
       {/if}
       <button class="att-btn" title={$t('note_att_gc')} onclick={gc} disabled={gcBusy}>
         <Icon name="trash-2" size={12} />
@@ -70,21 +84,52 @@
   {#if gcResult}
     <p class="att-hint">{gcResult}</p>
   {/if}
-  {#if attachments.length === 0}
+  {#if error}
+    <p class="att-hint att-error">{error}</p>
+  {/if}
+  {#if attachments.length === 0 && pendingDownloads.length === 0}
     <p class="att-hint">{$t('note_att_empty')}</p>
   {:else}
     <ul class="att-list">
       {#each attachments as a (a.name)}
-        <li class="att-item">
+        {@const x = transferOf(a.name)}
+        <li class="att-item" class:att-busy={(x && !x.error) || !a.present}>
           <Icon name={a.is_image ? 'image' : 'file-text'} size={13} />
-          <button class="att-name" title={a.name} onclick={() => api.notes.attachmentOpen(noteId, a.name)}>{a.name}</button>
-          <span class="att-size">{fmtSize(a.size)}</span>
-          <button class="att-btn" title={$t('note_att_download')} onclick={() => downloadNoteAttachment(noteId, a.name)}>
-            <Icon name="download" size={12} />
-          </button>
+          <button class="att-name" title={a.name} onclick={() => (a.present ? api.notes.attachmentOpen(noteId, a.name) : onfetch(a))}>{a.name}</button>
+          {#if x}
+            <span class="att-size" class:att-error={!!x.error} title={x.error ?? ''}>{transferLabel(x)}</span>
+            {#if !x.finished}
+              <button class="att-btn" title={$t('note_att_cancel')} onclick={() => cancel(a.name)}><Icon name="x" size={12} /></button>
+            {/if}
+          {:else if !a.present}
+            <span class="att-size">{$t('note_att_not_downloaded', { size: fmtSize(a.size) })}</span>
+          {:else}
+            <span class="att-size">{fmtSize(a.size)}</span>
+          {/if}
+          {#if !a.present}
+            {#if !x || x.finished}
+              <button class="att-btn" title={$t('note_att_fetch')} onclick={() => onfetch(a)}>
+                <Icon name="download" size={12} />
+              </button>
+            {/if}
+          {:else}
+            <button class="att-btn" title={$t('note_att_download')} onclick={() => downloadNoteAttachment(noteId, a.name)}>
+              <Icon name="download" size={12} />
+            </button>
+          {/if}
           {#if !readonly}
             <button class="att-btn" title={$t('note_att_insert')} onclick={() => oninsert(a)}><Icon name="link" size={12} /></button>
             <button class="att-btn att-danger" title={$t('note_att_delete')} onclick={() => remove(a)}><Icon name="x" size={12} /></button>
+          {/if}
+        </li>
+      {/each}
+      {#each pendingDownloads as x (x.name)}
+        <li class="att-item att-busy">
+          <Icon name="download" size={13} />
+          <span class="att-name" title={x.name}>{x.name}</span>
+          <span class="att-size" class:att-error={!!x.error} title={x.error ?? ''}>{transferLabel(x)}</span>
+          {#if !x.finished}
+            <button class="att-btn" title={$t('note_att_cancel')} onclick={() => cancel(x.name)}><Icon name="x" size={12} /></button>
           {/if}
         </li>
       {/each}
@@ -159,4 +204,6 @@
   }
   .att-name:hover { text-decoration: underline; }
   .att-size { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-3); }
+  .att-busy { opacity: 0.8; }
+  .att-error { color: var(--danger); }
 </style>

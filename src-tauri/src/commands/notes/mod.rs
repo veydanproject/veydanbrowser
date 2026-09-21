@@ -49,9 +49,8 @@ mod transfer;
 mod window;
 
 pub use attachments::{
-    allow_asset_dir, note_attachment_add, note_attachment_add_base64, note_attachment_add_from_path,
-    note_attachment_delete, note_attachment_list, note_attachment_open, note_attachment_read, note_attachment_save,
-    note_attachments_gc,
+    allow_asset_dir, note_attachment_add, note_attachment_add_from_path, note_attachment_delete, note_attachment_fetch,
+    note_attachment_list, note_attachment_open, note_attachment_read, note_attachment_save, note_attachments_gc,
 };
 #[cfg(desktop)]
 pub use attachments::clipboard_file_paths;
@@ -88,7 +87,8 @@ pub use transfer::{note_export, note_import};
 pub use window::note_open_window;
 
 // Internals the sync module builds on (file format, index, tag links).
-pub(crate) use attachments::{attachments_dir_for, safe_file_name};
+pub(crate) use attachments::{attachments_dir_for, is_staging_name, safe_file_name};
+pub(crate) use settings::load_attachment_policy;
 pub(crate) use crud::update_note;
 pub(crate) use files::{effective_docs_dir, parse_note_file, resolve_note_abs_path, write_note_file};
 pub(crate) use history::{history_content_by_id, history_snapshot_by};

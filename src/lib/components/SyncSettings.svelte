@@ -4,7 +4,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
-  import { api } from '$lib/api';
+  import { api, LARGE_FILE_LIMITS, largeFilePeakMib } from '$lib/api';
   import type { SyncConfig, SyncStatus } from '$lib/api';
   import { syncStore } from '$lib/store/sync.svelte';
   import { formatError } from '$lib/utils';
@@ -22,7 +22,12 @@
     interval_sec: 60,
     profile_files: true,
     device_name: '',
+    large_files: { chunk_mib: 8, parallelism: 3, resume: true },
   });
+  const [chunkMin, chunkMax] = LARGE_FILE_LIMITS.chunkMib;
+  const [parMin, parMax] = LARGE_FILE_LIMITS.parallelism;
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.floor(v || lo)));
+  const peakMib = $derived(largeFilePeakMib(cfg.large_files));
   let status = $state<SyncStatus | null>(null);
   let passphrase = $state('');
   let oldPassphrase = $state('');
@@ -275,6 +280,34 @@
     <span class="hint">{$t('settings_sync_device_name_hint')}</span>
   </label>
 
+  <div class="field">
+    <span class="field-label">{$t('settings_sync_lf_section')}</span>
+    <p class="hint">{$t('settings_sync_lf_hint')}</p>
+    <div class="grid">
+      <label class="field">
+        <span class="field-label">{$t('settings_sync_lf_chunk')}</span>
+        <input class="input" type="number" min={chunkMin} max={chunkMax} value={cfg.large_files.chunk_mib}
+          oninput={(e) => (cfg.large_files.chunk_mib = clamp(Number((e.currentTarget as HTMLInputElement).value), chunkMin, chunkMax))} />
+        <span class="hint">{$t('settings_sync_lf_chunk_hint', { min: String(chunkMin), max: String(chunkMax) })}</span>
+      </label>
+      <label class="field">
+        <span class="field-label">{$t('settings_sync_lf_parallelism')}</span>
+        <input class="input" type="number" min={parMin} max={parMax} value={cfg.large_files.parallelism}
+          oninput={(e) => (cfg.large_files.parallelism = clamp(Number((e.currentTarget as HTMLInputElement).value), parMin, parMax))} />
+        <span class="hint">{$t('settings_sync_lf_parallelism_hint', { min: String(parMin), max: String(parMax) })}</span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <span>{$t('settings_sync_lf_resume')}</span>
+        <span class="hint">{$t('settings_sync_lf_resume_hint')}</span>
+      </div>
+      <button class="toggle" class:on={cfg.large_files.resume} onclick={() => (cfg.large_files.resume = !cfg.large_files.resume)} aria-pressed={cfg.large_files.resume} aria-label={$t('settings_sync_lf_resume')}></button>
+    </div>
+    <p class="hint">{$t('settings_sync_lf_ram', { mib: String(peakMib) })}</p>
+    <p class="warn">{$t('settings_sync_lf_chunk_warn')}</p>
+  </div>
+
   {#if status?.joined}
     <div class="toggle-row">
       <div class="toggle-info">
@@ -351,6 +384,12 @@
           <div class="trow" title={$t('settings_sync_gc_hint')}>
             <span class="tlabel">{$t('settings_sync_gc')}</span>
             <span class="tvalue">{$t('settings_sync_gc_value', { total: String(status.blobs_total), removed: String(status.blobs_removed_last_gc ?? 0), when: status.gc_last ? new Date(status.gc_last).toLocaleString() : '' })}</span>
+          </div>
+        {/if}
+        {#if status.lf_total !== null}
+          <div class="trow" title={$t('settings_sync_gc_hint')}>
+            <span class="tlabel">{$t('settings_sync_lf_gc')}</span>
+            <span class="tvalue">{$t('settings_sync_gc_value', { total: String(status.lf_total), removed: String(status.lf_removed_last_gc ?? 0), when: status.gc_last ? new Date(status.gc_last).toLocaleString() : '' })}</span>
           </div>
         {/if}
       {/if}

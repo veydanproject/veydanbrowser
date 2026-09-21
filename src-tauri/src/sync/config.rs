@@ -6,11 +6,43 @@
 use crate::error::{AppError, CmdResult};
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Sqlite};
-use veydan_sync::{LocalDir, S3Config, S3Storage, Storage, WebDavConfig, WebDavStorage};
+use veydan_sync::{LargeFileConfig, LocalDir, S3Config, S3Storage, Storage, WebDavConfig, WebDavStorage};
 
 pub const DEFAULT_INTERVAL_SEC: u64 = 60;
 const MIN_INTERVAL_SEC: u64 = 1;
 const MAX_INTERVAL_SEC: u64 = 86400;
+const MIB: u64 = 1024 * 1024;
+
+/// Large-file transfer settings, device-local. Says nothing about when to use v2.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LargeFileSettings {
+    /// Chunk size for new files, 1..=64.
+    pub chunk_mib: u32,
+    /// Chunks in flight, 1..=8.
+    pub parallelism: u32,
+    /// Continue interrupted downloads from the staged prefix.
+    pub resume: bool,
+}
+
+impl Default for LargeFileSettings {
+    fn default() -> Self {
+        let d = LargeFileConfig::default();
+        Self { chunk_mib: (d.chunk_size / MIB) as u32, parallelism: d.parallelism as u32, resume: d.resume }
+    }
+}
+
+impl LargeFileSettings {
+    /// Rust is the source of truth: reject out-of-range values instead of clamping silently.
+    pub fn to_config(&self) -> CmdResult<LargeFileConfig> {
+        let cfg = LargeFileConfig {
+            chunk_size: self.chunk_mib as u64 * MIB,
+            parallelism: self.parallelism as usize,
+            resume: self.resume,
+        };
+        cfg.validate().map_err(AppError::other)?;
+        Ok(cfg)
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct S3Settings {
@@ -45,6 +77,8 @@ pub struct SyncConfig {
     /// How this device is shown to others (lease badge).
     #[serde(default)]
     pub device_name: String,
+    #[serde(default)]
+    pub large_files: LargeFileSettings,
 }
 
 fn default_true() -> bool {
@@ -63,6 +97,7 @@ impl Default for SyncConfig {
             interval_sec: DEFAULT_INTERVAL_SEC,
             profile_files: cfg!(desktop),
             device_name: String::new(),
+            large_files: LargeFileSettings::default(),
         }
     }
 }
@@ -140,6 +175,14 @@ pub async fn load_config(db: &Pool<Sqlite>) -> SyncConfig {
             .unwrap_or(d.interval_sec),
         profile_files: cfg!(desktop) && get_setting(db, "sync_profile_files").await.as_deref() != Some("0"),
         device_name: device_name(db).await,
+        large_files: LargeFileSettings {
+            chunk_mib: get_setting(db, "sync_lf_chunk_mib").await.and_then(|v| v.parse().ok()).unwrap_or(d.large_files.chunk_mib),
+            parallelism: get_setting(db, "sync_lf_parallelism")
+                .await
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.large_files.parallelism),
+            resume: get_setting(db, "sync_lf_resume").await.as_deref() != Some("0"),
+        },
     }
 }
 
@@ -156,6 +199,7 @@ pub async fn device_name(db: &Pool<Sqlite>) -> String {
 }
 
 pub async fn save_config(db: &Pool<Sqlite>, cfg: &SyncConfig) -> CmdResult<()> {
+    cfg.large_files.to_config()?;
     set_setting(db, "sync_enabled", if cfg.enabled { "1" } else { "0" }).await?;
     set_setting(db, "sync_backend", &cfg.backend).await?;
     set_setting(db, "sync_folder_path", &cfg.folder_path).await?;
@@ -173,6 +217,9 @@ pub async fn save_config(db: &Pool<Sqlite>, cfg: &SyncConfig) -> CmdResult<()> {
     set_setting(db, "sync_interval_sec", &interval.to_string()).await?;
     set_setting(db, "sync_profile_files", if cfg.profile_files { "1" } else { "0" }).await?;
     set_setting(db, "sync_device_name", cfg.device_name.trim()).await?;
+    set_setting(db, "sync_lf_chunk_mib", &cfg.large_files.chunk_mib.to_string()).await?;
+    set_setting(db, "sync_lf_parallelism", &cfg.large_files.parallelism.to_string()).await?;
+    set_setting(db, "sync_lf_resume", if cfg.large_files.resume { "1" } else { "0" }).await?;
     Ok(())
 }
 
@@ -212,6 +259,8 @@ pub async fn clear_binding(db: &Pool<Sqlite>) -> CmdResult<()> {
         "sync_gc_last",
         "sync_gc_blobs_total",
         "sync_gc_removed",
+        "sync_gc_lf_total",
+        "sync_gc_lf_removed",
     ] {
         delete_setting(db, key).await?;
     }

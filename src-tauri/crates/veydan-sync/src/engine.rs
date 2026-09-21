@@ -9,6 +9,7 @@ use crate::log::{
     blob_key, chunk_ident, chunk_key, device_from_key, fold_latest, seq_from_key, snapshot_ident, snapshot_key,
     Chunk, LocalState, Op, PeerHead, Snapshot,
 };
+use crate::large_files::{LargeFileConfig, LargeFileStore};
 use crate::storage::{is_noise_key, Storage};
 use crate::{sha256_hex, Result, SyncError};
 use hmac::{Hmac, KeyInit, Mac};
@@ -128,6 +129,11 @@ impl Engine {
 
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    /// Large files v2 over the same storage and key hierarchy.
+    pub fn large_files(&self, config: LargeFileConfig) -> Result<LargeFileStore<'_>> {
+        LargeFileStore::new(self.storage.as_ref(), &self.vault_id, &self.keys, config)
     }
 
     // ── Own log ──────────────────────────────────────────────────────────────
@@ -260,9 +266,7 @@ impl Engine {
             on_file(*current, total, &snap_key);
             *current += 1;
             if let Some(snap) = self.read_snapshot(peer).await? {
-                if snap.up_to_seq < head.seq {
-                    return Err(SyncError::Integrity(format!("snapshot older than known head ({} < {})", snap.up_to_seq, head.seq)));
-                }
+                // Snapshot predating our head carries nothing new; chunks decide.
                 if snap.up_to_seq == head.seq && !head.hash.is_empty() && snap.head_hash != head.hash {
                     return Err(SyncError::Integrity("snapshot head does not match known head".into()));
                 }

@@ -10,6 +10,11 @@ export function formatError(e: unknown): string {
   return String(e);
 }
 
+/** True when the backend error carries the given `AppError.code`. */
+export function hasErrorCode(e: unknown, code: AppError['code']): boolean {
+  return e != null && typeof e === 'object' && (e as AppError).code === code;
+}
+
 /**
  * Detects the HOST_KEY_MISMATCH marker emitted by the backend when an SSH
  * server's pinned host key changed (terminal + SFTP connects). Returns the

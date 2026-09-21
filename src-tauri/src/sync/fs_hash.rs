@@ -8,7 +8,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
-use veydan_sync::sha256_hex;
+use veydan_sync::sha256_reader_hex;
+
+/// Streaming SHA-256 so multi-gigabyte files never sit in memory.
+fn hash_file(path: &Path) -> std::io::Result<String> {
+    let mut reader = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(path)?);
+    sha256_reader_hex(&mut reader)
+}
 
 #[derive(Clone)]
 struct FileStamp {
@@ -31,7 +37,7 @@ impl HashCache {
                 return Some(s.hash.clone());
             }
         }
-        let hash = sha256_hex(&std::fs::read(path).ok()?);
+        let hash = hash_file(path).ok()?;
         cache.insert(path.to_path_buf(), FileStamp { mtime, size, hash: hash.clone() });
         Some(hash)
     }

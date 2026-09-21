@@ -6,7 +6,12 @@
 //! ```text
 //! passphrase -> Argon2id -> KEK -> unwrap -> VaultMasterKey (random 256 bit)
 //! VaultMasterKey -> HKDF-SHA256 -> { log key, blob key, id key }
+//!                                -> { large-file/chunk, large-file/manifest, large-file/id }
 //! ```
+//!
+//! Large-file keys are separate labels so v2 objects never share key material
+//! with v1 logs and blobs. `large-file/id` is vault-wide: equal plaintext chunks
+//! in any file of the vault get the same chunk id (shared chunks).
 //!
 //! The master key is random; the passphrase only protects it, so changing the
 //! passphrase rewrites `manifest.json` and nothing else.
@@ -79,6 +84,12 @@ pub struct Keys {
     pub log: [u8; 32],
     pub blob: [u8; 32],
     pub id: [u8; 32],
+    /// Large files v2: chunk ciphertext.
+    pub lf_chunk: [u8; 32],
+    /// Large files v2: manifest ciphertext.
+    pub lf_manifest: [u8; 32],
+    /// Large files v2: HMAC key for chunk / file / manifest ids, one per vault.
+    pub lf_id: [u8; 32],
 }
 
 fn derive_kek(passphrase: &str, kdf: &KdfParams) -> Result<[u8; 32]> {
@@ -172,6 +183,13 @@ impl Keys {
             hk.expand(info, &mut out).expect("32 bytes is a valid HKDF length");
             out
         };
-        Keys { log: expand(b"veydan-sync/log"), blob: expand(b"veydan-sync/blob"), id: expand(b"veydan-sync/id") }
+        Keys {
+            log: expand(b"veydan-sync/log"),
+            blob: expand(b"veydan-sync/blob"),
+            id: expand(b"veydan-sync/id"),
+            lf_chunk: expand(b"large-file/chunk"),
+            lf_manifest: expand(b"large-file/manifest"),
+            lf_id: expand(b"large-file/id"),
+        }
     }
 }

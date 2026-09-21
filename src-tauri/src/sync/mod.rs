@@ -13,7 +13,7 @@
 //!
 //! Nothing here runs unless `sync_enabled` is "1" and a vault was joined.
 
-mod attachments;
+pub(crate) mod attachments;
 mod config;
 mod fs_hash;
 mod gc;
@@ -25,15 +25,16 @@ mod state;
 
 pub use config::SyncConfig;
 
-use crate::commands::notes::MergeResult;
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use chrono::Utc;
 use config::{build_storage, load_binding, load_config, VaultBinding};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
-use veydan_sync::{Engine, HlcClock, Probe, Vmk};
+use veydan_sync::{CancelFlag, Engine, HlcClock, Probe, Vmk};
 
 const TICK_SEC: u64 = 1;
 /// Minimum gap between cycles started by `sync_trigger` (app resume, screen open).
@@ -78,6 +79,32 @@ pub struct SyncManager {
     running: AtomicBool,
     /// File hashes keyed by path, valid while mtime and size match.
     file_hashes: fs_hash::HashCache,
+    /// Cancel flags of large-file transfers in flight, keyed by `note_id/name`.
+    transfers: Mutex<HashMap<String, CancelFlag>>,
+}
+
+impl SyncManager {
+    /// Register a transfer; the returned flag is what the UI can cancel.
+    pub(crate) fn begin_transfer(&self, key: &str) -> CancelFlag {
+        let flag = CancelFlag::default();
+        self.transfers.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string(), flag.clone());
+        flag
+    }
+
+    pub(crate) fn end_transfer(&self, key: &str) {
+        self.transfers.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+    }
+
+    /// Ask a running transfer to stop; returns whether one was in flight.
+    pub(crate) fn cancel_transfer(&self, key: &str) -> bool {
+        match self.transfers.lock().unwrap_or_else(|e| e.into_inner()).get(key) {
+            Some(flag) => {
+                flag.cancel();
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 struct RunningGuard<'a>(&'a AtomicBool);
@@ -130,6 +157,9 @@ pub struct SyncStatus {
     pub gc_last: Option<String>,
     pub blobs_total: Option<u64>,
     pub blobs_removed_last_gc: Option<u64>,
+    /// Large-file v2 objects (manifests + chunks) after the last GC.
+    pub lf_total: Option<u64>,
+    pub lf_removed_last_gc: Option<u64>,
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
@@ -231,21 +261,22 @@ pub async fn sync_run_now(app: AppHandle, state: tauri::State<'_, AppState>) -> 
     status(&state).await
 }
 
-/// Structured merge blocks for the conflict UI.
+/// Structured merge blocks for the conflict UI plus a token for `sync_conflict_resolve`.
 #[tauri::command]
-pub async fn sync_conflict_get(note_id: String, state: tauri::State<'_, AppState>) -> CmdResult<MergeResult> {
+pub async fn sync_conflict_get(note_id: String, state: tauri::State<'_, AppState>) -> CmdResult<notes::ConflictView> {
     notes::conflict_merge(&state, &note_id).await
 }
 
-/// Store the resolved text and push it right away.
+/// Store the resolved text and push it right away. `token` must match `sync_conflict_get`.
 #[tauri::command]
 pub async fn sync_conflict_resolve(
     note_id: String,
+    token: String,
     content: String,
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<SyncStatus> {
-    notes::resolve_conflict(&state, &note_id, content).await?;
+    notes::resolve_conflict(&state, &note_id, &token, content).await?;
     let _ = app.emit(EVENT_STATUS, ());
     if !state.sync.running.load(Ordering::SeqCst) {
         run_cycle(&app).await?;
@@ -270,6 +301,13 @@ pub async fn note_sync_info(id: String, state: tauri::State<'_, AppState>) -> Cm
         .map(|raw| veydan_sync::sha256_hex(&raw))
         .unwrap_or_default();
     Ok(NoteSyncInfo { tracked: true, pending: hash != st.synced_hash })
+}
+
+/// Stop a large attachment transfer in flight. The file stays dirty and is
+/// retried on the next cycle unless it was removed.
+#[tauri::command]
+pub async fn sync_attachment_cancel(note_id: String, name: String, state: tauri::State<'_, AppState>) -> CmdResult<bool> {
+    Ok(state.sync.cancel_transfer(&attachments::transfer_key(&note_id, &name)))
 }
 
 /// Start a cycle in the background (app resumed, screen opened). No-op when one
@@ -365,11 +403,13 @@ async fn status(state: &AppState) -> CmdResult<SyncStatus> {
             .map(|t| t.to_rfc3339()),
         blobs_total: config::get_setting(db, gc::BLOBS_TOTAL_KEY).await.and_then(|v| v.parse().ok()),
         blobs_removed_last_gc: config::get_setting(db, gc::REMOVED_KEY).await.and_then(|v| v.parse().ok()),
+        lf_total: config::get_setting(db, gc::LF_TOTAL_KEY).await.and_then(|v| v.parse().ok()),
+        lf_removed_last_gc: config::get_setting(db, gc::LF_REMOVED_KEY).await.and_then(|v| v.parse().ok()),
     })
 }
 
 /// Engine for the joined vault.
-async fn open_engine(state: &AppState) -> CmdResult<Engine> {
+pub(crate) async fn open_engine(state: &AppState) -> CmdResult<Engine> {
     let db = &state.db;
     let cfg = load_config(db).await;
     let binding = load_binding(db).await.ok_or_else(|| AppError::other("no vault joined"))?;
@@ -505,7 +545,7 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     emit_progress(app, "collect", 8, 0, 0, "");
     let note_rows = rows::collect_local_changes(state, &mut clock, rows::RowScope::Notes).await?;
     emit_progress(app, "collect", 12, 0, 0, "");
-    let attachments = attachments::collect_local_changes(&engine, state, &mut clock).await?;
+    let attachments = attachments::collect_local_changes(&engine, app, state, &mut clock).await?;
     emit_progress(app, "collect", 16, 0, 0, "");
     let changes = notes::collect_local_changes(&engine, state, &mut clock).await?;
     emit_progress(app, "collect", 18, 0, 0, "");
@@ -578,6 +618,7 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     rows::finish_apply(app, &rows_outcome).await;
 
     let mut warnings: Vec<String> = pulled.errors.into_iter().map(|(peer, e)| format!("{peer}: {e}")).collect();
+    warnings.extend(attachments.errors.iter().map(|e| format!("attachment upload: {e}")));
     let files_retry = profile_files_phase(app, state, &engine, &cfg, &pulled.ops, &mut local, &mut clock, &mut warnings).await?;
 
     state::save_own_state(db, &local, &clock.last()).await?;

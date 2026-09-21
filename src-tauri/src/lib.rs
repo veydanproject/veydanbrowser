@@ -53,13 +53,15 @@ use commands::notes::{
     notes_lock_status, notes_lock_set, notes_lock_timeout_set, notes_lock_unlock, notes_lock_lock, notes_lock_touch,
     note_history_list, note_history_get, note_history_diff,
     note_history_restore, note_history_merge,
-    note_attachment_add_base64, note_attachment_list, note_attachment_delete, note_attachment_read,
+    note_attachment_add_from_path, note_attachment_fetch, note_attachment_list, note_attachment_delete, note_attachment_read,
+    note_attachment_save,
+    notes_attachment_policy_get, notes_attachment_policy_set,
 };
 // Desktop only: OS integration (open in editor / file manager, clipboard, dialogs, extra windows).
 #[cfg(desktop)]
 use commands::notes::{
-    clipboard_file_paths, note_attachment_add, note_attachment_add_from_path, note_attachment_open,
-    note_attachment_save, note_attachments_gc, note_export, note_import, note_open_external, note_open_folder,
+    clipboard_file_paths, note_attachment_add, note_attachment_open,
+    note_attachments_gc, note_export, note_import, note_open_external, note_open_folder,
     note_open_window, notes_capture_rules_get, notes_capture_rules_set, notes_get_dir, notes_set_dir,
     open_quick_capture, quick_capture_shortcut_get, quick_capture_shortcut_set,
 };
@@ -101,9 +103,9 @@ use commands::ssh_keys::{
 use commands::workspaces::*;
 use sqlx::{Pool, Sqlite};
 use sync::{
-    note_sync_info, start_sync_scheduler, sync_change_passphrase, sync_conflict_get, sync_conflict_resolve,
-    sync_create_vault, sync_get_config, sync_join_vault, sync_leave, sync_probe, sync_run_now, sync_set_config,
-    sync_status, sync_trigger, SyncManager,
+    note_sync_info, start_sync_scheduler, sync_attachment_cancel, sync_change_passphrase, sync_conflict_get,
+    sync_conflict_resolve, sync_create_vault, sync_get_config, sync_join_vault, sync_leave, sync_probe, sync_run_now,
+    sync_set_config, sync_status, sync_trigger, SyncManager,
 };
 #[cfg(desktop)]
 use sync::{sync_profile_files_push_mine, sync_profile_files_take_remote};
@@ -258,6 +260,8 @@ pub fn run() {
 fn run_mobile() {
     tauri::Builder::default()
         .plugin(tauri_plugin_barcode_scanner::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -371,10 +375,15 @@ fn run_mobile() {
             note_history_diff,
             note_history_restore,
             note_history_merge,
-            note_attachment_add_base64,
+            note_attachment_add_from_path,
             note_attachment_read,
             note_attachment_list,
+            note_attachment_fetch,
             note_attachment_delete,
+            note_attachment_save,
+            notes_attachment_policy_get,
+            notes_attachment_policy_set,
+            sync_attachment_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running veydan");
@@ -690,14 +699,17 @@ fn run_desktop() {
             note_history_restore,
             note_history_merge,
             note_attachment_add,
-            note_attachment_add_base64,
             note_attachment_add_from_path,
             note_attachment_list,
+            note_attachment_fetch,
             note_attachment_read,
             note_attachment_delete,
             note_attachment_open,
             note_attachment_save,
             note_attachments_gc,
+            notes_attachment_policy_get,
+            notes_attachment_policy_set,
+            sync_attachment_cancel,
             clipboard_file_paths,
             note_export,
             note_import,

@@ -23,13 +23,18 @@ hex = "0.4"
 base64 = "0.22"
 chrono = "0.4"
 reqwest = "0.13"
-tokio = { version = "1", default-features = false, features = ["time", "rt"] }
+tokio = { version = "1", default-features = false, features = ["time", "rt", "io-util", "fs"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 quick-xml = "0.39"
 url = "2"
 percent-encoding = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Free-space query for download staging.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
 
 # reqwest's default verifier needs a Java component on Android; use bundled roots instead.
 [target.'cfg(target_os = "android")'.dependencies]

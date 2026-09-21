@@ -24,6 +24,7 @@
   import CustomSelect from '$lib/components/CustomSelect.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import NoteCaptureRules from '$lib/components/notes/NoteCaptureRules.svelte';
+  import NoteAttachmentPolicy from '$lib/components/notes/NoteAttachmentPolicy.svelte';
   import NoteLockSettings from '$lib/components/notes/NoteLockSettings.svelte';
   import SyncSettings from '$lib/components/SyncSettings.svelte';
 
@@ -683,6 +684,13 @@
     {#if notesDirError}
       <div class="error-msg">{notesDirError}</div>
     {/if}
+  </div>
+
+  <!-- Note attachments -->
+  <div class="card">
+    <div class="card-title">{$t('settings_att_section')}</div>
+    <p class="muted">{$t('settings_att_hint')}</p>
+    <NoteAttachmentPolicy />
   </div>
 
   <!-- Browser capture rules -->

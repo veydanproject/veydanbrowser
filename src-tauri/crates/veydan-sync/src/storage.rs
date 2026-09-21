@@ -173,6 +173,10 @@ fn android_tls_config() -> rustls::ClientConfig {
 }
 
 /// Minimal storage contract. Keys are `/`-separated, relative to the vault root.
+///
+/// Content-addressed objects (blobs, large-file chunks) are immutable: a key
+/// fully determines the plaintext, so `put_if_absent` only saves traffic and a
+/// race between two writers is harmless.
 #[async_trait]
 pub trait Storage: Send + Sync {
     /// All keys under `prefix`, recursively.
@@ -181,6 +185,28 @@ pub trait Storage: Send + Sync {
     /// Atomic on the storage side: readers never observe a partial object.
     async fn put(&self, key: &str, data: &[u8]) -> Result<()>;
     async fn delete(&self, key: &str) -> Result<()>;
+    /// Presence without transferring the body.
+    async fn exists(&self, key: &str) -> Result<bool> {
+        Ok(self.get(key).await?.is_some())
+    }
+    /// Write only when `key` is absent; returns whether bytes were written.
+    async fn put_if_absent(&self, key: &str, data: &[u8]) -> Result<bool> {
+        if self.exists(key).await? {
+            return Ok(false);
+        }
+        self.put(key, data).await?;
+        Ok(true)
+    }
+}
+
+/// 401/403 are never retried and surface as `Auth`.
+pub fn status_error(status: reqwest::StatusCode, what: &str, body: &str) -> SyncError {
+    let msg = format!("{what}: {status} {}", body.chars().take(300).collect::<String>());
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        SyncError::Auth(msg)
+    } else {
+        SyncError::Storage(msg)
+    }
 }
 
 /// Suffix of in-progress writes; skipped by every adapter's `list`.
@@ -273,5 +299,9 @@ impl Storage for LocalDir {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    async fn exists(&self, key: &str) -> Result<bool> {
+        Ok(std::fs::metadata(self.path_for(key)?).map(|m| m.is_file()).unwrap_or(false))
     }
 }

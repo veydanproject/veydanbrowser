@@ -6,6 +6,7 @@
   import { onMount } from 'svelte';
   import { Editor } from '@tiptap/core';
   import { noteExtensions, WIKI_MARK, unclosedWikiAt, type ResolveSrc } from '$lib/tiptap-ext';
+  import { portal } from '$lib/portal';
 
   interface Props {
     content: string;
@@ -24,6 +25,22 @@
   let lastEmitted = '';
   let isEmpty = $state(false);
   let wikiFrom = 0;
+  let lightboxSrc = $state('');
+
+  const MIN_IMG_W = 40;
+  const TAP_MS = 300;
+
+  type Pinch = {
+    startDist: number;
+    startW: number;
+    ratio: number;
+    img: HTMLImageElement;
+  };
+
+  let pinch: Pinch | null = null;
+  let didPinch = false;
+  let lastTapAt = 0;
+  let lastTapImg: HTMLImageElement | null = null;
 
   onMount(() => {
     editor = new Editor({
@@ -34,6 +51,7 @@
       editorProps: {
         attributes: { spellcheck: 'false' },
         handleClick: (_view, _pos, e) => onClick(e),
+        handleDoubleClick: (_view, _pos, e) => onDblClick(e),
       },
       onUpdate: ({ editor: ed }) => {
         const md = ed.getMarkdown();
@@ -47,7 +65,22 @@
     });
     lastEmitted = content;
     isEmpty = editor.isEmpty;
-    return () => editor?.destroy();
+    const host = hostEl!;
+    host.addEventListener('touchstart', onTouchStart, { passive: false });
+    host.addEventListener('touchmove', onTouchMove, { passive: false });
+    host.addEventListener('touchend', onTouchEnd);
+    host.addEventListener('touchcancel', onTouchEnd);
+    document.addEventListener('touchend', finishHandleResize);
+    document.addEventListener('touchcancel', finishHandleResize);
+    return () => {
+      editor?.destroy();
+      host.removeEventListener('touchstart', onTouchStart);
+      host.removeEventListener('touchmove', onTouchMove);
+      host.removeEventListener('touchend', onTouchEnd);
+      host.removeEventListener('touchcancel', onTouchEnd);
+      document.removeEventListener('touchend', finishHandleResize);
+      document.removeEventListener('touchcancel', finishHandleResize);
+    };
   });
 
   // Content replaced outside the editor (history restore, remote edit).
@@ -59,10 +92,127 @@
     isEmpty = editor.isEmpty;
   });
 
+  $effect(() => {
+    if (!lightboxSrc) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') lightboxSrc = ''; };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  function imageEl(target: EventTarget | null): HTMLImageElement | null {
+    if (!(target instanceof Element)) return null;
+    if (target.closest('[data-resize-handle]')) return null;
+    const box = target.closest('[data-node="image"]');
+    if (box instanceof HTMLElement) return box.querySelector('img');
+    return target instanceof HTMLImageElement ? target : target.closest('img');
+  }
+
+  function imagePos(el: HTMLElement): number | null {
+    if (!editor) return null;
+    const box = (el.closest('[data-resize-container]') as HTMLElement | null) ?? el;
+    try {
+      const pos = editor.view.posAtDOM(box, 0);
+      if (editor.state.doc.nodeAt(pos)?.type.name === 'image') return pos;
+    } catch { /* use coords */ }
+    const r = box.getBoundingClientRect();
+    const at = editor.view.posAtCoords({ left: r.left + 4, top: r.top + 4 });
+    if (!at) return null;
+    return editor.state.doc.nodeAt(at.inside)?.type.name === 'image' ? at.inside : null;
+  }
+
+  function maxImgWidth(): number {
+    return hostEl?.querySelector('.ProseMirror')?.clientWidth || 400;
+  }
+
+  function applyImgWidth(img: HTMLImageElement, width: number, ratio: number) {
+    const w = Math.round(Math.min(maxImgWidth(), Math.max(MIN_IMG_W, width)));
+    img.style.width = `${w}px`;
+    img.style.height = `${Math.round(w * ratio)}px`;
+    return w;
+  }
+
+  function commitImgSize(img: HTMLImageElement) {
+    if (!editor) return;
+    const pos = imagePos(img);
+    if (pos == null) return;
+    const width = img.offsetWidth;
+    const height = img.offsetHeight;
+    editor.chain().setNodeSelection(pos).updateAttributes('image', { width, height }).run();
+  }
+
+  function openLightbox(img: HTMLImageElement) {
+    lightboxSrc = img.currentSrc || img.src;
+  }
+
+  function touchDist(a: Touch, b: Touch) {
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  }
+
+  function onTouchStart(e: TouchEvent) {
+    if (e.touches.length !== 2) return;
+    const img = imageEl(e.touches[0].target) ?? imageEl(e.touches[1].target);
+    if (!img) return;
+    const w = img.offsetWidth;
+    const h = img.offsetHeight || w;
+    pinch = { startDist: touchDist(e.touches[0], e.touches[1]), startW: w, ratio: h / w, img };
+    didPinch = true;
+    lastTapAt = 0;
+    lastTapImg = null;
+    const pos = imagePos(img);
+    if (pos != null) editor?.chain().setNodeSelection(pos).run();
+    e.preventDefault();
+  }
+
+  function onTouchMove(e: TouchEvent) {
+    if (!pinch || e.touches.length < 2 || pinch.startDist <= 0) return;
+    e.preventDefault();
+    applyImgWidth(pinch.img, pinch.startW * (touchDist(e.touches[0], e.touches[1]) / pinch.startDist), pinch.ratio);
+  }
+
+  function onTouchEnd(e: TouchEvent) {
+    if (pinch && e.touches.length < 2) {
+      const img = pinch.img;
+      const changed = Math.abs(img.offsetWidth - pinch.startW) >= 4;
+      pinch = null;
+      if (changed) commitImgSize(img);
+    }
+    if (didPinch) {
+      if (e.touches.length === 0) didPinch = false;
+      return;
+    }
+    if (e.touches.length !== 0 || e.changedTouches.length !== 1) return;
+    const img = imageEl(e.target);
+    if (!img) { lastTapAt = 0; lastTapImg = null; return; }
+    const now = Date.now();
+    if (lastTapImg === img && now - lastTapAt < TAP_MS) {
+      e.preventDefault();
+      openLightbox(img);
+      lastTapAt = 0;
+      lastTapImg = null;
+      return;
+    }
+    lastTapAt = now;
+    lastTapImg = img;
+  }
+
+  // TipTap handle resize listens for mouseup but not touchend
+  function finishHandleResize() {
+    if (hostEl?.querySelector('[data-resize-state="true"]')) {
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    }
+  }
+
   function onClick(e: MouseEvent): boolean {
     const wiki = (e.target as HTMLElement).closest('a.wiki');
     if (!wiki) return false;
     onwikilink(wiki.getAttribute('data-target') ?? '');
+    return true;
+  }
+
+  function onDblClick(e: MouseEvent): boolean {
+    const img = imageEl(e.target);
+    if (!img) return false;
+    openLightbox(img);
     return true;
   }
 
@@ -104,6 +254,11 @@
     <div class="placeholder">{placeholder}</div>
   {/if}
 </div>
+{#if lightboxSrc}
+  <button type="button" class="lightbox" use:portal onclick={() => (lightboxSrc = '')} aria-label="Close">
+    <img src={lightboxSrc} alt="" />
+  </button>
+{/if}
 
 <style>
   .rich {
@@ -185,10 +340,64 @@
     accent-color: var(--accent);
   }
   .host :global(hr) { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
-  .host :global(img) { max-width: 100%; height: auto; border-radius: var(--radius-md, 8px); vertical-align: middle; }
+  .host :global(img) {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-md, 8px);
+    vertical-align: middle;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .host :global(img:not([style*="width"])) { max-width: min(100%, 240px); }
   .host :global([data-resize-container]), .host :global([data-resize-wrapper]) { max-width: 100%; }
-  .host :global([data-resize-handle]) { display: none; }
+  .host :global([data-resize-container]) { touch-action: pan-y; }
+  .host :global([data-resize-wrapper] img) { display: block; }
+  .host :global([data-resize-handle]) {
+    width: 22px;
+    height: 22px;
+    background: var(--accent);
+    border: 2px solid var(--surface-1);
+    border-radius: 4px;
+    z-index: 2;
+    display: none;
+    touch-action: none;
+  }
+  .host :global([data-resize-handle="bottom-right"]) { transform: translate(35%, 35%); }
+  .host :global([data-resize-handle="bottom-left"]) { transform: translate(-35%, 35%); }
+  .host :global([data-resize-handle="top-right"]) { transform: translate(35%, -35%); }
+  .host :global([data-resize-handle="top-left"]) { transform: translate(-35%, -35%); }
+  .host :global(.ProseMirror-selectednode [data-resize-handle]),
+  .host :global([data-resize-container].ProseMirror-selectednode [data-resize-handle]) {
+    display: block;
+  }
   .host :global(.ProseMirror-selectednode) { outline: 2px solid var(--accent); border-radius: 3px; }
+  .host :global([data-resize-container].ProseMirror-selectednode) {
+    outline: 2px solid var(--accent);
+    border-radius: var(--radius-md, 8px);
+  }
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    border: 0;
+    border-radius: 0;
+    background: rgba(0, 0, 0, 0.92);
+    touch-action: none;
+    transition: none;
+  }
+  .lightbox img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 0;
+  }
   .host :global(.tableWrapper) { overflow-x: auto; margin: 0 0 1em; }
   .host :global(table) { border-collapse: collapse; font-size: 0.92em; }
   .host :global(th), .host :global(td) { border: 1px solid var(--border); padding: 4px 8px; vertical-align: top; }

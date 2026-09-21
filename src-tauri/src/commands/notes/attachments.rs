@@ -8,11 +8,27 @@ use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use super::files::*;
 use super::models::*;
+use super::settings::load_attachment_policy;
 use serde::Serialize;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tauri::Manager;
+use veydan_sync::{available_space, Opener, PathSink};
+
+#[cfg(target_os = "android")]
+mod content_uri;
 
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"];
+/// In-progress local copy; never listed as an attachment.
+const PART_SUFFIX: &str = ".part";
+/// Free space that must remain after a copy.
+const DISK_RESERVE: u64 = 64 * 1024 * 1024;
+
+/// Files the attachment directory holds that are not attachments.
+pub(crate) fn is_staging_name(name: &str) -> bool {
+    name.ends_with(PART_SUFFIX) || name.ends_with(".tmp") || PathSink::is_staging_file(name)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NoteAttachment {
@@ -21,6 +37,8 @@ pub struct NoteAttachment {
     pub rel_path: String,
     pub size: u64,
     pub is_image: bool,
+    /// False for a chunked file that is still only in the vault.
+    pub present: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,21 +127,85 @@ fn to_attachment(note_id: &str, path: &Path) -> Option<NoteAttachment> {
         is_image: is_image(&name),
         name,
         size,
+        present: true,
     })
 }
 
-/// Store bytes as a new attachment of the note.
+fn deferred_attachment(note_id: &str, name: String, size: u64) -> NoteAttachment {
+    NoteAttachment {
+        rel_path: format!("attachments/{note_id}/{name}"),
+        is_image: is_image(&name),
+        name,
+        size,
+        present: false,
+    }
+}
+
+/// Store bytes as a new attachment of the note (small clipboard / capture payloads).
 pub(crate) fn store_attachment(
     note_file: &Path,
     note_id: &str,
     file_name: &str,
     data: &[u8],
 ) -> Result<NoteAttachment, AppError> {
+    store_attachment_stream(note_file, note_id, file_name, Some(data.len() as u64), None, &mut &data[..])
+}
+
+/// Stream `reader` into `attachments/{note_id}/{name}` through a `.part` file
+/// that is renamed only when the copy completed. `max` is the product limit.
+pub(crate) fn store_attachment_stream(
+    note_file: &Path,
+    note_id: &str,
+    file_name: &str,
+    len_hint: Option<u64>,
+    max: Option<u64>,
+    reader: &mut dyn Read,
+) -> Result<NoteAttachment, AppError> {
     let dir = attachments_dir_for(note_file, note_id);
     std::fs::create_dir_all(&dir).map_err(AppError::io)?;
+    if let (Some(need), Some(free)) = (len_hint, available_space(&dir)) {
+        if free < need.saturating_add(DISK_RESERVE) {
+            return Err(AppError::io(format!("not enough free space: need {need} bytes, {free} available")));
+        }
+    }
     let dest = unique_path(&dir, &safe_file_name(file_name));
-    std::fs::write(&dest, data).map_err(AppError::io)?;
+    let part = PathBuf::from(format!("{}{PART_SUFFIX}", dest.display()));
+    let copied = (|| -> Result<u64, AppError> {
+        let mut out = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&part).map_err(AppError::io)?);
+        let limit = max.map(|m| m + 1).unwrap_or(u64::MAX);
+        let n = std::io::copy(&mut reader.take(limit), &mut out).map_err(AppError::io)?;
+        if max.is_some_and(|m| n > m) {
+            return Err(AppError::other(format!("attachment exceeds the {} byte limit", max.unwrap_or(0))));
+        }
+        out.into_inner().map_err(|e| AppError::io(e.into_error()))?.sync_all().map_err(AppError::io)?;
+        Ok(n)
+    })();
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    std::fs::rename(&part, &dest).map_err(AppError::io)?;
     to_attachment(note_id, &dest).ok_or_else(|| AppError::io("attachment write failed"))
+}
+
+/// Streaming input for an attachment: a local path, or an Android `content://` URI.
+pub(crate) struct AttachmentSource {
+    pub name: String,
+    pub len: Option<u64>,
+    pub open: Opener,
+}
+
+pub(crate) fn open_source(app: &tauri::AppHandle, src: &str) -> CmdResult<AttachmentSource> {
+    #[cfg(target_os = "android")]
+    if src.starts_with("content://") {
+        return content_uri::source(app, src);
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+    let path = PathBuf::from(src);
+    let len = std::fs::metadata(&path).map_err(AppError::io)?.len();
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+    Ok(AttachmentSource { name, len: Some(len), open: Arc::new(move || std::fs::File::open(&path)) })
 }
 
 /// Decode the percent-encoded ASCII header value used for file names.
@@ -184,21 +266,6 @@ pub async fn note_attachment_add(
     store_attachment(&note_file, &note_id, &file_name, data)
 }
 
-/// Upload with the bytes as base64. Mobile IPC goes through postMessage, so
-/// raw request bodies are not available there.
-#[tauri::command]
-pub async fn note_attachment_add_base64(
-    note_id: String,
-    name: String,
-    data: String,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<NoteAttachment> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(AppError::other)?;
-    let note_file = note_file_path(&note_id, &state).await?;
-    store_attachment(&note_file, &note_id, &name, &bytes)
-}
-
 /// File bytes as base64 for webviews without the asset protocol.
 #[tauri::command]
 pub async fn note_attachment_read(
@@ -234,18 +301,26 @@ pub async fn clipboard_file_paths() -> CmdResult<Vec<String>> {
         .collect())
 }
 
-/// Copy an existing file (e.g. from OS drag-and-drop) into the note's attachments.
+/// Copy an existing file (picker, drag-and-drop, Android content URI) into the
+/// note's attachments without loading it into memory.
 #[tauri::command]
 pub async fn note_attachment_add_from_path(
     note_id: String,
     src_path: String,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<NoteAttachment> {
-    let src = PathBuf::from(&src_path);
-    let data = std::fs::read(&src).map_err(AppError::io)?;
-    let name = src.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let note_file = note_file_path(&note_id, &state).await?;
-    store_attachment(&note_file, &note_id, name, &data)
+    let policy = load_attachment_policy(&state.db).await;
+    let source = open_source(&app, &src_path)?;
+    policy.check_size(source.len)?;
+    let max = policy.max_file_bytes();
+    tokio::task::spawn_blocking(move || {
+        let mut reader = (source.open)().map_err(AppError::io)?;
+        store_attachment_stream(&note_file, &note_id, &source.name, source.len, max, &mut reader)
+    })
+    .await
+    .map_err(AppError::io)?
 }
 
 #[tauri::command]
@@ -255,14 +330,36 @@ pub async fn note_attachment_list(
 ) -> CmdResult<Vec<NoteAttachment>> {
     let note_file = note_file_path(&note_id, &state).await?;
     let dir = attachments_dir_for(&note_file, &note_id);
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Ok(vec![]) };
-    let mut list: Vec<NoteAttachment> = entries
+    let mut list: Vec<NoteAttachment> = std::fs::read_dir(&dir)
+        .into_iter()
         .flatten()
-        .filter(|e| e.path().is_file())
+        .flatten()
+        .filter(|e| e.path().is_file() && !is_staging_name(&e.file_name().to_string_lossy()))
         .filter_map(|e| to_attachment(&note_id, &e.path()))
         .collect();
+    // Vault-only files the policy did not download; a local copy wins.
+    for d in crate::sync::attachments::deferred_for_note(&state, &note_id).await? {
+        if !list.iter().any(|a| a.name == d.name) {
+            list.push(deferred_attachment(&note_id, d.name, d.size));
+        }
+    }
     list.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(list)
+}
+
+/// Download a vault-only attachment to the note's directory (progress via transfer events).
+#[tauri::command]
+pub async fn note_attachment_fetch(
+    note_id: String,
+    name: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<NoteAttachment> {
+    let note_file = note_file_path(&note_id, &state).await?;
+    let name = safe_file_name(&name);
+    crate::sync::attachments::fetch_deferred(&app, &state, &note_id, &name).await?;
+    let path = attachments_dir_for(&note_file, &note_id).join(&name);
+    to_attachment(&note_id, &path).ok_or_else(|| AppError::io("attachment download failed"))
 }
 
 #[tauri::command]
@@ -293,12 +390,14 @@ pub async fn note_attachment_open(
     open_path(&path)
 }
 
-/// Copy an attachment to a user-chosen path (Save As).
+/// Copy an attachment to a user-chosen destination (Save As): a path, or an
+/// Android `content://` URI from the system save dialog.
 #[tauri::command]
 pub async fn note_attachment_save(
     note_id: String,
     name: String,
     dest: String,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
     let note_file = note_file_path(&note_id, &state).await?;
@@ -306,12 +405,24 @@ pub async fn note_attachment_save(
     if !path.is_file() {
         return Err(AppError::not_found(name));
     }
-    let dest_path = PathBuf::from(&dest);
-    if let Some(parent) = dest_path.parent() {
-        std::fs::create_dir_all(parent).map_err(AppError::io)?;
-    }
-    std::fs::copy(&path, &dest_path).map_err(AppError::io)?;
-    Ok(())
+    tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "android")]
+        if dest.starts_with("content://") {
+            let mut out = content_uri::writer(&app, &dest)?;
+            std::io::copy(&mut std::fs::File::open(&path).map_err(AppError::io)?, &mut out).map_err(AppError::io)?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "android"))]
+        let _ = app;
+        let dest_path = PathBuf::from(&dest);
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent).map_err(AppError::io)?;
+        }
+        std::fs::copy(&path, &dest_path).map_err(AppError::io)?;
+        Ok(())
+    })
+    .await
+    .map_err(AppError::io)?
 }
 
 /// Find attachments no note body references. With `delete`, remove them.
@@ -335,7 +446,7 @@ pub async fn note_attachments_gc(
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()) else { continue };
-            if used.contains(&name) { continue; }
+            if used.contains(&name) || is_staging_name(&name) { continue; }
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             if delete {
                 let _ = std::fs::remove_file(&path);

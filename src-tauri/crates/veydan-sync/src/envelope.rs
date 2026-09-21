@@ -25,6 +25,10 @@ pub enum Kind {
     Chunk = 1,
     Snapshot = 2,
     Blob = 3,
+    /// Large files v2 chunk; ident = chunk id.
+    LfChunk = 4,
+    /// Large files v2 manifest; ident = manifest id.
+    LfManifest = 5,
 }
 
 impl Kind {
@@ -33,6 +37,8 @@ impl Kind {
             1 => Some(Kind::Chunk),
             2 => Some(Kind::Snapshot),
             3 => Some(Kind::Blob),
+            4 => Some(Kind::LfChunk),
+            5 => Some(Kind::LfManifest),
             _ => None,
         }
     }

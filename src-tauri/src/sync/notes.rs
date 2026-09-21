@@ -431,8 +431,15 @@ pub async fn apply_remote(
     Ok(outcome)
 }
 
-/// Merge data for the conflict UI: ancestor and remote from history, local from the file.
-pub async fn conflict_merge(state: &AppState, note_id: &str) -> CmdResult<MergeResult> {
+/// Conflict snapshot for the UI; `token` ties a resolution to this exact state.
+#[derive(Debug, Serialize)]
+pub struct ConflictView {
+    pub token: String,
+    pub merge: MergeResult,
+}
+
+/// Unresolved conflict state plus the current local body.
+async fn load_conflict(state: &AppState, note_id: &str) -> CmdResult<(NoteSyncState, String)> {
     let db = &state.db;
     let st = load_note_state(db, note_id)
         .await?
@@ -441,19 +448,40 @@ pub async fn conflict_merge(state: &AppState, note_id: &str) -> CmdResult<MergeR
     let row = load_head(db, note_id).await?.ok_or_else(|| AppError::not_found(format!("Note {note_id}")))?;
     let path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
     let (_, _, local) = parse_note_file(&std::fs::read_to_string(&path).unwrap_or_default());
+    Ok((st, local))
+}
+
+/// Changes when either side of the conflict or the local text changes.
+fn conflict_token(st: &NoteSyncState, local: &str) -> String {
+    let mut seed = String::new();
+    for part in [&st.conflict_ancestor_id, &st.conflict_local_id, &st.conflict_remote_id, &st.conflict_remote_blob] {
+        seed.push_str(part);
+        seed.push('\n');
+    }
+    seed.push_str(&sha256_hex(local.as_bytes()));
+    sha256_hex(seed.as_bytes())
+}
+
+/// Merge data for the conflict UI: ancestor and remote from history, local from the file.
+pub async fn conflict_merge(state: &AppState, note_id: &str) -> CmdResult<ConflictView> {
+    let db = &state.db;
+    let (st, local) = load_conflict(state, note_id).await?;
     let ancestor = history_content_by_id(&st.conflict_ancestor_id, db).await.unwrap_or_default();
     let remote = history_content_by_id(&st.conflict_remote_id, db).await?;
-    Ok(merge3(&ancestor, &local, &remote).or_whole_texts(&local, &remote))
+    Ok(ConflictView {
+        token: conflict_token(&st, &local),
+        merge: merge3(&ancestor, &local, &remote).or_whole_texts(&local, &remote),
+    })
 }
 
 /// Write the user's resolution and release the note for the next push,
-/// which records the remote version as second parent.
-pub async fn resolve_conflict(state: &AppState, note_id: &str, content: String) -> CmdResult<()> {
+/// which records the remote version as second parent. Refuses a stale token.
+pub async fn resolve_conflict(state: &AppState, note_id: &str, token: &str, content: String) -> CmdResult<()> {
     let db = &state.db;
-    let mut st = load_note_state(db, note_id)
-        .await?
-        .filter(|s| s.conflict)
-        .ok_or_else(|| AppError::not_found(format!("conflict for note {note_id}")))?;
+    let (mut st, local) = load_conflict(state, note_id).await?;
+    if conflict_token(&st, &local) != token {
+        return Err(AppError::conflict_changed(format!("note {note_id}")));
+    }
     update_note(note_id, NoteUpdateInput { title: None, content: Some(content), pinned: None }, state).await?;
     st.conflict = false;
     st.conflict_ancestor_id.clear();

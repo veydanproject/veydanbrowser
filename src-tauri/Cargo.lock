@@ -7175,6 +7175,7 @@ dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
  "chrono",
+ "futures-util",
  "hex",
  "hkdf 0.13.0",
  "hmac 0.13.0",
@@ -7191,12 +7192,13 @@ dependencies = [
  "tokio",
  "url",
  "webpki-roots",
+ "windows-sys 0.59.0",
  "zstd",
 ]
 
 [[package]]
 name = "veydanbrowser"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "age",
  "anyhow",
@@ -7208,6 +7210,7 @@ dependencies = [
  "diffy",
  "futures-util",
  "gethostname",
+ "jni 0.21.1",
  "ksni",
  "lz4_flex",
  "notify",
