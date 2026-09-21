@@ -364,6 +364,11 @@ async fn hard_delete(id: &str, state: &AppState) -> Result<(), AppError> {
 
     // Sensitive leftovers: unsaved draft and the version history
     let _ = std::fs::remove_file(draft_file_path(&state.app_data_dir, id));
+    sqlx::query("UPDATE note_history SET parent_id = NULL WHERE note_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
     sqlx::query("DELETE FROM note_history WHERE note_id = ?")
         .bind(id)
         .execute(&state.db)

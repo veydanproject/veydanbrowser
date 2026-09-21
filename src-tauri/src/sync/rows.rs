@@ -73,7 +73,12 @@ pub const SPECS: &[TableSpec] = &[
         filter: None,
         unique: None,
         insert: true,
-        delete: Delete::Plain(&[]),
+        delete: Delete::Plain(&[
+            "DELETE FROM workspace_columns WHERE workspace_id = ?",
+            "DELETE FROM ssh_connection_workspaces WHERE workspace_id = ?",
+            "UPDATE proxies SET workspace_id = NULL WHERE workspace_id = ?",
+            "UPDATE profiles SET workspace_id = NULL WHERE workspace_id = ?",
+        ]),
     },
     TableSpec {
         entity: "workspace_column",
@@ -196,7 +201,10 @@ pub const SPECS: &[TableSpec] = &[
         filter: None,
         unique: None,
         insert: true,
-        delete: Delete::Plain(&["DELETE FROM note_folder_links WHERE folder_id = ?"]),
+        delete: Delete::Plain(&[
+            "DELETE FROM note_folder_links WHERE folder_id = ?",
+            "UPDATE note_folders SET parent_id = NULL WHERE parent_id = ?",
+        ]),
     },
     TableSpec {
         entity: "note_smart_view",
@@ -621,13 +629,84 @@ async fn update_row(db: &Pool<Sqlite>, spec: &TableSpec, id: &str, cols: &[(&str
     Ok(exec(db, sql, &values).await? > 0)
 }
 
+fn is_fk_error(e: &AppError) -> bool {
+    let s = e.to_string();
+    s.contains("787") || s.contains("FOREIGN KEY")
+}
+
+async fn row_exists(db: &Pool<Sqlite>, table: &str, id: &str) -> CmdResult<bool> {
+    let sql = format!("SELECT 1 FROM {table} WHERE id = ? LIMIT 1");
+    let row: Option<(i64,)> =
+        sqlx::query_as(AssertSqlSafe(sql)).bind(id).fetch_optional(db).await.map_err(AppError::db)?;
+    Ok(row.is_some())
+}
+
+async fn drop_missing_ref(db: &Pool<Sqlite>, payload: &mut Map<String, Value>, key: &str, table: &str) -> CmdResult<()> {
+    let Some(id) = payload.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    if !row_exists(db, table, id).await? {
+        payload.insert(key.into(), Value::Null);
+    }
+    Ok(())
+}
+
+/// Clear or reject FK fields whose parent is not on this device yet.
+async fn sanitize_payload(db: &Pool<Sqlite>, spec: &TableSpec, payload: &mut Map<String, Value>) -> CmdResult<bool> {
+    match spec.entity {
+        "profile" => drop_missing_ref(db, payload, "workspace_id", "workspaces").await?,
+        "ssh_connection" => {
+            drop_missing_ref(db, payload, "proxy_id", "proxies").await?;
+            drop_missing_ref(db, payload, "ssh_key_id", "ssh_keys").await?;
+        }
+        "note_folder" => drop_missing_ref(db, payload, "parent_id", "note_folders").await?,
+        "workspace_column" => {
+            let Some(wid) = payload.get("workspace_id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+                return Ok(false);
+            };
+            if !row_exists(db, "workspaces", wid).await? {
+                return Ok(false);
+            }
+        }
+        _ => {}
+    }
+    Ok(true)
+}
+
+fn link_child_table(link: &LinkSpec) -> Option<&'static str> {
+    match link.table {
+        "ssh_connection_workspaces" => Some("workspaces"),
+        _ => None,
+    }
+}
+
+fn apply_order(op: &Op) -> (u8, usize, u8, Hlc) {
+    let idx = SPECS.iter().position(|s| s.entity == op.entity_type).unwrap_or(usize::MAX);
+    let n = SPECS.len();
+    if op.deleted {
+        (1, n.saturating_sub(idx.saturating_add(1)), 0, op.hlc.clone())
+    } else {
+        let depth = match op.payload.get("parent_id") {
+            Some(Value::String(s)) if op.entity_type == "note_folder" && !s.is_empty() => 1,
+            _ => 0,
+        };
+        (0, idx, depth, op.hlc.clone())
+    }
+}
+
 async fn apply_links(db: &Pool<Sqlite>, spec: &TableSpec, id: &str, payload: &Map<String, Value>) -> CmdResult<()> {
     for link in spec.links {
         let Some(ids) = payload.get(link.key).and_then(Value::as_array) else { continue };
         let del = format!("DELETE FROM {} WHERE {} = ?", link.table, link.parent_col);
         exec(db, del, &[Value::String(id.into())]).await?;
         let ins = format!("INSERT OR IGNORE INTO {} ({}, {}) VALUES (?, ?)", link.table, link.parent_col, link.child_col);
+        let child_table = link_child_table(link);
         for child in ids.iter().filter_map(Value::as_str).filter(|c| valid_id(c)) {
+            if let Some(table) = child_table {
+                if !row_exists(db, table, child).await? {
+                    continue;
+                }
+            }
             exec(db, ins.clone(), &[Value::String(id.into()), Value::String(child.into())]).await?;
         }
     }
@@ -668,21 +747,21 @@ async fn delete_row(app: &AppHandle, spec: &TableSpec, id: &str) -> CmdResult<bo
     }
 }
 
-/// Apply remote row ops (LWW by HLC). Ops are already HLC-sorted.
+/// Apply remote row ops (LWW by HLC). Parents first so FK checks pass.
 pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdResult<ApplyOutcome> {
     let state = app.state::<AppState>();
     let db = &state.db;
     let mut outcome = ApplyOutcome::default();
 
+    let mut pending: Vec<&Op> = ops
+        .iter()
+        .filter(|op| in_scope(&op.entity_type, scope) && spec_for(&op.entity_type).is_some() && valid_id(&op.entity_id))
+        .collect();
+    pending.sort_by_key(|op| apply_order(op));
+
     let mut aliases: HashMap<String, String> = HashMap::new();
-    for op in ops {
-        if !in_scope(&op.entity_type, scope) {
-            continue;
-        }
-        let Some(spec) = spec_for(&op.entity_type) else { continue };
-        if !valid_id(&op.entity_id) {
-            continue;
-        }
+    for op in pending {
+        let spec = spec_for(&op.entity_type).expect("filtered");
         let id = op.entity_id.as_str();
         let prev = load_row_state(db, spec.entity, id).await?;
         if prev.as_ref().and_then(|s| s.head_hlc.as_ref()).map(|h| *h >= op.hlc).unwrap_or(false) {
@@ -694,9 +773,17 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
             if matches!(spec.delete, Delete::Ignore) {
                 continue;
             }
-            if !delete_row(app, spec, id).await? {
-                outcome.retry = Some(format!("{} {id} is in use", spec.entity));
-                continue;
+            match delete_row(app, spec, id).await {
+                Ok(false) => {
+                    outcome.retry = Some(format!("{} {id} is in use", spec.entity));
+                    continue;
+                }
+                Ok(true) => {}
+                Err(e) if is_fk_error(&e) => {
+                    outcome.retry = Some(format!("{} {id}: {e}", spec.entity));
+                    continue;
+                }
+                Err(e) => return Err(e),
             }
             st.deleted = true;
             save_row_state(db, &st).await?;
@@ -708,7 +795,19 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
         if spec.entity == "profile" {
             rewrite_json_tags(&mut payload, "tags", &aliases);
         }
-        match upsert(&state, spec, id, &payload, &mut aliases).await? {
+        if !sanitize_payload(db, spec, &mut payload).await? {
+            outcome.retry = Some(format!("{} {id} waiting for parent", spec.entity));
+            continue;
+        }
+        let applied = match upsert(&state, spec, id, &payload, &mut aliases).await {
+            Ok(v) => v,
+            Err(e) if is_fk_error(&e) => {
+                outcome.retry = Some(format!("{} {id}: {e}", spec.entity));
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        match applied {
             Upsert::Skip => continue,
             Upsert::Done { id: applied_id, absorbed } => {
                 apply_links(db, spec, &applied_id, &payload).await?;

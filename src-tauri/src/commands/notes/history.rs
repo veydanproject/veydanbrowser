@@ -98,6 +98,18 @@ pub(crate) async fn history_snapshot_by(
     let content_hash = compute_hash(content);
     let compressed = compress_content(content)?;
 
+    let parent_id = match parent_id {
+        Some(pid) => {
+            let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM note_history WHERE id = ?")
+                .bind(&pid)
+                .fetch_optional(db)
+                .await
+                .map_err(AppError::db)?;
+            exists.map(|_| pid)
+        }
+        None => None,
+    };
+
     let (next_revision,): (i64,) = sqlx::query_as(
         "SELECT COALESCE(MAX(revision), 0) + 1 FROM note_history WHERE note_id = ?",
     )
@@ -133,13 +145,36 @@ pub(crate) async fn history_snapshot_by(
 /// Keep last 100 entries; delete entries older than 90 days beyond the first 50.
 pub(crate) async fn history_cleanup(note_id: &str, db: &sqlx::Pool<sqlx::Sqlite>) -> Result<(), AppError> {
     let cutoff = (Utc::now() - chrono::Duration::days(90)).to_rfc3339();
+    // Nested SELECT so SQLite allows UPDATE/DELETE against the same table.
     sqlx::query(
-        "DELETE FROM note_history
-         WHERE note_id = ?
-           AND created_at < ?
-           AND id NOT IN (
-               SELECT id FROM note_history WHERE note_id = ? ORDER BY revision DESC LIMIT 100
-           )",
+        "UPDATE note_history SET parent_id = NULL WHERE parent_id IN (
+            SELECT id FROM (
+                SELECT id FROM note_history
+                WHERE note_id = ?
+                  AND created_at < ?
+                  AND id NOT IN (
+                      SELECT id FROM note_history WHERE note_id = ? ORDER BY revision DESC LIMIT 100
+                  )
+            )
+        )",
+    )
+    .bind(note_id)
+    .bind(&cutoff)
+    .bind(note_id)
+    .execute(db)
+    .await
+    .map_err(AppError::db)?;
+    sqlx::query(
+        "DELETE FROM note_history WHERE id IN (
+            SELECT id FROM (
+                SELECT id FROM note_history
+                WHERE note_id = ?
+                  AND created_at < ?
+                  AND id NOT IN (
+                      SELECT id FROM note_history WHERE note_id = ? ORDER BY revision DESC LIMIT 100
+                  )
+            )
+        )",
     )
     .bind(note_id)
     .bind(&cutoff)
