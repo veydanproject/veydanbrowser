@@ -3,9 +3,16 @@ import { sveltekit } from "@sveltejs/kit/vite";
 
 const host = process.env.TAURI_DEV_HOST;
 
+// Target platform set by the Tauri CLI (linux/windows/darwin/android/ios).
+// Only this value reaches the frontend; other TAURI_* env stays in the build process.
+const platform = process.env.TAURI_ENV_PLATFORM ?? "unknown";
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
+  define: {
+    __TAURI_PLATFORM__: JSON.stringify(platform),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

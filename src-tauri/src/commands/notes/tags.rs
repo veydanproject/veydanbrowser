@@ -48,6 +48,17 @@ pub(crate) async fn fetch_all_note_tags_map(
     Ok(map)
 }
 
+pub(crate) async fn fetch_note_folder_ids(
+    note_id: &str,
+    db: &sqlx::Pool<sqlx::Sqlite>,
+) -> Result<Vec<String>, AppError> {
+    sqlx::query_scalar::<_, String>("SELECT folder_id FROM note_folder_links WHERE note_id = ?")
+        .bind(note_id)
+        .fetch_all(db)
+        .await
+        .map_err(AppError::db)
+}
+
 pub(crate) async fn fetch_all_note_folder_ids_map(
     db: &sqlx::Pool<sqlx::Sqlite>,
 ) -> Result<HashMap<String, Vec<String>>, AppError> {

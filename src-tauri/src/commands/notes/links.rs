@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-//! Wiki links `[[Title]]` / `[[Title|alias]]` / `[[id]]` between notes.
+//! Wiki links `@@Title@@` / `@@Title|alias@@` / `@@id@@` between notes.
 //! `note_links(from_id, to_id)` is rebuilt from the body on every save;
-//! renaming a note rewrites `[[Old title]]` in the notes that link to it.
+//! renaming a note rewrites `@@Old title@@` in the notes that link to it.
 
 use super::files::{read_note_file, resolve_note_abs_path, row_to_list_item, write_note_file};
 use super::models::{NoteListItem, NoteRow};
@@ -19,9 +19,9 @@ pub(crate) fn extract_targets(content: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     let mut rest = content;
-    while let Some(start) = rest.find("[[") {
+    while let Some(start) = rest.find("@@") {
         let after = &rest[start + 2..];
-        let Some(end) = after.find("]]") else { break };
+        let Some(end) = after.find("@@") else { break };
         let inner = &after[..end];
         if !inner.contains('\n') {
             let target = inner.split('|').next().unwrap_or("").trim();
@@ -71,14 +71,14 @@ pub(crate) async fn reindex_links(note_id: &str, content: &str, db: &Db) -> Resu
     Ok(())
 }
 
-/// Rewrite `[[old]]` -> `[[new]]` (any case, with or without alias) in one body.
+/// Rewrite `@@old@@` -> `@@new@@` (any case, with or without alias) in one body.
 pub(crate) fn rewrite_title_links(body: &str, old_title: &str, new_title: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut rest = body;
-    while let Some(start) = rest.find("[[") {
+    while let Some(start) = rest.find("@@") {
         out.push_str(&rest[..start + 2]);
         let after = &rest[start + 2..];
-        let Some(end) = after.find("]]") else {
+        let Some(end) = after.find("@@") else {
             out.push_str(after);
             return out;
         };
@@ -95,7 +95,7 @@ pub(crate) fn rewrite_title_links(body: &str, old_title: &str, new_title: &str) 
         } else {
             out.push_str(inner);
         }
-        out.push_str("]]");
+        out.push_str("@@");
         rest = &after[end + 2..];
     }
     out.push_str(rest);
@@ -153,6 +153,45 @@ async fn rows_to_items(rows: Vec<NoteRow>, state: &AppState) -> Result<Vec<NoteL
             row_to_list_item(r, t, f, false)
         })
         .collect())
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct NoteLinks {
+    /// Notes this note links to.
+    pub outgoing: Vec<NoteListItem>,
+    /// Notes linking to this note.
+    pub backlinks: Vec<NoteListItem>,
+}
+
+/// Outgoing links and backlinks in one call.
+#[tauri::command]
+pub async fn note_links(id: String, state: tauri::State<'_, AppState>) -> CmdResult<NoteLinks> {
+    let outgoing = sqlx::query_as::<_, NoteRow>(
+        "SELECT n.* FROM notes n JOIN note_links l ON l.to_id = n.id
+         WHERE l.from_id = ? AND n.deleted = 0 ORDER BY n.updated_at DESC",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::db)?;
+    let backlinks = sqlx::query_as::<_, NoteRow>(
+        "SELECT n.* FROM notes n JOIN note_links l ON l.from_id = n.id
+         WHERE l.to_id = ? AND n.deleted = 0 ORDER BY n.updated_at DESC",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(NoteLinks {
+        outgoing: rows_to_items(outgoing, &state).await?,
+        backlinks: rows_to_items(backlinks, &state).await?,
+    })
+}
+
+/// Id of the note a `@@target@@` points to, if it exists.
+#[tauri::command]
+pub async fn note_resolve_link(target: String, state: tauri::State<'_, AppState>) -> CmdResult<Option<String>> {
+    Ok(resolve_target(target.trim(), &state.db).await)
 }
 
 /// Notes that link to this note.
@@ -219,13 +258,13 @@ mod tests {
 
     #[test]
     fn extracts_targets_without_alias_and_dedups() {
-        let t = extract_targets("see [[Alpha]] and [[alpha|the alias]] plus [[Beta]]");
+        let t = extract_targets("see @@Alpha@@ and @@alpha|the alias@@ plus @@Beta@@");
         assert_eq!(t, vec!["Alpha", "Beta"]);
     }
 
     #[test]
     fn rewrites_only_matching_links() {
-        let body = "[[Old]] [[old|alias]] [[Other]] [[";
-        assert_eq!(rewrite_title_links(body, "Old", "New"), "[[New]] [[New|alias]] [[Other]] [[");
+        let body = "@@Old@@ @@old|alias@@ @@Other@@ @@";
+        assert_eq!(rewrite_title_links(body, "Old", "New"), "@@New@@ @@New|alias@@ @@Other@@ @@");
     }
 }

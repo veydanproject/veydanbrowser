@@ -55,12 +55,13 @@ impl Default for SyncConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            backend: "folder".into(),
+            // Mobile has no shared folder and no Firefox profiles to replicate.
+            backend: if cfg!(mobile) { "s3" } else { "folder" }.into(),
             folder_path: String::new(),
             s3: S3Settings::default(),
             webdav: WebDavSettings::default(),
             interval_sec: DEFAULT_INTERVAL_SEC,
-            profile_files: true,
+            profile_files: cfg!(desktop),
             device_name: String::new(),
         }
     }
@@ -137,7 +138,7 @@ pub async fn load_config(db: &Pool<Sqlite>) -> SyncConfig {
             .await
             .and_then(|v| v.parse().ok())
             .unwrap_or(d.interval_sec),
-        profile_files: get_setting(db, "sync_profile_files").await.as_deref() != Some("0"),
+        profile_files: cfg!(desktop) && get_setting(db, "sync_profile_files").await.as_deref() != Some("0"),
         device_name: device_name(db).await,
     }
 }

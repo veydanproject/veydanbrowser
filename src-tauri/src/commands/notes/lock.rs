@@ -107,6 +107,7 @@ pub(crate) async fn status(state: &AppState) -> LockStatus {
 }
 
 /// True when the notes UI must not reveal content (used by the capture bridge too).
+#[cfg(desktop)]
 pub(crate) async fn is_locked(state: &AppState) -> bool {
     status(state).await.locked
 }

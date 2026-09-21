@@ -7,7 +7,7 @@
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { api, downloadNoteAttachment } from '$lib/api';
   import { pasteHasHiddenFiles } from '$lib/notes-files';
-  import { noteExtensions } from '$lib/tiptap-ext';
+  import { noteExtensions, WIKI_MARK, unclosedWikiAt } from '$lib/tiptap-ext';
   import type { EditAction } from '$lib/markdown-edit';
   import type { NoteListItem } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
@@ -236,28 +236,28 @@
     editor?.commands.focus();
   }
 
-  // ── Wiki links: `[[` autocomplete in the current text block ─────────────────
+  // ── Wiki links: `@@` autocomplete in the current text block ─────────────────
   let wikiOpen = $state(false);
   let wikiQuery = $state('');
   let wikiIndex = $state(0);
   let wikiFrom = 0;
   let wikiPicker: WikiLinkPicker | null = $state(null);
 
-  /** Track an unclosed `[[` before the caret inside the current text block. */
+  /** Track an unclosed `@@` before the caret inside the current text block. */
   function updateWikiState() {
     if (!editor || readonly) return;
     const { $from: caret, empty } = editor.state.selection;
     if (!empty || !caret.parent.isTextblock) { wikiOpen = false; return; }
     const before = caret.parent.textBetween(0, caret.parentOffset, undefined, '\ufffc');
-    const open = before.lastIndexOf('[[');
-    if (open < 0 || before.indexOf(']]', open) >= 0) { wikiOpen = false; return; }
+    const open = unclosedWikiAt(before);
+    if (open < 0) { wikiOpen = false; return; }
     wikiFrom = caret.pos - (before.length - open);
-    wikiQuery = before.slice(open + 2);
+    wikiQuery = before.slice(open + WIKI_MARK.length);
     wikiIndex = 0;
     wikiOpen = true;
   }
 
-  /** Replace the partial `[[query` with a wiki link node. */
+  /** Replace the partial `@@query` with a wiki link node. */
   function pickWikiLink(title: string) {
     if (!editor) return;
     const to = editor.state.selection.from;

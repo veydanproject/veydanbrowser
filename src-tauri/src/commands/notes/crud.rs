@@ -66,6 +66,7 @@ pub async fn note_get(
         .ok_or_else(|| AppError::not_found(format!("Note {id}")))?;
 
     let tags = fetch_note_tags(&id, &state.db).await?;
+    let folder_ids = fetch_note_folder_ids(&id, &state.db).await?;
     let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
 
     let content = if file_path.exists() {
@@ -87,6 +88,7 @@ pub async fn note_get(
         format: row.format,
         bindings,
         tags,
+        folder_ids,
         pinned: row.pinned != 0,
         archived: row.archived != 0,
         deleted: row.deleted != 0,
@@ -190,6 +192,7 @@ pub(crate) async fn insert_note(new: NewNote, state: &AppState) -> Result<Note, 
         format: new.format,
         bindings: new.bindings,
         tags,
+        folder_ids: Vec::new(),
         pinned: false,
         archived: false,
         deleted: false,
@@ -317,6 +320,7 @@ pub(crate) async fn update_note(id: &str, input: NoteUpdateInput, state: &AppSta
     rebuild_manifest(&state.db, &state.app_data_dir).await?;
 
     let tags = fetch_note_tags(&id, &state.db).await?;
+    let folder_ids = fetch_note_folder_ids(&id, &state.db).await?;
 
     let bindings: Vec<String> = serde_json::from_str(&row.bindings).unwrap_or_default();
 
@@ -328,6 +332,7 @@ pub(crate) async fn update_note(id: &str, input: NoteUpdateInput, state: &AppSta
         format: row.format,
         bindings,
         tags,
+        folder_ids,
         pinned: row.pinned != 0,
         archived: row.archived != 0,
         deleted: row.deleted != 0,
@@ -340,6 +345,78 @@ pub(crate) async fn update_note(id: &str, input: NoteUpdateInput, state: &AppSta
     })
 }
 
+/// Hard delete: file, attachments, draft, history and every index row.
+async fn hard_delete(id: &str, state: &AppState) -> Result<(), AppError> {
+    let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    if let Some(r) = row {
+        fts_delete(r.fts_rowid, &state.db).await?;
+        let file_path = resolve_note_abs_path(&state.app_data_dir, &r.file_path);
+        if file_path.exists() {
+            let _ = std::fs::remove_file(&file_path);
+        }
+        remove_note_attachments(&file_path, id);
+    }
+
+    // Sensitive leftovers: unsaved draft and the version history
+    let _ = std::fs::remove_file(draft_file_path(&state.app_data_dir, id));
+    sqlx::query("DELETE FROM note_history WHERE note_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    sqlx::query("DELETE FROM note_tag_links WHERE note_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    sqlx::query("DELETE FROM note_folder_links WHERE note_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    sqlx::query("DELETE FROM note_links WHERE from_id = ? OR to_id = ?")
+        .bind(id)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    sqlx::query("DELETE FROM notes WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    Ok(())
+}
+
+/// Soft delete: the row stays for sync, only the search index entry goes.
+async fn soft_delete(id: &str, state: &AppState) -> Result<(), AppError> {
+    sqlx::query("UPDATE notes SET deleted=1, updated_at=? WHERE id=?")
+        .bind(Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    if let Some(r) = row {
+        fts_delete(r.fts_rowid, &state.db).await?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn note_delete(
     id: String,
@@ -347,75 +424,36 @@ pub async fn note_delete(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
     if hard.unwrap_or(false) {
-        // Hard delete: remove file + DB row
-        let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(AppError::db)?;
-
-        if let Some(r) = row {
-            fts_delete(r.fts_rowid, &state.db).await?;
-            let file_path = resolve_note_abs_path(&state.app_data_dir, &r.file_path);
-            if file_path.exists() {
-                let _ = std::fs::remove_file(&file_path);
-            }
-            remove_note_attachments(&file_path, &id);
-        }
-
-        // Sensitive leftovers: unsaved draft and the version history
-        let _ = std::fs::remove_file(draft_file_path(&state.app_data_dir, &id));
-        sqlx::query("DELETE FROM note_history WHERE note_id = ?")
-            .bind(&id)
-            .execute(&state.db)
-            .await
-            .map_err(AppError::db)?;
-
-        sqlx::query("DELETE FROM note_tag_links WHERE note_id = ?")
-            .bind(&id)
-            .execute(&state.db)
-            .await
-            .map_err(AppError::db)?;
-
-        sqlx::query("DELETE FROM note_folder_links WHERE note_id = ?")
-            .bind(&id)
-            .execute(&state.db)
-            .await
-            .map_err(AppError::db)?;
-
-        sqlx::query("DELETE FROM note_links WHERE from_id = ? OR to_id = ?")
-            .bind(&id)
-            .bind(&id)
-            .execute(&state.db)
-            .await
-            .map_err(AppError::db)?;
-
-        sqlx::query("DELETE FROM notes WHERE id = ?")
-            .bind(&id)
-            .execute(&state.db)
-            .await
-            .map_err(AppError::db)?;
+        hard_delete(&id, &state).await?;
     } else {
-        // Soft delete
-        sqlx::query("UPDATE notes SET deleted=1, updated_at=? WHERE id=?")
-            .bind(Utc::now().to_rfc3339())
-            .bind(&id)
-            .execute(&state.db)
-            .await
-            .map_err(AppError::db)?;
-
-        let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(AppError::db)?;
-        if let Some(r) = row {
-            fts_delete(r.fts_rowid, &state.db).await?;
-        }
+        soft_delete(&id, &state).await?;
     }
-
     rebuild_manifest(&state.db, &state.app_data_dir).await?;
     Ok(())
+}
+
+/// Move several notes to the trash with a single manifest rebuild.
+#[tauri::command]
+pub async fn note_delete_many(ids: Vec<String>, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    for id in &ids {
+        soft_delete(id, &state).await?;
+    }
+    rebuild_manifest(&state.db, &state.app_data_dir).await?;
+    Ok(())
+}
+
+/// Hard-delete everything in the trash; returns how many notes were removed.
+#[tauri::command]
+pub async fn note_trash_empty(state: tauri::State<'_, AppState>) -> CmdResult<usize> {
+    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM notes WHERE deleted = 1")
+        .fetch_all(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    for id in &ids {
+        hard_delete(id, &state).await?;
+    }
+    rebuild_manifest(&state.db, &state.app_data_dir).await?;
+    Ok(ids.len())
 }
 
 #[tauri::command]

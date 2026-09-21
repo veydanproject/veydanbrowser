@@ -41,6 +41,7 @@ pub struct Note {
     pub format: String,
     pub bindings: Vec<String>,
     pub tags: Vec<NoteTagInfo>,
+    pub folder_ids: Vec<String>,
     pub pinned: bool,
     pub archived: bool,
     pub deleted: bool,

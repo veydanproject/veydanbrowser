@@ -13,11 +13,15 @@ import type {
   ExportOptions,
   FileEntry,
   HistoryFilter,
+  HostInfo,
   MergeResult,
   Note,
   NoteAttachment,
   NoteCreateInput,
   NoteFilter,
+  NoteLinks,
+  NoteNav,
+  NoteSyncInfo,
   OrphanAttachment,
   CaptureRule,
   NoteSmartView,
@@ -98,13 +102,30 @@ const devMocks: Record<string, unknown> = {
   update_supported: true,
 };
 
-async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri) {
     const { invoke } = await import('@tauri-apps/api/core');
     return invoke<T>(cmd, args);
   }
   console.warn(`[dev-browser] invoke('${cmd}')`, args ?? '');
   return (cmd in devMocks ? devMocks[cmd] : []) as T;
+}
+
+function blobToBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    // Data URL prefix ends at the first comma.
+    r.onload = () => resolve((r.result as string).slice((r.result as string).indexOf(',') + 1));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+function base64ToBytes(s: string): Uint8Array<ArrayBuffer> {
+  const bin = atob(s);
+  const out = new Uint8Array(new ArrayBuffer(bin.length));
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 export const api = {
@@ -219,10 +240,13 @@ export const api = {
 
   notes: {
     list: (filter?: NoteFilter) => call<NoteListItem[]>('note_list', { filter: filter ?? {} }),
+    nav: () => call<NoteNav>('note_nav'),
     get: (id: string) => call<Note>('note_get', { id }),
     create: (input: NoteCreateInput) => call<Note>('note_create', { input }),
     update: (id: string, input: NoteUpdateInput) => call<Note>('note_update', { id, input }),
     delete: (id: string, hard?: boolean) => call<void>('note_delete', { id, hard }),
+    deleteMany: (ids: string[]) => call<void>('note_delete_many', { ids }),
+    emptyTrash: () => call<number>('note_trash_empty'),
     archive: (id: string) => call<void>('note_archive', { id }),
     restore: (id: string) => call<void>('note_restore', { id }),
     setTags: (id: string, tagNames: string[]) => call<void>('note_set_tags', { id, tagNames }),
@@ -245,6 +269,8 @@ export const api = {
     folderDelete: (id: string) => call<void>('note_folder_delete', { id }),
     noteAddFolder: (noteId: string, folderId: string) => call<void>('note_add_folder', { noteId, folderId }),
     noteRemoveFolder: (noteId: string, folderId: string) => call<void>('note_remove_folder', { noteId, folderId }),
+    /** Replace every folder membership with one folder (`null` = none). */
+    noteSetFolder: (noteId: string, folderId: string | null) => call<void>('note_set_folder', { noteId, folderId }),
     noteAddBinding: (noteId: string, binding: string) => call<void>('note_add_binding', { noteId, binding }),
     noteRemoveBinding: (noteId: string, binding: string) => call<void>('note_remove_binding', { noteId, binding }),
     getDir: () => call<{ current: string; is_custom: boolean }>('notes_get_dir'),
@@ -264,6 +290,9 @@ export const api = {
     openWindow: (title: string) => call<void>('note_open_window', { title }),
     backlinks: (id: string) => call<NoteListItem[]>('note_backlinks', { id }),
     related: (id: string) => call<NoteListItem[]>('note_related', { id }),
+    links: (id: string) => call<NoteLinks>('note_links', { id }),
+    resolveLink: (target: string) => call<string | null>('note_resolve_link', { target }),
+    syncInfo: (id: string) => call<NoteSyncInfo>('note_sync_info', { id }),
     smartViewList: () => call<NoteSmartView[]>('note_smart_view_list'),
     smartViewCreate: (input: SmartViewInput) => call<NoteSmartView>('note_smart_view_create', { input }),
     smartViewUpdate: (id: string, input: SmartViewInput) => call<NoteSmartView>('note_smart_view_update', { id, input }),
@@ -278,6 +307,11 @@ export const api = {
         headers: { 'x-note-id': noteId, 'x-file-name': encodeURIComponent(fileName) },
       });
     },
+    /** Base64 upload for platforms without raw IPC bodies (Android / iOS). */
+    attachmentAddBase64: async (noteId: string, file: Blob, fileName: string) =>
+      call<NoteAttachment>('note_attachment_add_base64', { noteId, name: fileName, data: await blobToBase64(file) }),
+    attachmentRead: async (noteId: string, name: string) =>
+      base64ToBytes(await call<string>('note_attachment_read', { noteId, name })),
     attachmentAddFromPath: (noteId: string, srcPath: string) =>
       call<NoteAttachment>('note_attachment_add_from_path', { noteId, srcPath }),
     clipboardFilePaths: () => call<string[]>('clipboard_file_paths'),
@@ -375,6 +409,7 @@ export const api = {
   system: {
     openUrl: (url: string) => call<void>('open_url', { url }),
     updateSupported: () => call<boolean>('update_supported'),
+    hostInfo: () => call<HostInfo>('host_info'),
   },
 
   backup: {
@@ -397,6 +432,8 @@ export const api = {
       call<void>('sync_change_passphrase', { old, new: newPassphrase }),
     status: () => call<SyncStatus>('sync_status'),
     runNow: () => call<SyncStatus>('sync_run_now'),
+    /** Background cycle if a vault is joined and the rate limit allows. */
+    trigger: () => call<void>('sync_trigger'),
     conflictGet: (noteId: string) => call<MergeResult>('sync_conflict_get', { noteId }),
     conflictResolve: (noteId: string, content: string) =>
       call<SyncStatus>('sync_conflict_resolve', { noteId, content }),

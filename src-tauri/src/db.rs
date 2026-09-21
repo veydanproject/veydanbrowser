@@ -5,14 +5,114 @@ use anyhow::Result;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
 use std::path::Path;
 
+#[cfg(desktop)]
 pub async fn init_pool(db_path: &Path) -> Result<Pool<Sqlite>> {
-    let url = format!("sqlite://{}?mode=rwc", db_path.display());
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await?;
+    let pool = connect(db_path).await?;
     run_migrations(&pool).await?;
     Ok(pool)
+}
+
+async fn connect(db_path: &Path) -> Result<Pool<Sqlite>> {
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    Ok(SqlitePoolOptions::new().max_connections(5).connect(&url).await?)
+}
+
+/// Mobile: also upgrades a database written by the standalone mobile app.
+/// Returns `true` when that happened and the notes index must be rebuilt.
+#[cfg(mobile)]
+pub async fn init_pool_mobile(db_path: &Path) -> Result<(Pool<Sqlite>, bool)> {
+    let pool = connect(db_path).await?;
+    let legacy = legacy_mobile::detect(&pool).await?;
+    if legacy {
+        legacy_mobile::prepare(&pool).await?;
+    }
+    run_migrations(&pool).await?;
+    if legacy {
+        legacy_mobile::finish(&pool).await?;
+    }
+    Ok((pool, legacy))
+}
+
+/// Schema of the standalone mobile app (`veydan.db`, user_version <= 5): fewer
+/// columns on `notes`, a 4-column `profiles` catalog and plain-text history.
+#[cfg(mobile)]
+mod legacy_mobile {
+    use super::add_column_if_not_exists;
+    use crate::commands::notes::{compress_content, compute_hash};
+    use anyhow::Result;
+    use sqlx::{Pool, Sqlite};
+
+    pub async fn detect(pool: &Pool<Sqlite>) -> Result<bool> {
+        let (has_notes,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'notes'")
+                .fetch_one(pool)
+                .await?;
+        if has_notes == 0 {
+            return Ok(false);
+        }
+        let (has_fts_rowid,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'fts_rowid'")
+                .fetch_one(pool)
+                .await?;
+        Ok(has_fts_rowid == 0)
+    }
+
+    /// Before the shared migrations: widen `notes`, park tables whose shape differs.
+    pub async fn prepare(pool: &Pool<Sqlite>) -> Result<()> {
+        for (col, def) in [
+            ("scope", "TEXT NOT NULL DEFAULT 'global'"),
+            ("workspace_id", "TEXT NULL"),
+            ("profile_id", "TEXT NULL"),
+            ("version_base", "TEXT NULL"),
+            ("fts_rowid", "INTEGER NULL"),
+            ("file_mtime", "TEXT NULL"),
+        ] {
+            add_column_if_not_exists(pool, "notes", col, def).await?;
+        }
+        add_column_if_not_exists(pool, "sync_note_state", "conflict", "INTEGER NOT NULL DEFAULT 0").await?;
+        sqlx::query("ALTER TABLE profiles RENAME TO legacy_profiles").execute(pool).await?;
+        sqlx::query("ALTER TABLE note_history RENAME TO legacy_note_history").execute(pool).await?;
+        Ok(())
+    }
+
+    /// After the shared migrations: move parked rows into the new tables.
+    pub async fn finish(pool: &Pool<Sqlite>) -> Result<()> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO profiles (id, name, profile_path, workspace_id, created_at, updated_at)
+             SELECT id, name, '', workspace_id, created_at, created_at FROM legacy_profiles",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query("DROP TABLE legacy_profiles").execute(pool).await?;
+
+        let rows: Vec<(String, String, i64, String, String, String, Option<String>, String)> = sqlx::query_as(
+            "SELECT id, note_id, revision, version_type, title, content, device, created_at
+             FROM legacy_note_history ORDER BY note_id, revision",
+        )
+        .fetch_all(pool)
+        .await?;
+        for (id, note_id, revision, version_type, title, content, device, created_at) in rows {
+            let blob = compress_content(&content).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            sqlx::query(
+                "INSERT OR IGNORE INTO note_history
+                 (id, note_id, revision, version_type, title, content, content_hash, device, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(&note_id)
+            .bind(revision)
+            .bind(&version_type)
+            .bind(&title)
+            .bind(&blob)
+            .bind(compute_hash(&content))
+            .bind(&device)
+            .bind(&created_at)
+            .execute(pool)
+            .await?;
+        }
+        sqlx::query("DROP TABLE legacy_note_history").execute(pool).await?;
+        Ok(())
+    }
 }
 
 async fn add_column_if_not_exists(
@@ -560,12 +660,13 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
         .execute(pool)
         .await?;
 
-    // Create Default workspace if none exist
+    // Create Default workspace if none exist. Mobile only mirrors the desktop
+    // catalog through sync and must not invent a workspace row of its own.
     let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM workspaces")
         .fetch_one(pool)
         .await?;
 
-    if count == 0 {
+    if count == 0 && cfg!(desktop) {
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO workspaces (id, name, description, color, icon, is_default, created_at, updated_at)

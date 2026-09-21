@@ -247,6 +247,7 @@ pub async fn save_attachment_state(db: &Pool<Sqlite>, s: &AttachmentSyncState) -
 
 /// Where the local `firefox-profile/` stands relative to the vault, plus the
 /// lease telling which device may run the profile right now.
+#[cfg(desktop)]
 #[derive(Debug, Clone, Default)]
 pub struct ProfileFilesState {
     pub profile_id: String,
@@ -271,17 +272,21 @@ pub struct ProfileFilesState {
     pub diverged: bool,
 }
 
+#[cfg(desktop)]
 impl ProfileFilesState {
     pub fn new(profile_id: &str) -> Self {
         Self { profile_id: profile_id.into(), lease_synced: true, ..Default::default() }
     }
 }
 
+#[cfg(desktop)]
 type ProfileFilesRow = (String, String, String, String, String, i64, String, String, String, String, String, i64, i64);
 
+#[cfg(desktop)]
 const SELECT_PROFILE_FILES: &str = "SELECT profile_id, head_hlc, synced_hash, manifest_json, snapshot_at, dirty,
     pending_manifest, lease_device, lease_name, lease_since, lease_hlc, lease_synced, diverged FROM sync_profile_files_state";
 
+#[cfg(desktop)]
 fn row_to_profile_files(r: ProfileFilesRow) -> ProfileFilesState {
     ProfileFilesState {
         profile_id: r.0,
@@ -300,11 +305,13 @@ fn row_to_profile_files(r: ProfileFilesRow) -> ProfileFilesState {
     }
 }
 
+#[cfg(desktop)]
 pub async fn load_profile_files_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<String, ProfileFilesState>> {
     let rows: Vec<ProfileFilesRow> = sqlx::query_as(SELECT_PROFILE_FILES).fetch_all(db).await.map_err(AppError::db)?;
     Ok(rows.into_iter().map(row_to_profile_files).map(|s| (s.profile_id.clone(), s)).collect())
 }
 
+#[cfg(desktop)]
 pub async fn load_profile_files_state(db: &Pool<Sqlite>, profile_id: &str) -> CmdResult<Option<ProfileFilesState>> {
     let row: Option<ProfileFilesRow> = sqlx::query_as(
         "SELECT profile_id, head_hlc, synced_hash, manifest_json, snapshot_at, dirty,
@@ -318,6 +325,7 @@ pub async fn load_profile_files_state(db: &Pool<Sqlite>, profile_id: &str) -> Cm
     Ok(row.map(row_to_profile_files))
 }
 
+#[cfg(desktop)]
 pub async fn save_profile_files_state(db: &Pool<Sqlite>, s: &ProfileFilesState) -> CmdResult<()> {
     sqlx::query(
         "INSERT INTO sync_profile_files_state (profile_id, head_hlc, synced_hash, manifest_json, snapshot_at, dirty,
@@ -348,6 +356,7 @@ pub async fn save_profile_files_state(db: &Pool<Sqlite>, s: &ProfileFilesState) 
     Ok(())
 }
 
+#[cfg(desktop)]
 pub async fn delete_profile_files_state(db: &Pool<Sqlite>, profile_id: &str) -> CmdResult<()> {
     sqlx::query("DELETE FROM sync_profile_files_state WHERE profile_id = ?")
         .bind(profile_id)

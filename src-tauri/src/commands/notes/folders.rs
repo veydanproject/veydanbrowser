@@ -32,6 +32,23 @@ pub async fn note_folder_create(
     if name.is_empty() {
         return Err(AppError::io("Folder name cannot be empty"));
     }
+    if let Some(ref pid) = parent_id {
+        let parent: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT parent_id FROM note_folders WHERE id = ?",
+        )
+        .bind(pid)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?;
+        match parent {
+            None => return Err(AppError::io("Parent folder not found")),
+            Some((Some(_),)) => {
+                return Err(AppError::io("Folder nesting is limited to 2 levels"));
+            }
+            Some((None,)) => {}
+        }
+    }
+
     let id = Uuid::new_v4().to_string();
     let color = color.unwrap_or_else(|| "#6366f1".to_string());
     let now = Utc::now().to_rfc3339();
@@ -227,6 +244,29 @@ pub async fn note_remove_folder(
         .execute(&state.db)
         .await
         .map_err(AppError::db)?;
+    Ok(())
+}
+
+/// Single-folder assignment (mobile UX): replaces every folder link; `None` clears them.
+#[tauri::command]
+pub async fn note_set_folder(
+    note_id: String,
+    folder_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    sqlx::query("DELETE FROM note_folder_links WHERE note_id = ?")
+        .bind(&note_id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    if let Some(fid) = folder_id {
+        sqlx::query("INSERT OR IGNORE INTO note_folder_links (note_id, folder_id) VALUES (?, ?)")
+            .bind(&note_id)
+            .bind(&fid)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+    }
     Ok(())
 }
 

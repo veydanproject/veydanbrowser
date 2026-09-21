@@ -13,8 +13,8 @@
 use russh::client;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use std::sync::Arc;
-use veydanbrowser_lib::commands::ssh::{resolve_key_material, SshConnection};
-use veydanbrowser_lib::commands::ssh_keys::{
+use veydan_lib::commands::ssh::{resolve_key_material, SshConnection};
+use veydan_lib::commands::ssh_keys::{
     generate_key_material, parse_imported, KeyMaterial, ERR_KEY_ENCRYPTED,
     ERR_KEY_WRONG_PASSPHRASE,
 };

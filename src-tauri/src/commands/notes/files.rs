@@ -312,6 +312,9 @@ mod title_escaping_tests {
 }
 
 pub(crate) fn open_path(path: &std::path::Path) -> Result<(), AppError> {
+    // Mobile has no external editor / file manager to hand the path to.
+    #[cfg(mobile)]
+    let _ = path;
     #[cfg(target_os = "linux")]
     std::process::Command::new("xdg-open")
         .arg(path)

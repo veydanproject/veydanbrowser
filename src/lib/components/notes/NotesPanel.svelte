@@ -14,6 +14,7 @@
   import NoteLockGate from './NoteLockGate.svelte';
   import Icon from '$lib/Icon.svelte';
   import NotesList from './NotesList.svelte';
+  import ListBulkActions from './ListBulkActions.svelte';
   import NoteEditor from './NoteEditor.svelte';
   import NoteFilters from './NoteFilters.svelte';
   import NoteTransferDialog, { type TransferMode } from './NoteTransferDialog.svelte';
@@ -378,9 +379,12 @@
                   <Icon name="sidebar" size={14} />
                 </button>
               {/if}
-              <button class="btn btn-primary btn-new" onclick={() => (showCreate = true)}>
-                <Icon name="plus" size={14} /> {$t('notes_btn_new')}
-              </button>
+              <ListBulkActions {isTrash} notes={displayList} />
+              {#if !isTrash}
+                <button class="btn btn-primary btn-new" onclick={() => (showCreate = true)}>
+                  <Icon name="plus" size={14} /> {$t('notes_btn_new')}
+                </button>
+              {/if}
             </div>
           </div>
           <div class="list-scroll">

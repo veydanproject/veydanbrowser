@@ -18,6 +18,7 @@
   import NoteAttachments from './NoteAttachments.svelte';
   import NoteLinks from './NoteLinks.svelte';
   import WikiLinkPicker from './WikiLinkPicker.svelte';
+  import { WIKI_MARK, unclosedWikiAt, wikiMarkup } from '$lib/tiptap-ext';
   import { applyAction, shiftIndent, continueList, type EditAction, type EditResult } from '$lib/markdown-edit';
   import { wordCount } from '$lib/markdown';
   import { pasteHasHiddenFiles } from '$lib/notes-files';
@@ -152,7 +153,7 @@
     }
   }
 
-  // ── Wiki links: `[[` autocomplete in source mode, navigation, backlinks panel ─
+  // ── Wiki links: `@@` autocomplete in source mode, navigation, backlinks panel ─
   let wikiOpen = $state(false);
   let wikiQuery = $state('');
   let wikiIndex = $state(0);
@@ -161,27 +162,27 @@
   let linksOpen = $state(false);
   let linksVersion = $state(0);
 
-  /** Track an unclosed `[[` immediately before the caret. */
+  /** Track an unclosed `@@` immediately before the caret. */
   function updateWikiState() {
     const pos = textareaEl?.selectionStart ?? contentValue.length;
     const before = contentValue.slice(0, pos);
-    const open = before.lastIndexOf('[[');
-    if (open < 0 || before.indexOf(']]', open) >= 0 || before.slice(open).includes('\n')) {
+    const open = unclosedWikiAt(before);
+    if (open < 0) {
       wikiOpen = false;
       return;
     }
     wikiStart = open;
-    wikiQuery = before.slice(open + 2);
+    wikiQuery = before.slice(open + WIKI_MARK.length);
     wikiIndex = 0;
     wikiOpen = true;
   }
 
-  /** Replace the partial `[[query` with a completed link. */
+  /** Replace the partial `@@query` with a completed link. */
   function pickWikiLink(title: string) {
     const pos = textareaEl?.selectionStart ?? contentValue.length;
-    const link = `[[${title}]]`;
+    const link = wikiMarkup(title);
     const rest = contentValue.slice(pos);
-    const skip = rest.startsWith(']]') ? 2 : 0;
+    const skip = rest.startsWith(WIKI_MARK) ? WIKI_MARK.length : 0;
     const text = contentValue.slice(0, wikiStart) + link + rest.slice(skip);
     wikiOpen = false;
     const caret = wikiStart + link.length;

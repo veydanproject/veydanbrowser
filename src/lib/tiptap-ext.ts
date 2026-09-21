@@ -13,12 +13,27 @@ import { TaskList } from '@tiptap/extension-task-list';
 import { TaskItem } from '@tiptap/extension-task-item';
 import { TableKit } from '@tiptap/extension-table';
 
-/** `[[Target]]` / `[[Target|label]]` at the start of a string. */
-export const WIKI_RE = /^\[\[([^\]\n|]+)(?:\|([^\]\n]+))?\]\]/;
+export const WIKI_MARK = '@@';
+
+/** `@@Target@@` / `@@Target|alias@@` at the start of a string. */
+export const WIKI_RE = /^@@([^|\n]+?)(?:\|([^|\n]+?))?@@/;
 
 const wikiAttrs = (m: RegExpMatchArray) => ({ target: m[1].trim(), label: m[2]?.trim() ?? null });
 
-/** Inline atom for wiki links; round-trips as `[[...]]` in Markdown. */
+/** Index of an unclosed `@@` before the caret, or -1. */
+export function unclosedWikiAt(before: string): number {
+  const open = before.lastIndexOf(WIKI_MARK);
+  if (open < 0) return -1;
+  if (before.indexOf(WIKI_MARK, open + WIKI_MARK.length) >= 0) return -1;
+  if (before.includes('\n', open)) return -1;
+  return open;
+}
+
+export function wikiMarkup(target: string, label?: string | null): string {
+  return label && label !== target ? `${WIKI_MARK}${target}|${label}${WIKI_MARK}` : `${WIKI_MARK}${target}${WIKI_MARK}`;
+}
+
+/** Inline atom for wiki links; round-trips as `@@...@@` in Markdown. */
 export const WikiLink = Node.create({
   name: 'wikiLink',
   group: 'inline',
@@ -49,13 +64,13 @@ export const WikiLink = Node.create({
   },
 
   renderText({ node }) {
-    return `[[${node.attrs.target}]]`;
+    return wikiMarkup(node.attrs.target);
   },
 
   markdownTokenizer: {
     name: 'wikiLink',
     level: 'inline',
-    start: (src) => src.indexOf('[['),
+    start: (src) => src.indexOf(WIKI_MARK),
     tokenize(src) {
       const m = WIKI_RE.exec(src);
       if (m) return { type: 'wikiLink', raw: m[0], ...wikiAttrs(m) };
@@ -66,14 +81,14 @@ export const WikiLink = Node.create({
 
   renderMarkdown: (node: JSONContent) => {
     const { target, label } = node.attrs ?? {};
-    return label && label !== target ? `[[${target}|${label}]]` : `[[${target}]]`;
+    return wikiMarkup(String(target ?? ''), label == null ? null : String(label));
   },
 
-  // Typing `]]` after `[[Title` converts the text into a wiki link node
+  // Typing the closing `@@` after `@@Title` converts the text into a wiki link node
   addInputRules() {
     return [
       nodeInputRule({
-        find: /\[\[([^\]\n|]+)(?:\|([^\]\n]+))?\]\]$/,
+        find: /@@([^|\n]+?)(?:\|([^|\n]+?))?@@$/,
         type: this.type,
         getAttributes: wikiAttrs,
       }),

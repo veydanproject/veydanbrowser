@@ -5,9 +5,15 @@
 //! any device references it. Everything else is a candidate; a candidate is
 //! deleted only when it was already a candidate one grace period earlier, so a
 //! blob uploaded just before its op is pushed is never lost.
+//!
+//! Runs on desktop only: mobile does not know profile-file snapshots and would
+//! treat their blobs as garbage. Status keys are still read there.
+#![cfg_attr(mobile, allow(dead_code, unused_imports))]
 
 use super::config::{get_setting, set_setting};
-use super::{attachments, notes, profile_files};
+#[cfg(desktop)]
+use super::profile_files;
+use super::{attachments, notes};
 use crate::error::{AppError, CmdResult};
 use chrono::Utc;
 use sqlx::{Pool, Sqlite};
@@ -43,6 +49,8 @@ async fn blob_refs(engine: &Engine, op: &Op) -> CmdResult<Vec<String>> {
         return Ok(Vec::new());
     }
     let field = |k: &str| op.payload.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string);
+    #[cfg(mobile)]
+    let _ = engine;
     Ok(match op.entity_type.as_str() {
         // The note and its parents: the ancestor stays available for 3-way merges.
         notes::ENTITY => {
@@ -53,6 +61,7 @@ async fn blob_refs(engine: &Engine, op: &Op) -> CmdResult<Vec<String>> {
             refs
         }
         attachments::ENTITY => field("blob").into_iter().collect(),
+        #[cfg(desktop)]
         profile_files::SNAPSHOT_ENTITY => profile_files::blob_refs(engine, op).await?,
         _ => Vec::new(),
     })

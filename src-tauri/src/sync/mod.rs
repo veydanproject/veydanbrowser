@@ -18,6 +18,7 @@ mod config;
 mod fs_hash;
 mod gc;
 mod notes;
+#[cfg(desktop)]
 mod profile_files;
 mod rows;
 mod state;
@@ -35,6 +36,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use veydan_sync::{Engine, HlcClock, Probe, Vmk};
 
 const TICK_SEC: u64 = 1;
+/// Minimum gap between cycles started by `sync_trigger` (app resume, screen open).
+const MIN_TRIGGER_GAP_SEC: i64 = 15;
 const COMPACT_AFTER_CHUNKS: usize = 64;
 const TOMBSTONE_TTL_MS: u64 = 180 * 24 * 60 * 60 * 1000;
 pub const EVENT_STATUS: &str = "sync://status";
@@ -62,6 +65,7 @@ pub(crate) fn emit_progress(app: &AppHandle, phase: &str, percent: u32, current:
     );
 }
 
+#[cfg(desktop)]
 pub(crate) fn progress_pct(lo: u32, hi: u32, current: u32, total: u32) -> u32 {
     if total == 0 || hi <= lo {
         return lo;
@@ -97,6 +101,14 @@ pub struct LeaseInfo {
     pub device_id: String,
     pub device_name: String,
     pub own: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NoteSyncInfo {
+    /// The vault knows this note.
+    pub tracked: bool,
+    /// Local edits not yet pushed.
+    pub pending: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -242,7 +254,46 @@ pub async fn sync_conflict_resolve(
     status(&state).await
 }
 
+/// Sync position of one note: `tracked` when the vault knows it, `pending` when
+/// the local file differs from the last pushed/applied version.
+#[tauri::command]
+pub async fn note_sync_info(id: String, state: tauri::State<'_, AppState>) -> CmdResult<NoteSyncInfo> {
+    let Some(st) = state::load_note_state(&state.db, &id).await? else {
+        return Ok(NoteSyncInfo { tracked: false, pending: true });
+    };
+    let file_path: Option<String> = sqlx::query_scalar("SELECT file_path FROM notes WHERE id = ? AND deleted = 0")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    let hash = file_path
+        .and_then(|p| std::fs::read(crate::commands::notes::resolve_note_abs_path(&state.app_data_dir, &p)).ok())
+        .map(|raw| veydan_sync::sha256_hex(&raw))
+        .unwrap_or_default();
+    Ok(NoteSyncInfo { tracked: true, pending: hash != st.synced_hash })
+}
+
+/// Start a cycle in the background (app resumed, screen opened). No-op when one
+/// is running, sync is off or the last cycle started less than `MIN_TRIGGER_GAP_SEC` ago.
+#[tauri::command]
+pub async fn sync_trigger(app: AppHandle, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    if load_binding(&state.db).await.is_none() {
+        return Ok(());
+    }
+    let due = match config::get_setting(&state.db, "sync_last_started").await {
+        None => true,
+        Some(last) => chrono::DateTime::parse_from_rfc3339(&last)
+            .map(|t| (Utc::now() - t.with_timezone(&Utc)).num_seconds() >= MIN_TRIGGER_GAP_SEC)
+            .unwrap_or(true),
+    };
+    if due {
+        trigger_cycle(&app);
+    }
+    Ok(())
+}
+
 /// Conflict choice for profile files: replace local files with the remote snapshot.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn sync_profile_files_take_remote(
     profile_id: String,
@@ -256,6 +307,7 @@ pub async fn sync_profile_files_take_remote(
 }
 
 /// Conflict choice for profile files: keep local files and publish them.
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn sync_profile_files_push_mine(
     profile_id: String,
@@ -328,12 +380,14 @@ async fn open_engine(state: &AppState) -> CmdResult<Engine> {
 }
 
 /// Vault joined and background sync is on.
+#[cfg(desktop)]
 async fn vault_active(state: &AppState) -> bool {
     let cfg = load_config(&state.db).await;
     cfg.enabled && load_binding(&state.db).await.is_some()
 }
 
 /// Sync is on, a vault is joined and profile files are included.
+#[cfg(desktop)]
 async fn profile_files_active(state: &AppState) -> bool {
     load_config(&state.db).await.profile_files && vault_active(state).await
 }
@@ -354,10 +408,12 @@ pub fn trigger_cycle(app: &AppHandle) {
 
 // ── Profile launch hooks ─────────────────────────────────────────────────────
 
+#[cfg(desktop)]
 pub const ERR_PROFILE_IN_USE: &str = "profile_in_use";
 
 /// Before the browser starts: refuse a profile leased elsewhere (unless forced),
 /// apply a snapshot that waited, take the lease.
+#[cfg(desktop)]
 pub async fn before_profile_launch(app: &AppHandle, profile_id: &str, force: bool) -> CmdResult<()> {
     let state = app.state::<AppState>();
     if !vault_active(&state).await {
@@ -378,6 +434,7 @@ pub async fn before_profile_launch(app: &AppHandle, profile_id: &str, force: boo
 }
 
 /// After the browser exited: mark files dirty, release the lease, sync soon.
+#[cfg(desktop)]
 pub async fn on_profile_stopped(app: &AppHandle, profile_id: &str) {
     let state = app.state::<AppState>();
     if !vault_active(&state).await {
@@ -441,12 +498,16 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     let changes = notes::collect_local_changes(&engine, state, &mut clock).await?;
     emit_progress(app, "collect", 18, 0, 0, "");
     let table_rows = rows::collect_local_changes(state, &mut clock, rows::RowScope::App).await?;
-    let leases = profile_files::collect_leases(state, &mut clock).await?;
     let mut ops = note_rows.ops;
     ops.extend(attachments.ops);
     ops.extend(changes.ops);
     ops.extend(table_rows.ops);
-    ops.extend(leases.ops);
+    #[cfg(desktop)]
+    let lease_states = {
+        let leases = profile_files::collect_leases(state, &mut clock).await?;
+        ops.extend(leases.ops);
+        leases.states
+    };
     emit_progress(app, "push", 22, 0, 0, "");
     if !ops.is_empty() {
         engine.push(&mut local, ops).await.map_err(AppError::other)?;
@@ -460,7 +521,8 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
         for st in &changes.states {
             state::save_note_state(db, st).await?;
         }
-        for st in &leases.states {
+        #[cfg(desktop)]
+        for st in &lease_states {
             state::save_profile_files_state(db, st).await?;
         }
     }
@@ -492,36 +554,7 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     rows::finish_apply(app, &rows_outcome).await;
 
     let mut warnings: Vec<String> = pulled.errors.into_iter().map(|(peer, e)| format!("{peer}: {e}")).collect();
-    match profile_files::apply_leases(app, &pulled.ops).await {
-        Ok(_) => {
-            let _ = app.emit(EVENT_STATUS, ());
-        }
-        Err(e) => warnings.push(format!("leases: {e}")),
-    }
-    let mut files_retry = None;
-    if cfg.profile_files {
-        emit_progress(app, "profiles_up", 55, 0, 0, "");
-        match profile_files::collect_local_changes(&engine, state, &mut clock, app).await {
-            Ok(files) => {
-                if !files.ops.is_empty() {
-                    if let Err(e) = engine.push(&mut local, files.ops).await {
-                        warnings.push(format!("profiles upload: {e}"));
-                    } else {
-                        state::save_own_state(db, &local, &clock.last()).await?;
-                        for st in &files.states {
-                            state::save_profile_files_state(db, st).await?;
-                        }
-                    }
-                }
-            }
-            Err(e) => warnings.push(format!("profiles upload: {e}")),
-        }
-        emit_progress(app, "profiles_down", 78, 0, 0, "");
-        match profile_files::apply_remote(&engine, app, &pulled.ops).await {
-            Ok(o) => files_retry = o.retry,
-            Err(e) => warnings.push(format!("profiles download: {e}")),
-        }
-    }
+    let files_retry = profile_files_phase(app, state, &engine, &cfg, &pulled.ops, &mut local, &mut clock, &mut warnings).await?;
 
     state::save_own_state(db, &local, &clock.last()).await?;
     let retry = outcome
@@ -543,14 +576,83 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
         engine.compact(&local, now_ms, TOMBSTONE_TTL_MS).await.map_err(AppError::other)?;
     }
 
+    #[cfg(desktop)]
     if clean && gc::due(db).await {
         emit_progress(app, "gc", 97, 0, 0, "");
         if let Err(e) = gc::run(&engine, db).await {
             warnings.push(format!("gc skipped: {e}"));
         }
     }
+    #[cfg(mobile)]
+    let _ = clean;
 
     Ok(warnings)
+}
+
+/// Leases and Firefox profile files: upload local snapshots, apply remote ones.
+/// Returns the retry reason when a remote snapshot could not be applied yet.
+#[cfg(desktop)]
+#[allow(clippy::too_many_arguments)]
+async fn profile_files_phase(
+    app: &AppHandle,
+    state: &AppState,
+    engine: &Engine,
+    cfg: &SyncConfig,
+    pulled_ops: &[veydan_sync::Op],
+    local: &mut veydan_sync::LocalState,
+    clock: &mut HlcClock,
+    warnings: &mut Vec<String>,
+) -> CmdResult<Option<String>> {
+    let db = &state.db;
+    match profile_files::apply_leases(app, pulled_ops).await {
+        Ok(_) => {
+            let _ = app.emit(EVENT_STATUS, ());
+        }
+        Err(e) => warnings.push(format!("leases: {e}")),
+    }
+    if !cfg.profile_files {
+        return Ok(None);
+    }
+    emit_progress(app, "profiles_up", 55, 0, 0, "");
+    match profile_files::collect_local_changes(engine, state, clock, app).await {
+        Ok(files) => {
+            if !files.ops.is_empty() {
+                if let Err(e) = engine.push(local, files.ops).await {
+                    warnings.push(format!("profiles upload: {e}"));
+                } else {
+                    state::save_own_state(db, local, &clock.last()).await?;
+                    for st in &files.states {
+                        state::save_profile_files_state(db, st).await?;
+                    }
+                }
+            }
+        }
+        Err(e) => warnings.push(format!("profiles upload: {e}")),
+    }
+    emit_progress(app, "profiles_down", 78, 0, 0, "");
+    match profile_files::apply_remote(engine, app, pulled_ops).await {
+        Ok(o) => Ok(o.retry),
+        Err(e) => {
+            warnings.push(format!("profiles download: {e}"));
+            Ok(None)
+        }
+    }
+}
+
+/// Mobile has no browser profiles: nothing to lease or upload.
+#[cfg(mobile)]
+#[allow(clippy::too_many_arguments)]
+async fn profile_files_phase(
+    _app: &AppHandle,
+    _state: &AppState,
+    _engine: &Engine,
+    _cfg: &SyncConfig,
+    _pulled_ops: &[veydan_sync::Op],
+    _local: &mut veydan_sync::LocalState,
+    _clock: &mut HlcClock,
+    _warnings: &mut Vec<String>,
+) -> CmdResult<Option<String>> {
+    Ok(None)
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────

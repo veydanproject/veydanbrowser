@@ -430,6 +430,7 @@ pub async fn note_history_restore(
     rebuild_manifest(&state.db, &state.app_data_dir).await?;
 
     let tags = fetch_note_tags(&note_id, &state.db).await?;
+    let folder_ids = fetch_note_folder_ids(&note_id, &state.db).await?;
     let bindings: Vec<String> = serde_json::from_str(&row.bindings).unwrap_or_default();
 
     Ok(Note {
@@ -440,6 +441,7 @@ pub async fn note_history_restore(
         format: row.format,
         bindings,
         tags,
+        folder_ids,
         pinned: row.pinned != 0,
         archived: row.archived != 0,
         deleted: row.deleted != 0,

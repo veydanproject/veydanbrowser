@@ -9,6 +9,7 @@
 //! A delete op carries an empty payload.
 
 use super::state::{load_row_state, load_row_states, save_row_state, RowSyncState};
+#[cfg(desktop)]
 use crate::commands::profiles::profile_delete;
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
@@ -250,7 +251,18 @@ fn is_note_row(entity: &str) -> bool {
     matches!(entity, "note_tag" | "note_folder" | "note_smart_view" | "note_meta")
 }
 
+/// Entities a mobile install stores. Proxies, SSH and browser settings carry
+/// secrets that only the desktop uses; they are neither pulled nor pushed there.
+const MOBILE_ENTITIES: &[&str] = &["workspace", "profile", "totp", "note_tag", "note_folder", "note_smart_view", "note_meta"];
+
+fn supported(entity: &str) -> bool {
+    cfg!(desktop) || MOBILE_ENTITIES.contains(&entity)
+}
+
 fn in_scope(entity: &str, scope: RowScope) -> bool {
+    if !supported(entity) {
+        return false;
+    }
     match scope {
         RowScope::App => !is_note_row(entity),
         RowScope::Notes => is_note_row(entity),
@@ -628,11 +640,18 @@ async fn delete_row(app: &AppHandle, spec: &TableSpec, id: &str) -> CmdResult<bo
     let db = &state.db;
     match &spec.delete {
         Delete::Ignore => Ok(true),
+        #[cfg(desktop)]
         Delete::Profile => {
             if state.browser.is_running(id).await {
                 return Ok(false);
             }
             profile_delete(id.to_string(), app.state(), app.clone()).await?;
+            Ok(true)
+        }
+        // Mobile holds only the profile catalog row; nothing else to clean up.
+        #[cfg(mobile)]
+        Delete::Profile => {
+            exec(db, format!("DELETE FROM {} WHERE {} = ?", spec.table, spec.pk), &[Value::String(id.into())]).await?;
             Ok(true)
         }
         Delete::Plain(extra) => {
@@ -725,6 +744,7 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
 
 /// Re-apply settings that live in process state, then tell the UI which stores to reload.
 pub async fn finish_apply(app: &AppHandle, outcome: &ApplyOutcome) {
+    #[cfg(desktop)]
     if outcome.changed.contains(SETTING_ENTITY) {
         let state = app.state::<AppState>();
         crate::commands::settings::reload_tray_settings(app, &state).await;

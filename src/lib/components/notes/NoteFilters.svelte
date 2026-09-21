@@ -439,9 +439,11 @@
           </button>
           {#if openFolderMenuId === f.id}
             <div class="folder-menu" style="left:{menuPos.x}px; top:{menuPos.y}px">
-              <button onclick={() => { openFolderModal(f.id); openMenuKey = null; }}>
-                <Icon name="folder-plus" size={11} /><span>Подпапка</span>
-              </button>
+              {#if !f.parent_id}
+                <button onclick={() => { openFolderModal(f.id); openMenuKey = null; }}>
+                  <Icon name="folder-plus" size={11} /><span>Подпапка</span>
+                </button>
+              {/if}
               <button onclick={(e) => { startEditFolder(f, e); openMenuKey = null; }}>
                 <Icon name="pencil" size={11} /><span>Редактировать</span>
               </button>

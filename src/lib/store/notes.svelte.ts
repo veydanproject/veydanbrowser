@@ -415,6 +415,21 @@ class NotesStore {
     await this._afterStatusChange(id);
   }
 
+  /** Move a whole list to the trash. */
+  async deleteMany(ids: string[]) {
+    if (!ids.length) return;
+    await api.notes.deleteMany(ids);
+    if (this.activeNoteId && ids.includes(this.activeNoteId)) this._clearEditorState();
+    await Promise.all([this.refresh(), this.refreshTrash()]);
+  }
+
+  /** Hard-delete everything in the trash. */
+  async emptyTrash() {
+    await api.notes.emptyTrash();
+    if (this.activeNoteId && this.trash.some((n) => n.id === this.activeNoteId)) this._clearEditorState();
+    await Promise.all([this.refresh(), this.refreshTrash()]);
+  }
+
   async archiveNote(id: string) {
     await api.notes.archive(id);
     await this._afterStatusChange(id);

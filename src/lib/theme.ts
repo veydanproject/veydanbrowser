@@ -83,35 +83,37 @@ function loadCustom(): ThemeCustom {
   }
 }
 
-function applyAccent(body: HTMLElement, hex: string, theme: Theme) {
+function applyAccent(el: HTMLElement, hex: string, theme: Theme) {
   const textMix = theme === 'dark' ? 'white' : 'black';
-  body.style.setProperty('--accent', hex);
-  body.style.setProperty('--accent-hover', `color-mix(in srgb, ${hex} 82%, black)`);
-  body.style.setProperty('--accent-bg', `color-mix(in srgb, ${hex} 15%, transparent)`);
-  body.style.setProperty('--accent-border', `color-mix(in srgb, ${hex} 45%, transparent)`);
-  body.style.setProperty('--accent-grad', `linear-gradient(135deg, color-mix(in srgb, ${hex} 80%, white), ${hex})`);
-  body.style.setProperty('--accent-text', `color-mix(in srgb, ${hex} 72%, ${textMix})`);
-  body.style.setProperty('--accent-text-2', `color-mix(in srgb, ${hex} 64%, ${textMix})`);
-  body.style.setProperty('--accent-text-3', `color-mix(in srgb, ${hex} 56%, ${textMix})`);
-  body.style.setProperty('--accent-tint', `color-mix(in srgb, ${hex} 12%, transparent)`);
-  body.style.setProperty('--accent-tint-border', `color-mix(in srgb, ${hex} 30%, transparent)`);
-  body.style.setProperty('--shadow-accent', `0 5px 14px color-mix(in srgb, ${hex} 33%, transparent)`);
-  body.style.setProperty('--color-brand-500', hex);
+  el.style.setProperty('--accent', hex);
+  el.style.setProperty('--accent-hover', `color-mix(in srgb, ${hex} 82%, black)`);
+  el.style.setProperty('--accent-bg', `color-mix(in srgb, ${hex} 15%, transparent)`);
+  el.style.setProperty('--accent-border', `color-mix(in srgb, ${hex} 45%, transparent)`);
+  el.style.setProperty('--accent-grad', `linear-gradient(135deg, color-mix(in srgb, ${hex} 80%, white), ${hex})`);
+  el.style.setProperty('--accent-text', `color-mix(in srgb, ${hex} 72%, ${textMix})`);
+  el.style.setProperty('--accent-text-2', `color-mix(in srgb, ${hex} 64%, ${textMix})`);
+  el.style.setProperty('--accent-text-3', `color-mix(in srgb, ${hex} 56%, ${textMix})`);
+  el.style.setProperty('--accent-tint', `color-mix(in srgb, ${hex} 12%, transparent)`);
+  el.style.setProperty('--accent-tint-border', `color-mix(in srgb, ${hex} 30%, transparent)`);
+  el.style.setProperty('--shadow-accent', `0 5px 14px color-mix(in srgb, ${hex} 33%, transparent)`);
+  el.style.setProperty('--color-brand-500', hex);
 }
 
 function applyCustom(theme: Theme, custom: ThemeCustom) {
   if (typeof document === 'undefined') return;
-  const body = document.body;
+  const roots = [document.documentElement, document.body];
   const o = custom[theme] ?? {};
 
-  if (o.chrome) body.style.setProperty('--chrome', o.chrome);
-  else body.style.removeProperty('--chrome');
+  for (const el of roots) {
+    if (o.chrome) el.style.setProperty('--chrome', o.chrome);
+    else el.style.removeProperty('--chrome');
 
-  if (o.bg) body.style.setProperty('--bg', o.bg);
-  else body.style.removeProperty('--bg');
+    if (o.bg) el.style.setProperty('--bg', o.bg);
+    else el.style.removeProperty('--bg');
 
-  if (o.accent) applyAccent(body, o.accent, theme);
-  else ACCENT_VARS.forEach((v) => body.style.removeProperty(v));
+    if (o.accent) applyAccent(el, o.accent, theme);
+    else ACCENT_VARS.forEach((v) => el.style.removeProperty(v));
+  }
 }
 
 function persistTheme(val: Theme) {
@@ -128,6 +130,7 @@ function persistCustom(val: ThemeCustom) {
 
 function applyAll(t: Theme, custom: ThemeCustom) {
   if (typeof document === 'undefined') return;
+  document.documentElement.dataset.theme = t;
   document.body.dataset.theme = t;
   applyCustom(t, custom);
 }

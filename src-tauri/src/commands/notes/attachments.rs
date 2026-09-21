@@ -184,7 +184,40 @@ pub async fn note_attachment_add(
     store_attachment(&note_file, &note_id, &file_name, data)
 }
 
+/// Upload with the bytes as base64. Mobile IPC goes through postMessage, so
+/// raw request bodies are not available there.
+#[tauri::command]
+pub async fn note_attachment_add_base64(
+    note_id: String,
+    name: String,
+    data: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<NoteAttachment> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(AppError::other)?;
+    let note_file = note_file_path(&note_id, &state).await?;
+    store_attachment(&note_file, &note_id, &name, &bytes)
+}
+
+/// File bytes as base64 for webviews without the asset protocol.
+#[tauri::command]
+pub async fn note_attachment_read(
+    note_id: String,
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<String> {
+    use base64::Engine;
+    let note_file = note_file_path(&note_id, &state).await?;
+    let path = attachments_dir_for(&note_file, &note_id).join(safe_file_name(&name));
+    if !path.is_file() {
+        return Err(AppError::not_found(name));
+    }
+    let bytes = std::fs::read(&path).map_err(AppError::io)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
 /// Local file paths currently held by the OS clipboard (files copied in a file manager).
+#[cfg(desktop)]
 #[tauri::command]
 pub async fn clipboard_file_paths() -> CmdResult<Vec<String>> {
     let paths = tokio::task::spawn_blocking(|| {

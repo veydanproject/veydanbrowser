@@ -41,12 +41,14 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
+#[cfg(desktop)]
 impl From<zip::result::ZipError> for AppError {
     fn from(e: zip::result::ZipError) -> Self {
         Self::Io(e.to_string())
     }
 }
 
+#[cfg(desktop)]
 impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
         Self::Other(e.to_string())

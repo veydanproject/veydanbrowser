@@ -414,6 +414,52 @@ export interface SmartViewInput {
   conditions: NoteFilter;
 }
 
+// ── Notes navigation tree (counts + catalogs, one call) ──────────────────────
+
+export interface NavChild {
+  id: string;
+  name: string;
+  color: string;
+  count: number;
+  parent_id?: string | null;
+  profiles?: NavChild[];
+}
+
+export interface NavTag extends NoteTagInfo {
+  count: number;
+}
+
+export interface NoteNav {
+  counts: { all: number; global: number; pinned: number; archived: number; trash: number };
+  /** Workspaces with notes; profiles nested under their workspace. */
+  workspaces: NavChild[];
+  folders: NavChild[];
+  tags: NavTag[];
+  smart: NavChild[];
+  sites: NavChild[];
+  /** Full catalogs for pickers, no counts. */
+  all_workspaces: NavChild[];
+  all_profiles: NavChild[];
+}
+
+export interface NoteLinks {
+  outgoing: NoteListItem[];
+  backlinks: NoteListItem[];
+}
+
+export interface NoteSyncInfo {
+  /** The vault knows this note. */
+  tracked: boolean;
+  /** Local edits not yet pushed. */
+  pending: boolean;
+}
+
+export interface HostInfo {
+  os: string;
+  arch: string;
+  version: string;
+}
+
 // ── Note History ──────────────────────────────────────────────────────────────
 
 export type VersionType = 'save' | 'autosave' | 'restore' | 'merge' | 'import' | 'sync' | 'conflict';
