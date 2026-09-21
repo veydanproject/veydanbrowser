@@ -1,0 +1,9 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.veydanbrowser" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">#08080c</item>
+        <item name="android:statusBarColor">#08080c</item>
+        <item name="android:navigationBarColor">#08080c</item>
+        <item name="android:colorBackground">#08080c</item>
+    </style>
+</resources>

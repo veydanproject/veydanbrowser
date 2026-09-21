@@ -1,9 +1,10 @@
 name: Release
 
-# Triggered by `make push` (vX.Y.Z, stable, all platforms) or
-# `make push-dev|test|beta [linux] [windows] [macos]`
-# (vX.Y.Z-{channel}[-platform...]-N, prerelease).
+# Triggered by `make push release` (vX.Y.Z → linux/windows/macos/android) or
+# `make push alpha|beta|rc [linux] [windows] [macos] [android] [ios]`
+# (vX.Y.Z-{channel}.N[-platform...], prerelease).
 # Channel releases stay prerelease so they never become GitHub /releases/latest.
+# ios is accepted on the tag but not built.
 
 on:
   push:
@@ -19,6 +20,8 @@ jobs:
       prerelease: ${{ steps.meta.outputs.prerelease }}
       matrix: ${{ steps.meta.outputs.matrix }}
       updater_keys: ${{ steps.meta.outputs.updater_keys }}
+      build_desktop: ${{ steps.meta.outputs.build_desktop }}
+      build_android: ${{ steps.meta.outputs.build_android }}
     steps:
       - uses: actions/checkout@v4
       - id: meta
@@ -31,12 +34,12 @@ jobs:
             VERSION="${BASH_REMATCH[1]}"
             CHANNEL="stable"
             PRERELEASE="false"
-            PLATFORMS="linux windows macos"
-          elif [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-(dev|test|beta)((-(linux|windows|macos))*)-([0-9]+)$ ]]; then
+            PLATFORMS="linux windows macos android"
+          elif [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-(alpha|beta|rc)\.([0-9]+)((-(linux|windows|macos|android|ios))*)$ ]]; then
             VERSION="${BASH_REMATCH[1]}"
             CHANNEL="${BASH_REMATCH[2]}"
             PRERELEASE="true"
-            SUFFIX="${BASH_REMATCH[3]}"
+            SUFFIX="${BASH_REMATCH[4]}"
             if [ -z "$SUFFIX" ]; then
               PLATFORMS="linux windows macos"
             else
@@ -44,7 +47,7 @@ jobs:
               PLATFORMS="$(echo $PLATFORMS)"
             fi
           else
-            echo "::error::Tag $TAG does not match vX.Y.Z or vX.Y.Z-(dev|test|beta)[-linux|-windows|-macos...]-N"
+            echo "::error::Tag $TAG does not match vX.Y.Z or vX.Y.Z-(alpha|beta|rc).N[-linux|-windows|-macos|-android|-ios...]"
             exit 1
           fi
 
@@ -58,23 +61,42 @@ jobs:
             include=$(jq -c --arg p "$1" --arg a "$2" '. + [{"platform":$p,"args":$a}]' <<<"$include")
           }
           keys=""
+          BUILD_DESKTOP="false"
+          BUILD_ANDROID="false"
           for p in $PLATFORMS; do
             case "$p" in
               linux)
                 add "ubuntu-22.04" ""
                 keys="$keys linux-x86_64"
+                BUILD_DESKTOP="true"
                 ;;
               windows)
                 add "windows-latest" ""
                 keys="$keys windows-x86_64"
+                BUILD_DESKTOP="true"
                 ;;
               macos)
                 add "macos-latest" "--target aarch64-apple-darwin"
                 add "macos-latest" "--target x86_64-apple-darwin"
                 keys="$keys darwin-aarch64 darwin-x86_64"
+                BUILD_DESKTOP="true"
+                ;;
+              android)
+                BUILD_ANDROID="true"
+                ;;
+              ios)
+                echo "::notice::Skipping ios (not in CI yet)"
                 ;;
             esac
           done
+          if [ "$BUILD_DESKTOP" != "true" ] && [ "$BUILD_ANDROID" != "true" ]; then
+            echo "::error::No platforms to build"
+            exit 1
+          fi
+          # fromJson needs a non-empty matrix even when the desktop job is skipped
+          if [ "$include" = "[]" ]; then
+            include='[{"platform":"ubuntu-22.04","args":""}]'
+          fi
           keys="$(echo $keys)"
           MATRIX=$(jq -c '{include:.}' <<<"$include")
 
@@ -82,9 +104,12 @@ jobs:
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
           echo "updater_keys=$keys" >> "$GITHUB_OUTPUT"
+          echo "build_desktop=$BUILD_DESKTOP" >> "$GITHUB_OUTPUT"
+          echo "build_android=$BUILD_ANDROID" >> "$GITHUB_OUTPUT"
 
   build:
     needs: verify-version
+    if: needs.verify-version.outputs.build_desktop == 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.verify-version.outputs.matrix) }}
@@ -145,8 +170,111 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
+  # Same SDK/NDK pins as scripts/android/android-env.sh
+  build-android:
+    needs: verify-version
+    if: needs.verify-version.outputs.build_android == 'true'
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 30.0.16248370
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-36 build-tools;36.0.0 ndk;30.0.16248370
+          log-accepted-android-sdk-licenses: false
+
+      - name: Export NDK paths
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: android-aarch64
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('src-tauri/gen/android/**/*.gradle*') }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Android APK
+        run: pnpm tauri android build --target aarch64
+
+      - name: Sign and upload APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANDROID_RELEASE_KEYSTORE: ${{ secrets.ANDROID_RELEASE_KEYSTORE }}
+          ANDROID_RELEASE_KS_PASS: ${{ secrets.ANDROID_RELEASE_KS_PASS }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          PRERELEASE: ${{ needs.verify-version.outputs.prerelease }}
+        run: |
+          if [ -z "$ANDROID_RELEASE_KEYSTORE" ] || [ -z "$ANDROID_RELEASE_KS_PASS" ]; then
+            echo "::error::ANDROID_RELEASE_KEYSTORE and ANDROID_RELEASE_KS_PASS secrets are required"
+            exit 1
+          fi
+          ALIAS="${ANDROID_RELEASE_KEY_ALIAS:-veydan}"
+          KS=/tmp/android-release.keystore
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE" | base64 -d > "$KS"
+
+          UNSIGNED="$(find src-tauri/gen/android/app/build/outputs/apk \
+            -name '*-unsigned.apk' -printf '%T@\t%p\n' | sort -nr | cut -f2- | head -n1)"
+          if [ -z "$UNSIGNED" ]; then
+            echo "::error::No unsigned APK after tauri android build"
+            exit 1
+          fi
+
+          SIGNER="$(ls -1 "$ANDROID_HOME"/build-tools/*/apksigner | tail -n1)"
+          VERSION="$(cat VERSION)"
+          SIGNED="Veydan_${VERSION}_android.apk"
+          "$SIGNER" sign --ks "$KS" --ks-key-alias "$ALIAS" \
+            --ks-pass "pass:$ANDROID_RELEASE_KS_PASS" --key-pass "pass:$ANDROID_RELEASE_KS_PASS" \
+            --out "$SIGNED" "$UNSIGNED"
+          rm -f "$KS"
+
+          # tauri-action may have created the draft already; otherwise create it here
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            PRE=""
+            if [ "$PRERELEASE" = "true" ]; then PRE="--prerelease"; fi
+            gh release create "$GITHUB_REF_NAME" --draft $PRE \
+              --title "Veydan Browser $GITHUB_REF_NAME" \
+              --notes "See the assets below to download and install this version."
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$SIGNED" --clobber
+
   publish:
-    needs: [verify-version, build]
+    needs: [verify-version, build, build-android]
+    # Run when every requested platform succeeded; skipped jobs are fine.
+    if: |
+      !cancelled() &&
+      needs.build.result != 'failure' &&
+      needs.build-android.result != 'failure' &&
+      (needs.build.result == 'success' || needs.build-android.result == 'success')
     runs-on: ubuntu-latest
     steps:
       # Matrix jobs merge platform entries into latest.json via
@@ -154,6 +282,7 @@ jobs:
       # Gate on the platforms this tag requested — a failed gate keeps the
       # release draft; re-run the dropped platform's build job to re-merge.
       - name: Verify latest.json covers requested platforms
+        if: needs.verify-version.outputs.updater_keys != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPDATER_KEYS: ${{ needs.verify-version.outputs.updater_keys }}

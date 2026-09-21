@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Veydan",
+  "identifier": "net.veydan.mobile",
+  "build": {
+    "devUrl": "http://localhost:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Veydan",
+        "width": 420,
+        "height": 860
+      }
+    ]
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "android": {
+      "minSdkVersion": 26,
+      "versionCode": 2020001
+    }
+  }
+}
