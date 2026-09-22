@@ -23,6 +23,8 @@
   // view/rename drawer
   let viewKey = $state<SshKey | null>(null);
   let revealPrivate = $state(false);
+  // Fetched from the backend only when the user reveals or copies it.
+  let privateKeyText = $state('');
   let editName = $state('');
   let editComment = $state('');
   let savingEdit = $state(false);
@@ -70,8 +72,32 @@
   function openView(k: SshKey) {
     viewKey = k;
     revealPrivate = false;
+    privateKeyText = '';
     editName = k.name;
     editComment = k.comment ?? '';
+  }
+
+  async function loadPrivate(): Promise<string> {
+    if (!viewKey) return '';
+    if (!privateKeyText) privateKeyText = await api.sshKeys.exportPrivate(viewKey.id);
+    return privateKeyText;
+  }
+
+  async function toggleReveal() {
+    try {
+      if (!revealPrivate) await loadPrivate();
+      revealPrivate = !revealPrivate;
+    } catch (e) {
+      error = formatError(e);
+    }
+  }
+
+  async function copyPrivate() {
+    try {
+      await navigator.clipboard.writeText(await loadPrivate());
+    } catch (e) {
+      error = formatError(e);
+    }
   }
 
   async function saveEdit() {
@@ -173,7 +199,7 @@
             </td>
             <td class="col-algo">
               <span class="auth-badge">{algoLabel(k)}</span>
-              {#if k.passphrase}
+              {#if k.has_passphrase}
                 <span class="pass-badge" title={$t('ssh_key_selected_passphrase_hint')}>
                   <Icon name="shield" size={10} />
                 </span>
@@ -275,7 +301,7 @@
       <div class="form-group">
         <span class="field-label">{$t('ssh_key_private_label')}</span>
         {#if revealPrivate}
-          <textarea readonly rows="9" value={viewKey.private_key}></textarea>
+          <textarea readonly rows="9" value={privateKeyText}></textarea>
         {:else}
           <div class="private-hidden">
             <Icon name="eye-off" size={14} />
@@ -283,14 +309,11 @@
           </div>
         {/if}
         <div class="private-actions">
-          <button class="btn btn-ghost btn-sm" onclick={() => (revealPrivate = !revealPrivate)}>
+          <button class="btn btn-ghost btn-sm" onclick={toggleReveal}>
             <Icon name={revealPrivate ? 'eye-off' : 'eye'} size={12} />
             {revealPrivate ? $t('ssh_key_hide') : $t('ssh_key_reveal')}
           </button>
-          <button
-            class="btn btn-ghost btn-sm"
-            onclick={() => navigator.clipboard.writeText(viewKey!.private_key).catch(() => {})}
-          >
+          <button class="btn btn-ghost btn-sm" onclick={copyPrivate}>
             <Icon name="copy" size={12} />
             {$t('ssh_key_btn_copy_private')}
           </button>

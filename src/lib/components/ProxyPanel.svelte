@@ -33,10 +33,11 @@
     host: proxy?.host ?? '',
     port: proxy?.port ?? 1080,
     username: proxy?.username ?? null,
-    password: proxy?.password ?? null,
+    // Secrets are not sent to the UI: null = keep stored, '' = clear.
+    password: null,
     country: proxy?.country ?? null,
     city: proxy?.city ?? null,
-    private_key: proxy?.private_key ?? null,
+    private_key: null,
     tags: proxy ? proxy.tags : (workspaceId ? [`workspace:${workspaceId}`] : []),
   })));
 
@@ -119,7 +120,15 @@
             <input id="pp-user" type="text" bind:value={form.username} placeholder={$t('proxy_field_username')} />
           </div>
           <div class="form-group">
-            <input id="pp-pass" type="password" bind:value={form.password} placeholder={$t('proxy_field_password')} />
+            <input
+              id="pp-pass"
+              type="password"
+              bind:value={form.password}
+              placeholder={proxy?.has_password && form.password === null ? $t('secret_stored_placeholder') : $t('proxy_field_password')}
+            />
+            {#if proxy?.has_password && form.password === null}
+              <button type="button" class="link-btn" onclick={() => (form.password = '')}>{$t('secret_clear')}</button>
+            {/if}
           </div>
         </div>
 
@@ -132,9 +141,12 @@
               id="pp-pkey"
               rows="5"
               bind:value={form.private_key}
-              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"
+              placeholder={proxy?.has_private_key && form.private_key === null ? $t('secret_stored_placeholder') : '-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----'}
               style="font-family: var(--font-mono); font-size: 0.72rem; resize: vertical;"
             ></textarea>
+            {#if proxy?.has_private_key && form.private_key === null}
+              <button type="button" class="link-btn" onclick={() => (form.private_key = '')}>{$t('secret_clear')}</button>
+            {/if}
           </div>
           <div class="field-hint">Если заполнено — используется вместо пароля</div>
         </div>
@@ -191,6 +203,11 @@
   .field-hint {
     font-size: var(--fs-2xs); color: var(--text-faint); margin-top: -0.25rem;
   }
+  .link-btn {
+    align-self: flex-start; background: none; border: none; padding: 0; margin-top: 0.25rem; cursor: pointer;
+    font-size: var(--fs-2xs); color: var(--text-faint); text-decoration: underline;
+  }
+  .link-btn:hover { color: var(--text); }
 
   /* Tall drawer form fields per design (46px / radius 11) */
   form input[type='text'],

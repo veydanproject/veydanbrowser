@@ -20,6 +20,9 @@ const MOZLZ4_MAGIC: &[u8] = b"mozLz40\x00";
 /// `spawn_blocking` threads.
 pub static INSTALL_DIR_LOCK: Mutex<()> = Mutex::const_new(());
 
+/// Only release assets under this path are downloaded.
+const CAMOUFOX_RELEASE_PREFIX: &str = "https://github.com/daijro/camoufox/releases/download/";
+
 /// Writes `data` to a temp file in the same directory and renames it over
 /// `path`, so readers (e.g. a browser that is starting up) never observe a
 /// partially written file.
@@ -868,11 +871,21 @@ async fn run_download(
     let version = release;
     let (download_url, total_size) = asset;
 
-    let tmp_path = app_data_dir.join("camoufox_download.tmp.zip");
+    // The API response is untrusted input: only accept assets hosted under
+    // the upstream release path.
+    if !download_url.starts_with(CAMOUFOX_RELEASE_PREFIX) {
+        return Err(format!("Unexpected asset URL: {download_url}").into());
+    }
 
-    // Resume support: check existing partial file
+    let tmp_path = app_data_dir.join("camoufox_download.tmp.zip");
+    let version_path = app_data_dir.join("camoufox_download.tmp.version");
+
+    // Resume only a partial file that belongs to this exact version.
+    let same_version = std::fs::read_to_string(&version_path)
+        .map(|v| v.trim() == version)
+        .unwrap_or(false);
     let existing_size = tmp_path.metadata().map(|m| m.len()).unwrap_or(0);
-    let start_from = if existing_size > 0 && existing_size < total_size {
+    let mut start_from = if same_version && existing_size > 0 && existing_size < total_size {
         existing_size
     } else {
         0
@@ -886,13 +899,21 @@ async fn run_download(
     let response = req
         .send()
         .await
+        .map_err(|e| format!("Download failed: {e}"))?
+        .error_for_status()
         .map_err(|e| format!("Download failed: {e}"))?;
+
+    // A server that ignores Range sends the whole file: restart instead of appending.
+    if start_from > 0 && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        start_from = 0;
+    }
 
     // Open file: append if resuming, overwrite otherwise
     let mut file = if start_from > 0 {
         std::fs::OpenOptions::new().append(true).open(&tmp_path)
     } else {
-        std::fs::File::create(&tmp_path).map(|f| f)
+        std::fs::write(&version_path, &version).map_err(|e| format!("Cannot write version marker: {e}"))?;
+        std::fs::File::create(&tmp_path)
     }
     .map_err(|e| format!("Cannot open temp file: {e}"))?;
 
@@ -926,6 +947,14 @@ async fn run_download(
     }
 
     drop(file);
+
+    // Size mismatch means a truncated or substituted archive: drop it so the
+    // next attempt starts clean.
+    if downloaded != total_size {
+        let _ = std::fs::remove_file(&tmp_path);
+        let _ = std::fs::remove_file(&version_path);
+        return Err(format!("Downloaded size {downloaded} does not match asset size {total_size}").into());
+    }
 
     // Extract zip + patch — heavy synchronous IO, moved off the async worker
     app.emit("camoufox://extracting", ()).ok();
@@ -999,6 +1028,7 @@ fn extract_and_install(
     }
 
     std::fs::remove_file(tmp_path).ok();
+    std::fs::remove_file(tmp_path.with_extension("version")).ok();
 
     #[cfg(unix)]
     {

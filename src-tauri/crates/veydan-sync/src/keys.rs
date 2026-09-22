@@ -32,6 +32,11 @@ const MANIFEST_AAD: &str = "veydan-sync/manifest/v1";
 const ARGON_M_COST_KIB: u32 = 64 * 1024;
 const ARGON_T_COST: u32 = 3;
 const ARGON_P_COST: u32 = 1;
+// Upper bounds for parameters read from a manifest: it is plaintext, so a
+// tampered file must not be able to exhaust memory or CPU before AEAD fails.
+const ARGON_MAX_M_COST_KIB: u32 = 1024 * 1024;
+const ARGON_MAX_T_COST: u32 = 16;
+const ARGON_MAX_P_COST: u32 = 8;
 
 /// Vault master key. Never leaves the device unwrapped.
 #[derive(Clone)]
@@ -95,6 +100,9 @@ pub struct Keys {
 fn derive_kek(passphrase: &str, kdf: &KdfParams) -> Result<[u8; 32]> {
     if kdf.algo != "argon2id" {
         return Err(SyncError::Format(format!("unsupported kdf {}", kdf.algo)));
+    }
+    if kdf.m_cost_kib > ARGON_MAX_M_COST_KIB || kdf.t_cost > ARGON_MAX_T_COST || kdf.p_cost > ARGON_MAX_P_COST {
+        return Err(SyncError::Format("kdf parameters out of range".into()));
     }
     let salt = B64.decode(&kdf.salt).map_err(|e| SyncError::Format(e.to_string()))?;
     let params = Params::new(kdf.m_cost_kib, kdf.t_cost, kdf.p_cost, Some(32))

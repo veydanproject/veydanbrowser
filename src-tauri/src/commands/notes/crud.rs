@@ -581,6 +581,23 @@ pub(crate) fn fts_match_query(query: &str) -> Option<String> {
     Some(fts_query)
 }
 
+/// Escape a raw FTS snippet and turn the \u{1}/\u{2} markers into <mark> tags.
+pub(crate) fn snippet_html(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 16);
+    for c in raw.chars() {
+        match c {
+            '\u{1}' => out.push_str("<mark>"),
+            '\u{2}' => out.push_str("</mark>"),
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 #[tauri::command]
 pub async fn note_search(
     query: String,
@@ -591,8 +608,10 @@ pub async fn note_search(
         return Ok(vec![]);
     };
 
+    // Control chars mark the match; the raw text is HTML-escaped before the
+    // markers become <mark> tags, so note content never reaches the UI as HTML.
     let matched: Vec<(String, String)> =
-        sqlx::query_as("SELECT note_id, snippet(notes_fts, 2, '<mark>', '</mark>', '…', 12) FROM notes_fts WHERE notes_fts MATCH ? ORDER BY rank LIMIT 100")
+        sqlx::query_as("SELECT note_id, snippet(notes_fts, 2, char(1), char(2), '…', 12) FROM notes_fts WHERE notes_fts MATCH ? ORDER BY rank LIMIT 100")
             .bind(&fts_query)
             .fetch_all(&state.db)
             .await
@@ -603,7 +622,7 @@ pub async fn note_search(
     }
 
     let snippets_map: std::collections::HashMap<String, String> =
-        matched.iter().map(|(id, snip)| (id.clone(), snip.clone())).collect();
+        matched.iter().map(|(id, snip)| (id.clone(), snippet_html(snip))).collect();
     let ids: Vec<String> = matched.into_iter().map(|(id, _)| id).collect();
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(

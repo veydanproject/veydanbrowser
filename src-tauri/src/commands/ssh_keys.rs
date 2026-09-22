@@ -25,9 +25,14 @@ pub struct SshKey {
     pub algorithm: String,
     pub bits: Option<i64>,
     pub comment: Option<String>,
+    // Private material is only handed out by `ssh_key_export_private`.
+    #[serde(skip_serializing)]
     pub private_key: String,
     pub public_key: String,
+    #[serde(skip_serializing)]
     pub passphrase: Option<String>,
+    #[sqlx(default)]
+    pub has_passphrase: bool,
     pub fingerprint: Option<String>,
     pub source: String,
     pub created_at: String,
@@ -58,6 +63,7 @@ pub struct SshKeyUpdateInput {
 }
 
 const SELECT_KEY: &str = "SELECT k.*, \
+    (k.passphrase IS NOT NULL AND k.passphrase != '') AS has_passphrase, \
     (SELECT COUNT(*) FROM ssh_connections c WHERE c.ssh_key_id = k.id) AS usage_count \
     FROM ssh_keys k";
 
@@ -251,6 +257,12 @@ pub async fn ssh_key_list(state: State<'_, AppState>) -> CmdResult<Vec<SshKey>> 
 #[tauri::command]
 pub async fn ssh_key_get(state: State<'_, AppState>, id: String) -> CmdResult<SshKey> {
     get_key(&state.db, &id).await
+}
+
+/// Private key PEM as stored; only called from an explicit "show / copy" action.
+#[tauri::command]
+pub async fn ssh_key_export_private(state: State<'_, AppState>, id: String) -> CmdResult<String> {
+    Ok(get_key(&state.db, &id).await?.private_key)
 }
 
 #[tauri::command]

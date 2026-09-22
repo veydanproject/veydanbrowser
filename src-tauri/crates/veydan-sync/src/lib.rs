@@ -72,6 +72,10 @@ pub enum SyncError {
     Format(String),
     #[error("integrity: {0}")]
     Integrity(String),
+    /// Another writer already holds the next position in our own log:
+    /// the caller must start a fresh device log.
+    #[error("own log collision at seq {0}")]
+    OwnLogCollision(u64),
 }
 
 pub type Result<T> = std::result::Result<T, SyncError>;

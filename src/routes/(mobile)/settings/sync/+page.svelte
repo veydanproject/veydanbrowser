@@ -313,7 +313,7 @@
       </div>
       <div class="m-field">
         <label for="dav-pass">{$t('settings_sync_webdav_password')}</label>
-        <input id="dav-pass" type="password" bind:value={cfg.webdav.password} autocomplete="off" />
+        <input id="dav-pass" type="password" bind:value={cfg.webdav.password} placeholder={cfg.webdav.has_password && cfg.webdav.password == null ? $t('secret_stored_placeholder') : ''} autocomplete="off" />
       </div>
     {:else}
       <div class="m-field">
@@ -340,7 +340,7 @@
       </div>
       <div class="m-field">
         <label for="s3-sk">{$t('settings_sync_s3_secret_key')}</label>
-        <input id="s3-sk" type="password" bind:value={cfg.s3.secret_key} autocomplete="off" />
+        <input id="s3-sk" type="password" bind:value={cfg.s3.secret_key} placeholder={cfg.s3.has_secret_key && cfg.s3.secret_key == null ? $t('secret_stored_placeholder') : ''} autocomplete="off" />
       </div>
       <div class="m-list group">
         <button class="m-row" onclick={() => (cfg!.s3.path_style = !cfg!.s3.path_style)}>

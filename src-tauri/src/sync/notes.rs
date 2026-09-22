@@ -194,7 +194,7 @@ pub async fn collect_local_changes(engine: &Engine, state: &AppState, clock: &mu
 pub struct ApplyOutcome {
     /// Notes whose file changed; the index and UI must be refreshed.
     pub changed: Vec<String>,
-    /// Notes to take out of the trash after reindex.
+    /// Notes taken out of the trash during apply; the UI is told to refresh them.
     pub restored: Vec<String>,
     /// Set when an op was skipped on a transient condition; peer heads must not
     /// advance so the skipped ops are delivered again next cycle.
@@ -322,7 +322,10 @@ pub async fn apply_remote(
             if !same_bytes {
                 write_raw(&path, &remote_raw)?;
             }
+            // Un-trash before the state is saved: if this cycle dies later the
+            // op is skipped next time (hlc <= head) and the note would stay deleted.
             if row.as_ref().map(|r| r.deleted != 0).unwrap_or(false) {
+                note_restore(id.clone(), app.state()).await?;
                 outcome.restored.push(id.clone());
             }
             save_note_state(
@@ -372,31 +375,50 @@ pub async fn apply_remote(
             payload.parents.iter().find(|p| st.head_parents.contains(p)).cloned()
         };
         let ancestor_raw = match &ancestor_name {
-            Some(name) => engine.get_blob(name).await.map_err(AppError::other)?.unwrap_or_default(),
-            None => Vec::new(),
+            Some(name) => engine.get_blob(name).await.map_err(AppError::other)?,
+            None => None,
         };
 
         let (lk, ltags, lbody) = parse_note_file(&String::from_utf8_lossy(&local_raw));
         let (rk, rtags, rbody) = parse_note_file(&String::from_utf8_lossy(&remote_raw));
-        let (ak, _, abody) = parse_note_file(&String::from_utf8_lossy(&ancestor_raw));
         let local_title = lk.get("title").cloned().unwrap_or_default();
         let remote_title = rk.get("title").cloned().unwrap_or_default();
 
+        // Ancestor unknown (compacted away or never shared) and nothing edited
+        // here since the last sync: the newer op wins on both devices, the
+        // local version stays recoverable from history. A fast-forward would
+        // let two real forks swap contents forever.
+        let Some(ancestor_raw) = ancestor_raw else {
+            if !local_changed {
+                history_snapshot_by(&id, &local_title, &lbody, "conflict", None, None, db).await?;
+                write_raw(&path, &remote_raw)?;
+                save_note_state(
+                    db,
+                    &NoteSyncState {
+                        note_id: id.clone(),
+                        head_blob: payload.blob.clone(),
+                        head_parents: payload.parents.clone(),
+                        head_hlc: Some(op.hlc.clone()),
+                        synced_hash: remote_hash,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+                outcome.changed.push(id);
+                continue;
+            }
+            record_conflict(&mut st, &id, "", &local_title, &lbody, &remote_title, &rbody, &remote_device, &payload.blob, &op.hlc, db)
+                .await?;
+            continue;
+        };
+
+        let (ak, _, abody) = parse_note_file(&String::from_utf8_lossy(&ancestor_raw));
         let merged = merge3(&abody, &lbody, &rbody);
-        if merged.has_conflicts || ancestor_name.is_none() {
-            // Keep the local file readable; both sides go to history for the UI.
-            let ancestor_id = history_snapshot_by(&id, &local_title, &abody, "conflict", None, None, db).await?;
-            let local_id = history_snapshot_by(&id, &local_title, &lbody, "conflict", Some(ancestor_id.clone()), None, db).await?;
-            let remote_id =
-                history_snapshot_by(&id, &remote_title, &rbody, "conflict", Some(ancestor_id.clone()), Some(&remote_device), db)
-                    .await?;
-            st.conflict = true;
-            st.conflict_ancestor_id = ancestor_id;
-            st.conflict_local_id = local_id;
-            st.conflict_remote_id = remote_id;
-            st.conflict_remote_blob = payload.blob.clone();
-            st.head_hlc = Some(op.hlc.clone());
-            save_note_state(db, &st).await?;
+        if merged.has_conflicts {
+            record_conflict(
+                &mut st, &id, &abody, &local_title, &lbody, &remote_title, &rbody, &remote_device, &payload.blob, &op.hlc, db,
+            )
+            .await?;
             continue;
         }
 
@@ -461,6 +483,34 @@ pub async fn apply_remote(
         }
     }
     Ok(outcome)
+}
+
+/// Keep the local file readable; ancestor and both sides go to history for the UI.
+#[allow(clippy::too_many_arguments)]
+async fn record_conflict(
+    st: &mut NoteSyncState,
+    id: &str,
+    abody: &str,
+    local_title: &str,
+    lbody: &str,
+    remote_title: &str,
+    rbody: &str,
+    remote_device: &str,
+    remote_blob: &str,
+    hlc: &Hlc,
+    db: &sqlx::SqlitePool,
+) -> CmdResult<()> {
+    let ancestor_id = history_snapshot_by(id, local_title, abody, "conflict", None, None, db).await?;
+    let local_id = history_snapshot_by(id, local_title, lbody, "conflict", Some(ancestor_id.clone()), None, db).await?;
+    let remote_id =
+        history_snapshot_by(id, remote_title, rbody, "conflict", Some(ancestor_id.clone()), Some(remote_device), db).await?;
+    st.conflict = true;
+    st.conflict_ancestor_id = ancestor_id;
+    st.conflict_local_id = local_id;
+    st.conflict_remote_id = remote_id;
+    st.conflict_remote_blob = remote_blob.to_string();
+    st.head_hlc = Some(hlc.clone());
+    save_note_state(db, st).await
 }
 
 /// Tombstone parents: the last known head, if any.
@@ -536,9 +586,12 @@ pub async fn resolve_conflict(state: &AppState, note_id: &str, token: &str, cont
     save_note_state(db, &st).await
 }
 
-/// Reindex changed files, relink tags from frontmatter, un-trash restored notes, notify UI.
+/// Reindex changed files, relink tags from frontmatter, notify UI.
 pub async fn finish_apply(app: &AppHandle, outcome: &ApplyOutcome) -> CmdResult<()> {
     if outcome.changed.is_empty() {
+        for id in &outcome.restored {
+            let _ = app.emit("notes://external-change", id);
+        }
         return Ok(());
     }
     let state = app.state::<AppState>();
@@ -561,10 +614,7 @@ pub async fn finish_apply(app: &AppHandle, outcome: &ApplyOutcome) -> CmdResult<
     for (id, tags) in &tags_by_note {
         set_note_tag_links(id, tags, &state.db).await?;
     }
-    for id in &outcome.restored {
-        note_restore(id.clone(), app.state()).await?;
-    }
-    for id in &outcome.changed {
+    for id in outcome.changed.iter().chain(outcome.restored.iter().filter(|r| !outcome.changed.contains(r))) {
         let _ = app.emit("notes://external-change", id);
     }
     Ok(())

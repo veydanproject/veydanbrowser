@@ -75,14 +75,14 @@ impl WebDavStorage {
         if resp.status().is_success() { Ok(()) } else { Err(Self::fail(resp, "put").await) }
     }
 
-    /// MOVE without overwrite: 412 means the destination already exists.
-    /// `Ok(None)` when the server does not support MOVE at all.
-    async fn move_no_overwrite(&self, from: &str, to: &str) -> Result<Option<bool>> {
+    /// MOVE `from` onto `to`. With `overwrite = false`, 412 means the destination
+    /// already exists. `Ok(None)` when the server does not support MOVE at all.
+    async fn move_to(&self, from: &str, to: &str, overwrite: bool) -> Result<Option<bool>> {
         let dest = self.url_for(to);
         let resp = send_retry(|| {
             self.req(Method::from_bytes(b"MOVE").expect("valid method"), self.url_for(from))
                 .header("Destination", dest.as_str())
-                .header("Overwrite", "F")
+                .header("Overwrite", if overwrite { "T" } else { "F" })
         })
         .await?;
         match resp.status() {
@@ -91,6 +91,10 @@ impl WebDavStorage {
             StatusCode::NOT_IMPLEMENTED | StatusCode::METHOD_NOT_ALLOWED => Ok(None),
             _ => Err(Self::fail(resp, "move").await),
         }
+    }
+
+    async fn move_no_overwrite(&self, from: &str, to: &str) -> Result<Option<bool>> {
+        self.move_to(from, to, false).await
     }
 
     async fn ensure_dir(&self, dir: &str) -> Result<()> {
@@ -242,8 +246,27 @@ impl Storage for WebDavStorage {
         }
     }
 
+    /// PUT is not atomic on WebDAV: a reader could see a half-written chunk or
+    /// manifest. Write a temp key and MOVE it into place; plain PUT only when
+    /// the server has no MOVE.
     async fn put(&self, key: &str, data: &[u8]) -> Result<()> {
-        self.put_raw(key, data).await
+        let tmp = format!("{key}.{}{TMP_SUFFIX}", random_hex(4));
+        self.put_raw(&tmp, data).await?;
+        match self.move_to(&tmp, key, true).await {
+            Ok(Some(true)) => Ok(()),
+            Ok(Some(false)) => {
+                let _ = self.delete(&tmp).await;
+                Err(SyncError::Storage(format!("webdav move refused to overwrite {key}")))
+            }
+            Ok(None) => {
+                let _ = self.delete(&tmp).await;
+                self.put_raw(key, data).await
+            }
+            Err(e) => {
+                let _ = self.delete(&tmp).await;
+                Err(e)
+            }
+        }
     }
 
     async fn delete(&self, key: &str) -> Result<()> {

@@ -56,9 +56,16 @@ pub struct SshConnection {
     pub port: i64,
     pub username: String,
     pub auth_type: String,
+    // Secrets stay in the backend; the UI only learns whether one is stored.
+    #[serde(skip_serializing)]
     pub password: Option<String>,
+    #[serde(skip_serializing)]
     pub private_key: Option<String>,
+    #[serde(skip_serializing)]
     pub key_passphrase: Option<String>,
+    pub has_password: bool,
+    pub has_private_key: bool,
+    pub has_key_passphrase: bool,
     pub ssh_key_id: Option<String>,
     pub requires_2fa: bool,
     pub totp_entry_id: Option<String>,
@@ -76,6 +83,10 @@ pub struct SshConnection {
     pub updated_at: String,
 }
 
+fn has_value(v: &Option<String>) -> bool {
+    v.as_deref().is_some_and(|s| !s.is_empty())
+}
+
 impl From<SshConnectionRow> for SshConnection {
     fn from(r: SshConnectionRow) -> Self {
         SshConnection {
@@ -85,6 +96,9 @@ impl From<SshConnectionRow> for SshConnection {
             port: r.port,
             username: r.username,
             auth_type: r.auth_type,
+            has_password: has_value(&r.password),
+            has_private_key: has_value(&r.private_key),
+            has_key_passphrase: has_value(&r.key_passphrase),
             password: r.password,
             private_key: r.private_key,
             key_passphrase: r.key_passphrase,
@@ -215,6 +229,8 @@ struct KeyboardPromptPayload {
     name: String,
     instructions: String,
     prompts: Vec<KeyboardPromptItem>,
+    /// Set for the first-connection host-key question; the UI shows trust/reject buttons.
+    host_key: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -265,6 +281,51 @@ impl client::Handler for TerminalHandler {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/// One answer from the prompt overlay; disconnect or 120 s silence aborts.
+async fn wait_prompt_response(rx: &mut mpsc::Receiver<SshInputCommand>) -> anyhow::Result<String> {
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(120), rx.recv()).await {
+            Ok(Some(SshInputCommand::PromptResponse(r))) => return Ok(r),
+            Ok(Some(SshInputCommand::Disconnect)) | Ok(None) => {
+                anyhow::bail!("Disconnected during authentication");
+            }
+            Err(_) => anyhow::bail!("Authentication timeout (120s)"),
+            Ok(Some(_)) => {}
+        }
+    }
+}
+
+/// First connection to a host: the user approves the fingerprint before any
+/// credential (password, TOTP answer) is sent. Pinned hosts skip this.
+pub(crate) async fn confirm_host_key(
+    app: &AppHandle,
+    session_id: &str,
+    conn: &SshConnection,
+    received_fp: Option<&str>,
+    rx: &mut mpsc::Receiver<SshInputCommand>,
+) -> anyhow::Result<()> {
+    if conn.server_fingerprint.is_some() {
+        return Ok(());
+    }
+    let Some(fp) = received_fp else { return Ok(()) };
+    let _ = app.emit(
+        "ssh://keyboard-prompt",
+        KeyboardPromptPayload {
+            session_id: session_id.to_string(),
+            name: "Host key verification".into(),
+            instructions: format!("{}:{} {fp}", conn.host, conn.port),
+            prompts: vec![KeyboardPromptItem { prompt: "Trust this host? (yes/no)".into(), echo: true }],
+            host_key: Some(fp.to_string()),
+        },
+    );
+    let answer = wait_prompt_response(rx).await?;
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "yes" | "y") {
+        Ok(())
+    } else {
+        anyhow::bail!("Host key {fp} was not trusted; connection aborted")
+    }
+}
 
 fn emit_status(
     app: &AppHandle,
@@ -441,22 +502,10 @@ async fn do_keyboard_interactive(
                                     prompt: p.prompt.clone(),
                                     echo: p.echo,
                                 }).collect(),
+                                host_key: None,
                             },
                         );
-
-                        loop {
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(120),
-                                rx.recv(),
-                            ).await {
-                                Ok(Some(SshInputCommand::PromptResponse(r))) => break r,
-                                Ok(Some(SshInputCommand::Disconnect)) | Ok(None) => {
-                                    anyhow::bail!("Disconnected during authentication");
-                                }
-                                Err(_) => anyhow::bail!("Authentication timeout (120s)"),
-                                Ok(Some(_)) => {}
-                            }
-                        }
+                        wait_prompt_response(rx).await?
                     };
 
                     answers.push(answer);
@@ -1018,6 +1067,7 @@ pub(crate) async fn establish_transport(
     conn: &SshConnection,
     proxy: Option<&crate::models::Proxy>,
     config: Arc<client::Config>,
+    db: &sqlx::SqlitePool,
 ) -> anyhow::Result<(
     Option<crate::proxy::ssh::SharedSession>,
     client::Handle<TerminalHandler>,
@@ -1062,6 +1112,7 @@ pub(crate) async fn establish_transport(
                     p.server_fingerprint.clone(),
                 )
                 .await?;
+                crate::commands::proxies::pin_ssh_fingerprint(db, p, &jump_result).await;
                 let channel = jump_result.session.open_channel(host, port).await?;
                 let stream = channel.into_stream();
                 // Keep the jump session Arc alive — dropping it would close the tunnel
@@ -1156,7 +1207,8 @@ async fn run_session(
 
     // _jump_session keeps the Arc alive for the duration of the session
     let (_jump_session, mut handle, received_fp) =
-        establish_transport(conn, proxy.as_ref(), config).await?;
+        establish_transport(conn, proxy.as_ref(), config, &db).await?;
+    confirm_host_key(app, session_id, conn, received_fp.as_deref(), &mut rx).await?;
 
     // Authenticate
     do_authenticate(

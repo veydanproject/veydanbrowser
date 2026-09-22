@@ -37,9 +37,27 @@
   let port = $state(untrack(() => connection?.port ?? 22));
   let username = $state(untrack(() => connection?.username ?? ''));
   let authType = $state(untrack(() => connection?.auth_type ?? 'password'));
-  let password = $state(untrack(() => connection?.password ?? ''));
-  let privateKey = $state(untrack(() => connection?.private_key ?? ''));
-  let keyPassphrase = $state(untrack(() => connection?.key_passphrase ?? ''));
+  // Secrets are never sent to the UI. Fields start empty; an untouched field
+  // keeps the stored value, a touched one replaces or clears it.
+  let password = $state('');
+  let privateKey = $state('');
+  let keyPassphrase = $state('');
+  let passwordTouched = $state(false);
+  let privateKeyTouched = $state(false);
+  let keyPassphraseTouched = $state(false);
+  let storedPassword = $state(untrack(() => connection?.has_password ?? false));
+  let storedPrivateKey = $state(untrack(() => connection?.has_private_key ?? false));
+  let storedKeyPassphrase = $state(untrack(() => connection?.has_key_passphrase ?? false));
+
+  function secretPlaceholder(stored: boolean, touched: boolean, fallback: string): string {
+    return stored && !touched ? $t('secret_stored_placeholder') : fallback;
+  }
+
+  /** Value to send: `undefined` keeps the stored secret; `''` clears it. */
+  function secretValue(value: string, touched: boolean): string | undefined {
+    if (!connection) return value;
+    return touched ? value : undefined;
+  }
   let keySource = $state<'saved' | 'inline'>(untrack(() => (connection?.ssh_key_id ? 'saved' : 'inline')));
   let sshKeyId = $state(untrack(() => connection?.ssh_key_id ?? ''));
   let requires2fa = $state(untrack(() => connection?.requires_2fa ?? false));
@@ -115,10 +133,10 @@
         port,
         username: username.trim(),
         auth_type: authType,
-        password: password,
+        password: secretValue(password, passwordTouched),
         // Saved key: reference only — never persist stale inline material.
-        private_key: useSavedKey ? '' : privateKey,
-        key_passphrase: useSavedKey ? '' : keyPassphrase,
+        private_key: useSavedKey ? '' : secretValue(privateKey, privateKeyTouched),
+        key_passphrase: useSavedKey ? '' : secretValue(keyPassphrase, keyPassphraseTouched),
         ssh_key_id: useSavedKey ? sshKeyId : '',
         requires_2fa: requires2fa,
         totp_entry_id: totpEntryId,
@@ -184,7 +202,19 @@
   {#if authType === 'password'}
     <div class="form-group">
       <label for="ssh-password">{$t('ssh_field_password')}</label>
-      <input id="ssh-password" type="password" bind:value={password} placeholder="••••••••" autocomplete="new-password" />
+      <input
+        id="ssh-password"
+        type="password"
+        bind:value={password}
+        oninput={() => (passwordTouched = true)}
+        placeholder={secretPlaceholder(storedPassword, passwordTouched, '••••••••')}
+        autocomplete="new-password"
+      />
+      {#if storedPassword && !passwordTouched}
+        <button type="button" class="link-btn" onclick={() => { password = ''; passwordTouched = true; storedPassword = false; }}>
+          {$t('secret_clear')}
+        </button>
+      {/if}
     </div>
   {/if}
 
@@ -222,7 +252,7 @@
         </select>
         {#if savedKeyMissing}
           <span class="hint warn">{$t('ssh_key_missing_warning')}</span>
-        {:else if selectedKey?.passphrase}
+        {:else if selectedKey?.has_passphrase}
           <span class="hint">{$t('ssh_key_selected_passphrase_hint')}</span>
         {:else if sshKeysLoaded && sshKeys.length === 0}
           <span class="hint">{$t('ssh_key_none_hint')}</span>
@@ -231,18 +261,46 @@
     {:else}
       <div class="form-group">
         <label for="ssh-private-key">{$t('ssh_field_private_key')}</label>
-        <textarea id="ssh-private-key" bind:value={privateKey} rows="5" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;..."></textarea>
+        <textarea
+          id="ssh-private-key"
+          bind:value={privateKey}
+          oninput={() => (privateKeyTouched = true)}
+          rows="5"
+          placeholder={secretPlaceholder(storedPrivateKey, privateKeyTouched, '-----BEGIN OPENSSH PRIVATE KEY-----\n...')}
+        ></textarea>
+        {#if storedPrivateKey && !privateKeyTouched}
+          <span class="hint">{$t('secret_stored_hint')}</span>
+        {/if}
       </div>
       {#if authType === 'key_password'}
         <div class="form-group">
           <label for="ssh-key-passphrase">{$t('ssh_field_key_passphrase')}</label>
-          <input id="ssh-key-passphrase" type="password" bind:value={keyPassphrase} placeholder="••••••••" autocomplete="new-password" />
+          <input
+            id="ssh-key-passphrase"
+            type="password"
+            bind:value={keyPassphrase}
+            oninput={() => (keyPassphraseTouched = true)}
+            placeholder={secretPlaceholder(storedKeyPassphrase, keyPassphraseTouched, '••••••••')}
+            autocomplete="new-password"
+          />
         </div>
       {/if}
     {/if}
     <div class="form-group">
       <label for="ssh-password-ki">{$t('ssh_field_password_ki')}</label>
-      <input id="ssh-password-ki" type="password" bind:value={password} placeholder={$t('ssh_field_password_ki_placeholder')} autocomplete="new-password" />
+      <input
+        id="ssh-password-ki"
+        type="password"
+        bind:value={password}
+        oninput={() => (passwordTouched = true)}
+        placeholder={secretPlaceholder(storedPassword, passwordTouched, $t('ssh_field_password_ki_placeholder'))}
+        autocomplete="new-password"
+      />
+      {#if storedPassword && !passwordTouched}
+        <button type="button" class="link-btn" onclick={() => { password = ''; passwordTouched = true; storedPassword = false; }}>
+          {$t('secret_clear')}
+        </button>
+      {/if}
     </div>
   {/if}
 
@@ -402,6 +460,11 @@
   .tag-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
   .hint { font-size: var(--fs-xs); color: var(--text-faint); text-transform: none; letter-spacing: 0; font-weight: var(--fw-normal); }
   .hint.warn { color: var(--warn-text); }
+  .link-btn {
+    align-self: flex-start; background: none; border: none; padding: 0; cursor: pointer;
+    font-size: var(--fs-xs); color: var(--text-faint); text-decoration: underline;
+  }
+  .link-btn:hover { color: var(--text); }
   .seg { align-self: flex-start; }
 
   .advanced { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2); }

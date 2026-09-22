@@ -50,6 +50,9 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
+# Open http(s) links in the system browser without going through a shell
+tauri-plugin-opener = "2"
+url = "2"
 reqwest = { version = "0.13", features = ["socks", "json", "stream"] }
 which = "8"
 zip = "8"

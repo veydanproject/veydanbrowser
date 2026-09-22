@@ -340,8 +340,8 @@ mod tests {
 ///   (the UI sends the full state each save, so null means "no value").
 /// * Credentials (`password`, `private_key`) use COALESCE — null means "keep
 ///   the stored secret", so a caller omitting them can never wipe credentials
-///   by accident. Clearing them intentionally still works: emptying the input
-///   in the UI submits an empty string, which overwrites the stored value.
+///   by accident. Clearing them intentionally still works: an empty string
+///   from the UI is stored as NULL.
 #[tauri::command]
 pub async fn proxy_update(
     id: String,
@@ -353,9 +353,9 @@ pub async fn proxy_update(
     sqlx::query(
         "UPDATE proxies SET
             name = ?, proxy_type = ?, host = ?, port = ?,
-            username = ?, password = COALESCE(?, password),
+            username = ?, password = NULLIF(COALESCE(?, password), ''),
             country = ?, city = ?,
-            private_key = COALESCE(?, private_key), tags = ?
+            private_key = NULLIF(COALESCE(?, private_key), ''), tags = ?
         WHERE id = ?",
     )
     .bind(&req.name)
@@ -376,6 +376,22 @@ pub async fn proxy_update(
     proxy_get(id, state)
         .await
         .and_then(|p| p.ok_or_else(|| AppError::not_found("Proxy not found after update")))
+}
+
+/// TOFU pin for an SSH proxy after a successful connect made outside `proxy_check`
+/// (profile launch, jump host). Only fills an empty slot; never overwrites.
+pub async fn pin_ssh_fingerprint(db: &sqlx::SqlitePool, proxy: &Proxy, result: &crate::proxy::ssh::SshConnectResult) {
+    if !result.is_new || proxy.server_fingerprint.is_some() {
+        return;
+    }
+    if let Err(e) = sqlx::query("UPDATE proxies SET server_fingerprint = ? WHERE id = ? AND server_fingerprint IS NULL")
+        .bind(&result.fingerprint)
+        .bind(&proxy.id)
+        .execute(db)
+        .await
+    {
+        eprintln!("[proxy] failed to pin host key for {}: {e}", proxy.id);
+    }
 }
 
 #[tauri::command]

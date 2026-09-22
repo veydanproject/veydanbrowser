@@ -1,0 +1,7 @@
+/home/user/projects/veydan/veydanbrowser/src-tauri/crates/veydan-sync/target/debug/deps/tokio_macros-f1757f8fa22b732a.d: /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-macros-2.7.2/src/lib.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-macros-2.7.2/src/entry.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-macros-2.7.2/src/select.rs
+
+/home/user/projects/veydan/veydanbrowser/src-tauri/crates/veydan-sync/target/debug/deps/libtokio_macros-f1757f8fa22b732a.so: /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-macros-2.7.2/src/lib.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-macros-2.7.2/src/entry.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-macros-2.7.2/src/select.rs
+
+/home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-macros-2.7.2/src/lib.rs:
+/home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-macros-2.7.2/src/entry.rs:
+/home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-macros-2.7.2/src/select.rs:

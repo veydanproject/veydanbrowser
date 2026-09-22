@@ -51,7 +51,11 @@ pub struct S3Settings {
     pub bucket: String,
     pub prefix: String,
     pub access_key: String,
-    pub secret_key: String,
+    /// Never sent to the UI. On save: `None` keeps the stored key, `Some("")` clears it.
+    #[serde(skip_serializing, default)]
+    pub secret_key: Option<String>,
+    #[serde(default)]
+    pub has_secret_key: bool,
     pub path_style: bool,
 }
 
@@ -59,7 +63,11 @@ pub struct S3Settings {
 pub struct WebDavSettings {
     pub url: String,
     pub username: String,
-    pub password: String,
+    /// Same three-state rule as `S3Settings::secret_key`.
+    #[serde(skip_serializing, default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub has_password: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +159,8 @@ async fn get_or_empty(db: &Pool<Sqlite>, key: &str) -> String {
 
 pub async fn load_config(db: &Pool<Sqlite>) -> SyncConfig {
     let d = SyncConfig::default();
+    let s3_secret = get_or_empty(db, "sync_s3_secret_key").await;
+    let webdav_password = get_or_empty(db, "sync_webdav_password").await;
     SyncConfig {
         enabled: get_setting(db, "sync_enabled").await.as_deref() == Some("1"),
         backend: get_setting(db, "sync_backend").await.unwrap_or(d.backend),
@@ -161,13 +171,15 @@ pub async fn load_config(db: &Pool<Sqlite>) -> SyncConfig {
             bucket: get_or_empty(db, "sync_s3_bucket").await,
             prefix: get_or_empty(db, "sync_s3_prefix").await,
             access_key: get_or_empty(db, "sync_s3_access_key").await,
-            secret_key: get_or_empty(db, "sync_s3_secret_key").await,
+            has_secret_key: !s3_secret.is_empty(),
+            secret_key: Some(s3_secret),
             path_style: get_setting(db, "sync_s3_path_style").await.as_deref() == Some("1"),
         },
         webdav: WebDavSettings {
             url: get_or_empty(db, "sync_webdav_url").await,
             username: get_or_empty(db, "sync_webdav_username").await,
-            password: get_or_empty(db, "sync_webdav_password").await,
+            has_password: !webdav_password.is_empty(),
+            password: Some(webdav_password),
         },
         interval_sec: get_setting(db, "sync_interval_sec")
             .await
@@ -208,11 +220,15 @@ pub async fn save_config(db: &Pool<Sqlite>, cfg: &SyncConfig) -> CmdResult<()> {
     set_setting(db, "sync_s3_bucket", &cfg.s3.bucket).await?;
     set_setting(db, "sync_s3_prefix", &cfg.s3.prefix).await?;
     set_setting(db, "sync_s3_access_key", &cfg.s3.access_key).await?;
-    set_setting(db, "sync_s3_secret_key", &cfg.s3.secret_key).await?;
+    if let Some(v) = cfg.s3.secret_key.as_deref() {
+        set_setting(db, "sync_s3_secret_key", v).await?;
+    }
     set_setting(db, "sync_s3_path_style", if cfg.s3.path_style { "1" } else { "0" }).await?;
     set_setting(db, "sync_webdav_url", &cfg.webdav.url).await?;
     set_setting(db, "sync_webdav_username", &cfg.webdav.username).await?;
-    set_setting(db, "sync_webdav_password", &cfg.webdav.password).await?;
+    if let Some(v) = cfg.webdav.password.as_deref() {
+        set_setting(db, "sync_webdav_password", v).await?;
+    }
     let interval = cfg.interval_sec.clamp(MIN_INTERVAL_SEC, MAX_INTERVAL_SEC);
     set_setting(db, "sync_interval_sec", &interval.to_string()).await?;
     set_setting(db, "sync_profile_files", if cfg.profile_files { "1" } else { "0" }).await?;
@@ -244,13 +260,46 @@ pub async fn save_binding(db: &Pool<Sqlite>, b: &VaultBinding) -> CmdResult<()> 
     set_setting(db, "sync_vault_key", &b.vmk_b64).await
 }
 
+/// Start a fresh device log: new id, empty own chain. Peer heads, entity
+/// states and the HLC stay so remote ops are still applied idempotently.
+pub async fn rotate_device_id(db: &Pool<Sqlite>) -> CmdResult<()> {
+    for key in ["sync_device_id", "sync_own_seq", "sync_own_head"] {
+        delete_setting(db, key).await?;
+    }
+    Ok(())
+}
+
+/// Detect a database that was restored or copied from another install and
+/// rotate the device id so two installs never write to the same log.
+/// `data_dir/install.id` is outside the backup set; `sync_install_id` travels with the DB.
+pub async fn check_install_marker(db: &Pool<Sqlite>, data_dir: &std::path::Path) -> CmdResult<()> {
+    let marker_path = data_dir.join("install.id");
+    let marker = match std::fs::read_to_string(&marker_path) {
+        Ok(s) if !s.trim().is_empty() => s.trim().to_string(),
+        _ => {
+            let id = veydan_sync::random_hex(16);
+            std::fs::write(&marker_path, &id).map_err(AppError::io)?;
+            id
+        }
+    };
+    match get_setting(db, "sync_install_id").await {
+        Some(stored) if stored == marker => Ok(()),
+        Some(_) => {
+            rotate_device_id(db).await?;
+            set_setting(db, "sync_install_id", &marker).await
+        }
+        None => set_setting(db, "sync_install_id", &marker).await,
+    }
+}
+
 pub async fn clear_binding(db: &Pool<Sqlite>) -> CmdResult<()> {
     for key in [
         "sync_vault_id",
         "sync_vault_key",
+        "sync_device_id",
         "sync_own_seq",
         "sync_own_head",
-        "sync_hlc",
+        // `sync_hlc` is kept: a clock reset would break LWW against existing ops.
         "sync_last_run",
         "sync_last_started",
         "sync_last_error",
@@ -279,7 +328,8 @@ pub fn build_storage(cfg: &SyncConfig) -> CmdResult<Box<dyn Storage>> {
         }
         "s3" => {
             let s = &cfg.s3;
-            if s.endpoint.is_empty() || s.bucket.is_empty() || s.access_key.is_empty() || s.secret_key.is_empty() {
+            let secret_key = s.secret_key.clone().unwrap_or_default();
+            if s.endpoint.is_empty() || s.bucket.is_empty() || s.access_key.is_empty() || secret_key.is_empty() {
                 return Err(AppError::other("S3 endpoint, bucket and keys are required"));
             }
             let storage = S3Storage::new(S3Config {
@@ -288,7 +338,7 @@ pub fn build_storage(cfg: &SyncConfig) -> CmdResult<Box<dyn Storage>> {
                 bucket: s.bucket.clone(),
                 prefix: s.prefix.clone(),
                 access_key: s.access_key.clone(),
-                secret_key: s.secret_key.clone(),
+                secret_key,
                 path_style: s.path_style,
             })
             .map_err(AppError::other)?;
@@ -302,7 +352,7 @@ pub fn build_storage(cfg: &SyncConfig) -> CmdResult<Box<dyn Storage>> {
             let storage = WebDavStorage::new(WebDavConfig {
                 url: w.url.clone(),
                 username: w.username.clone(),
-                password: w.password.clone(),
+                password: w.password.clone().unwrap_or_default(),
             })
             .map_err(AppError::other)?;
             Ok(Box::new(storage))

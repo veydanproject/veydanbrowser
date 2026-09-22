@@ -360,6 +360,7 @@ export const api = {
     update: (id: string, input: SshKeyUpdateInput) =>
       call<SshKey>('ssh_key_update', { id, input }),
     delete: (id: string) => call<void>('ssh_key_delete', { id }),
+    exportPrivate: (id: string) => call<string>('ssh_key_export_private', { id }),
   },
   sftp: {
     connect: (connectionId: string) =>
@@ -412,8 +413,9 @@ export const api = {
     setConfig: (cfg: BackupConfig) => call<void>('backup_set_config', { cfg }),
     list: () => call<BackupFileInfo[]>('backup_list'),
     runNow: () => call<void>('backup_run_now'),
+    /** Empty password = use the configured one. */
     restore: (path: string, password: string) =>
-      call<void>('backup_restore', { path, password }),
+      call<void>('backup_restore', { path, password: password || null }),
   },
 
   sync: {
@@ -479,7 +481,9 @@ export interface TraySettings {
 
 export interface BackupConfig {
   dir: string | null;
-  password: string | null;
+  /** Not returned by the backend. On save: null = keep stored, '' = clear. */
+  password?: string | null;
+  has_password: boolean;
   schedule_enabled: boolean;
   schedule_mode: 'interval' | 'daily' | 'weekly';
   interval_hours: number;
@@ -506,10 +510,18 @@ export interface SyncConfig {
     bucket: string;
     prefix: string;
     access_key: string;
-    secret_key: string;
+    /** Not returned by the backend. On save: null/undefined = keep stored, '' = clear. */
+    secret_key?: string | null;
+    has_secret_key: boolean;
     path_style: boolean;
   };
-  webdav: { url: string; username: string; password: string };
+  webdav: {
+    url: string;
+    username: string;
+    /** Same three-state rule as `s3.secret_key`. */
+    password?: string | null;
+    has_password: boolean;
+  };
   interval_sec: number;
   /** Replicate firefox-profile directories, not only metadata. */
   profile_files: boolean;

@@ -12,6 +12,14 @@ where
     vec.serialize(s)
 }
 
+/// Serialize a secret as `true`/`false` (present or not) instead of its value.
+fn serialize_presence<S>(secret: &Option<String>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    secret.as_deref().is_some_and(|v| !v.is_empty()).serialize(s)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct WorkspaceColumn {
     pub id: String,
@@ -167,12 +175,15 @@ pub struct Proxy {
     pub host: String,
     pub port: i64,
     pub username: Option<String>,
+    // Secrets reach the UI only as presence flags.
+    #[serde(rename = "has_password", serialize_with = "serialize_presence")]
     pub password: Option<String>,
     pub country: Option<String>,
     pub city: Option<String>,
     pub status: String,
     pub last_ip: Option<String>,
     pub last_check_at: Option<DateTime<Utc>>,
+    #[serde(rename = "has_private_key", serialize_with = "serialize_presence")]
     pub private_key: Option<String>,
     /// SHA256 fingerprint of the SSH server's host key, saved on first successful connection (TOFU).
     /// None = never connected. On mismatch — connection is blocked.

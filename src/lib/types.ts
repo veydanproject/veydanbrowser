@@ -128,14 +128,15 @@ export interface Proxy {
   host: string;
   port: number;
   username: string | null;
-  password: string | null;
+  /** Secrets stay in the backend; only their presence is reported. */
+  has_password: boolean;
   country: string | null;
   city: string | null;
   status: 'unknown' | 'active' | 'failed';
   last_ip: string | null;
   last_check_at: string | null;
   tags: string[];
-  private_key: string | null;
+  has_private_key: boolean;
   server_fingerprint: string | null;
   created_at: string;
 }
@@ -527,9 +528,10 @@ export interface SshConnection {
   port: number;
   username: string;
   auth_type: SshAuthType;
-  password: string | null;
-  private_key: string | null;
-  key_passphrase: string | null;
+  /** Secrets never leave the backend; these flags say whether one is stored. */
+  has_password: boolean;
+  has_private_key: boolean;
+  has_key_passphrase: boolean;
   ssh_key_id: string | null;
   requires_2fa: boolean;
   totp_entry_id: string | null;
@@ -611,9 +613,9 @@ export interface SshKey {
   algorithm: string;
   bits: number | null;
   comment: string | null;
-  private_key: string;
   public_key: string;
-  passphrase: string | null;
+  /** Private material is fetched on demand via `api.sshKeys.exportPrivate`. */
+  has_passphrase: boolean;
   fingerprint: string | null;
   source: 'generated' | 'imported';
   created_at: string;

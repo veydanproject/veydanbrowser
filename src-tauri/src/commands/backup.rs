@@ -62,7 +62,12 @@ impl Drop for RunningGuard<'_> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupConfig {
     pub dir: Option<String>,
+    /// Never sent to the UI. On save: `None` keeps the stored password,
+    /// `Some("")` clears it.
+    #[serde(skip_serializing, default)]
     pub password: Option<String>,
+    #[serde(default)]
+    pub has_password: bool,
     pub schedule_enabled: bool,
     /// "interval" | "daily" | "weekly"
     pub schedule_mode: String,
@@ -82,6 +87,7 @@ impl Default for BackupConfig {
         Self {
             dir: None,
             password: None,
+            has_password: false,
             schedule_enabled: false,
             schedule_mode: "interval".into(),
             interval_hours: 24,
@@ -117,9 +123,11 @@ async fn set_setting(db: &Pool<Sqlite>, key: &str, value: &str) -> CmdResult<()>
 
 async fn load_config(db: &Pool<Sqlite>) -> BackupConfig {
     let d = BackupConfig::default();
+    let password = get_setting(db, "backup_password").await.filter(|s| !s.is_empty());
     BackupConfig {
         dir: get_setting(db, "backup_dir").await.filter(|s| !s.is_empty()),
-        password: get_setting(db, "backup_password").await.filter(|s| !s.is_empty()),
+        has_password: password.is_some(),
+        password,
         schedule_enabled: get_setting(db, "backup_schedule_enabled")
             .await
             .map(|v| v == "1")
@@ -159,9 +167,9 @@ pub async fn backup_set_config(
         Some(v) => set_setting(db, "backup_dir", v).await?,
         None => set_setting(db, "backup_dir", "").await?,
     }
-    match cfg.password.as_deref().filter(|s| !s.is_empty()) {
-        Some(v) => set_setting(db, "backup_password", v).await?,
-        None => set_setting(db, "backup_password", "").await?,
+    // None = keep the stored password; "" = clear it.
+    if let Some(v) = cfg.password.as_deref() {
+        set_setting(db, "backup_password", v).await?;
     }
     set_setting(db, "backup_schedule_enabled", if cfg.schedule_enabled { "1" } else { "0" }).await?;
     set_setting(db, "backup_schedule_mode", &cfg.schedule_mode).await?;
@@ -491,11 +499,20 @@ struct Manifest {
 #[tauri::command]
 pub async fn backup_restore(
     path: String,
-    password: String,
+    password: Option<String>,
     app: AppHandle,
 ) -> CmdResult<()> {
     let state = app.state::<AppState>();
     let data_dir = state.app_data_dir.clone();
+
+    // Empty input means "use the configured backup password".
+    let password = match password.filter(|p| !p.is_empty()) {
+        Some(p) => p,
+        None => load_config(&state.db)
+            .await
+            .password
+            .ok_or_else(|| AppError::other("No backup password configured"))?,
+    };
 
     let staging = data_dir
         .join("restore_tmp")
@@ -535,10 +552,22 @@ pub async fn backup_restore(
         )));
     }
 
+    // The custom notes dir recorded in the archive is only honored when it is
+    // the dir this install already uses; anything else lands under data_dir so
+    // a foreign archive cannot write to an arbitrary path.
+    let local_custom = get_setting(&state.db, "notes_custom_dir").await.filter(|s| !s.is_empty());
+    let custom_target = manifest.notes_custom_dir.as_ref().map(|recorded| {
+        if local_custom.as_deref() == Some(recorded.as_str()) {
+            PathBuf::from(recorded)
+        } else {
+            data_dir.join("notes_custom")
+        }
+    });
+
     // The source machine's data dir may differ from ours: rewrite stored
     // absolute paths so profiles/notes resolve after the swap.
     emit_restore_progress(&app, "remapping", 95);
-    if let Err(e) = remap_paths(&staging, &data_dir) {
+    if let Err(e) = remap_paths(&staging, &data_dir, custom_target.as_deref()) {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(AppError::other(e));
     }
@@ -558,7 +587,7 @@ pub async fn backup_restore(
     // swap_in has already rolled the live data back.
     let (data_dir2, staging2) = (data_dir.clone(), staging.clone());
     let swap_res = tauri::async_runtime::spawn_blocking(move || {
-        swap_in(&data_dir2, &staging2, &manifest)
+        swap_in(&data_dir2, &staging2, custom_target.as_deref())
     })
     .await
     .unwrap_or_else(|e| Err(e.to_string()));
@@ -575,8 +604,9 @@ pub async fn backup_restore(
 
 /// Rewrite absolute paths inside the staged DB to point at `data_dir`.
 /// Profiles always live at `profiles/<id>`; note files are matched by basename
-/// against the staged `notes/documents` (custom-dir notes are left untouched).
-fn remap_paths(staging: &Path, data_dir: &Path) -> Result<(), String> {
+/// against the staged `notes/documents`, custom-dir notes against the staged
+/// `notes_custom` and remapped to `custom_target`.
+fn remap_paths(staging: &Path, data_dir: &Path, custom_target: Option<&Path>) -> Result<(), String> {
     let conn = rusqlite::Connection::open(staging.join("profiles.db"))
         .map_err(|e| format!("Cannot open restored DB: {e}"))?;
 
@@ -610,21 +640,44 @@ fn remap_paths(staging: &Path, data_dir: &Path) -> Result<(), String> {
         .collect::<Result<Vec<(String, String)>, _>>()
         .map_err(|e| e.to_string())?;
     drop(stmt);
+    let staged_custom = staging.join("notes_custom");
     for (id, file_path) in notes {
         // Basename split on both separators: the backup may come from Windows.
         let Some(name) = file_path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()) else {
             continue;
         };
-        if !staged_docs.join(name).is_file() {
+        let path = if staged_docs.join(name).is_file() {
+            docs_dir.join(name)
+        } else if let Some(target) = custom_target.filter(|_| staged_custom.join(name).is_file()) {
+            target.join(name)
+        } else {
             continue;
-        }
-        let path = docs_dir.join(name).to_string_lossy().to_string();
+        };
         conn.execute(
             "UPDATE notes SET file_path = ?1 WHERE id = ?2",
-            rusqlite::params![path, id],
+            rusqlite::params![path.to_string_lossy().to_string(), id],
         )
         .map_err(|e| e.to_string())?;
     }
+
+    // The restored DB has a stale own-log position: it must push to a fresh
+    // device log or peers see a chain break.
+    conn.execute(
+        "DELETE FROM app_settings WHERE key IN ('sync_device_id', 'sync_own_seq', 'sync_own_head')",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+
+    // The restored settings must not point at a path from another machine.
+    match custom_target {
+        Some(target) => conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('notes_custom_dir', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![target.to_string_lossy().to_string()],
+        ),
+        None => conn.execute("DELETE FROM app_settings WHERE key = 'notes_custom_dir'", []),
+    }
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -704,7 +757,7 @@ fn extract_archive(
 
 /// Replace `profiles.db`, `profiles/`, `notes/` in the live data dir with the
 /// staged versions, keeping a temporary backup until the swap succeeds.
-fn swap_in(data_dir: &Path, staging: &Path, manifest: &Manifest) -> Result<(), String> {
+fn swap_in(data_dir: &Path, staging: &Path, custom_target: Option<&Path>) -> Result<(), String> {
     let ts = Local::now().format("%Y%m%d-%H%M%S").to_string();
     let old = data_dir.join(format!("restore_backup_{ts}"));
     std::fs::create_dir_all(&old).map_err(|e| e.to_string())?;
@@ -752,14 +805,11 @@ fn swap_in(data_dir: &Path, staging: &Path, manifest: &Manifest) -> Result<(), S
         }
     }
 
-    // Restore custom notes dir contents to the recorded path, if any.
-    if let Some(ref custom) = manifest.notes_custom_dir {
+    // Custom notes dir contents go to the target decided by the caller.
+    if let Some(dst) = custom_target {
         let src = staging.join("notes_custom");
-        if src.exists() {
-            let dst = PathBuf::from(custom);
-            if std::fs::create_dir_all(&dst).is_ok() {
-                let _ = copy_dir(&src, &dst);
-            }
+        if src.exists() && std::fs::create_dir_all(dst).is_ok() {
+            let _ = copy_dir(&src, dst);
         }
     }
 

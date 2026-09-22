@@ -70,8 +70,9 @@ struct Manifest {
 }
 
 impl Manifest {
-    fn parse(json: &str) -> Self {
-        serde_json::from_str(json).unwrap_or_default()
+    /// Fails on malformed JSON: an empty manifest would delete every profile file.
+    fn parse(json: &str) -> CmdResult<Self> {
+        serde_json::from_str(json).map_err(|e| AppError::other(format!("profile manifest: {e}")))
     }
 
     fn to_json(&self) -> String {
@@ -188,6 +189,10 @@ pub async fn on_profile_stopped(state: &AppState, profile_id: &str) -> CmdResult
     let db = &state.db;
     let mut st = load_profile_files_state(db, profile_id).await?.unwrap_or_else(|| ProfileFilesState::new(profile_id));
     st.dirty = true;
+    // A remote snapshot arrived while the browser ran: both sides changed now.
+    if !st.pending_manifest.is_empty() {
+        st.diverged = true;
+    }
     if st.lease_device == super::config::device_id(db).await? {
         st.lease_device.clear();
         st.lease_name.clear();
@@ -219,6 +224,13 @@ struct BlobIndex<'a> {
 }
 
 impl<'a> BlobIndex<'a> {
+    async fn exists(&self, name: &str) -> CmdResult<bool> {
+        if self.uploaded.contains(name) {
+            return Ok(true);
+        }
+        self.engine.blob_exists(name).await.map_err(AppError::other)
+    }
+
     async fn put(&mut self, data: &[u8]) -> CmdResult<String> {
         let name = self.engine.blob_name(data);
         if self.uploaded.contains(&name) {
@@ -247,8 +259,14 @@ async fn build_manifest(
         super::emit_progress(app, "profiles_up", super::progress_pct(55, 75, current, total.max(1)), current, total, &rel);
         let Some(hash) = cache.file_hash(&abs) else { continue };
         let size = std::fs::metadata(&abs).map(|m| m.len()).unwrap_or(0);
-        let blob = match known.get(hash.as_str()) {
-            Some(b) => (*b).to_string(),
+        // A name from the previous manifest is reused only while the blob is
+        // still in the vault; GC may have dropped it since.
+        let reusable = match known.get(hash.as_str()) {
+            Some(b) if blobs.exists(b).await? => Some((*b).to_string()),
+            _ => None,
+        };
+        let blob = match reusable {
+            Some(b) => b,
             None => {
                 let Ok(data) = std::fs::read(&abs) else { continue };
                 blobs.put(&data).await?
@@ -322,7 +340,8 @@ pub async fn collect_local_changes(
             continue;
         }
 
-        let prev = Manifest::parse(&st.manifest_json);
+        // Local bookkeeping only; empty before the first snapshot.
+        let prev = Manifest::parse(&st.manifest_json).unwrap_or_default();
         let manifest = build_manifest(&state.sync.file_hashes, &mut blobs, &dir, &prev, app).await?;
         let json = manifest.to_json();
         let hash = sha256_hex(json.as_bytes());
@@ -418,7 +437,7 @@ async fn fetch_and_apply(
     manifest_blob: &str,
 ) -> CmdResult<Option<Manifest>> {
     let Some(raw) = engine.get_blob(manifest_blob).await.map_err(AppError::other)? else { return Ok(None) };
-    let manifest = Manifest::parse(&String::from_utf8_lossy(&raw));
+    let manifest = Manifest::parse(&String::from_utf8_lossy(&raw))?;
     match apply_manifest(engine, &state.sync.file_hashes, dir, &manifest, app).await? {
         None => Ok(Some(manifest)),
         Some(_) => Ok(None),
@@ -578,6 +597,6 @@ pub async fn blob_refs(engine: &Engine, op: &Op) -> CmdResult<Vec<String>> {
         .map_err(AppError::other)?
         .ok_or_else(|| AppError::other(format!("manifest {} missing", p.manifest_blob)))?;
     let mut refs = vec![p.manifest_blob];
-    refs.extend(Manifest::parse(&String::from_utf8_lossy(&raw)).files.into_iter().map(|f| f.blob));
+    refs.extend(Manifest::parse(&String::from_utf8_lossy(&raw))?.files.into_iter().map(|f| f.blob));
     Ok(refs)
 }

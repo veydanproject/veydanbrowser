@@ -10,7 +10,7 @@
 //! seeks past the already-written bytes and continues (resume). A part longer
 //! than the source (source changed) restarts from zero.
 
-use crate::commands::sftp::{get_or_connect, join_posix, SftpSessionState};
+use crate::commands::sftp::{get_or_connect, is_safe_name, join_posix, SftpSessionState};
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use serde::{Deserialize, Serialize};
@@ -171,6 +171,10 @@ async fn plan_download(
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     for (name, md) in entries {
+        // Names come from the server; one that could leave `dst` aborts the plan.
+        if !is_safe_name(&name) {
+            anyhow::bail!("unsafe file name from server: {name:?}");
+        }
         let child_src = join_posix(src, &name);
         let child_dst = format!("{}/{}", dst.trim_end_matches('/'), name);
         let md = if md.is_symlink() {

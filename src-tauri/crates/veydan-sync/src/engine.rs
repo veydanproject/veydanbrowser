@@ -185,7 +185,9 @@ impl Engine {
 
     // ── Own log ──────────────────────────────────────────────────────────────
 
-    /// Append one chunk with `ops` to this device's log.
+    /// Append one chunk with `ops` to this device's log. Never overwrites: if the
+    /// slot is taken by an identical chunk (a previous push whose result was lost)
+    /// its hash is adopted, otherwise `OwnLogCollision` is returned.
     pub async fn push(&self, state: &mut LocalState, ops: Vec<Op>) -> Result<()> {
         if ops.is_empty() {
             return Ok(());
@@ -199,9 +201,19 @@ impl Engine {
             &chunk_ident(&self.device_id, seq),
             &serde_json::to_vec(&chunk)?,
         )?;
-        self.storage.put(&chunk_key(&self.device_id, seq), &bytes).await?;
+        let key = chunk_key(&self.device_id, seq);
+        let head_hash = if self.storage.put_if_absent(&key, &bytes).await? {
+            sha256_hex(&bytes)
+        } else {
+            let existing = self.storage.get(&key).await?.ok_or(SyncError::OwnLogCollision(seq))?;
+            let theirs = self.open_chunk(&self.device_id, seq, &existing).map_err(|_| SyncError::OwnLogCollision(seq))?;
+            if theirs.prev_hash != chunk.prev_hash || serde_json::to_vec(&theirs.ops)? != serde_json::to_vec(&chunk.ops)? {
+                return Err(SyncError::OwnLogCollision(seq));
+            }
+            sha256_hex(&existing)
+        };
         state.own_seq = seq;
-        state.own_head_hash = sha256_hex(&bytes);
+        state.own_head_hash = head_hash;
         Ok(())
     }
 
@@ -350,9 +362,11 @@ impl Engine {
         Ok(ops)
     }
 
+    /// Authenticated but undecodable content is a real fault, not a partial
+    /// download, so it surfaces as `Integrity` instead of a silent `Format` skip.
     fn open_chunk(&self, device: &str, seq: u64, bytes: &[u8]) -> Result<Chunk> {
         let pt = envelope::open(&self.keys.log, &self.vault_id, Kind::Chunk, &chunk_ident(device, seq), bytes)?;
-        Ok(serde_json::from_slice(&pt)?)
+        serde_json::from_slice(&pt).map_err(|e| SyncError::Integrity(format!("chunk {device}/{seq}: {e}")))
     }
 
     async fn read_snapshot(&self, device: &str) -> Result<Option<Snapshot>> {
@@ -414,5 +428,10 @@ impl Engine {
     pub async fn get_blob(&self, name: &str) -> Result<Option<Vec<u8>>> {
         let Some(bytes) = self.storage.get(&blob_key(name)).await? else { return Ok(None) };
         Ok(Some(envelope::open(&self.keys.blob, &self.vault_id, Kind::Blob, name, &bytes)?))
+    }
+
+    /// Presence check without downloading the body.
+    pub async fn blob_exists(&self, name: &str) -> Result<bool> {
+        self.storage.exists(&blob_key(name)).await
     }
 }

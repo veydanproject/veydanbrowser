@@ -1,0 +1,9 @@
+/home/user/projects/veydan/veydanbrowser/src-tauri/crates/veydan-sync/target/debug/deps/zmij-5e125fe219b945c6.d: /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/stdarch_x86.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/traits.rs
+
+/home/user/projects/veydan/veydanbrowser/src-tauri/crates/veydan-sync/target/debug/deps/libzmij-5e125fe219b945c6.rlib: /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/stdarch_x86.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/traits.rs
+
+/home/user/projects/veydan/veydanbrowser/src-tauri/crates/veydan-sync/target/debug/deps/libzmij-5e125fe219b945c6.rmeta: /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/stdarch_x86.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/traits.rs
+
+/home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs:
+/home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/stdarch_x86.rs:
+/home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/traits.rs:

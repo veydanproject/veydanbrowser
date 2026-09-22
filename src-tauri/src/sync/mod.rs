@@ -23,7 +23,7 @@ mod profile_files;
 mod rows;
 mod state;
 
-pub use config::SyncConfig;
+pub use config::{check_install_marker, SyncConfig};
 
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
@@ -560,6 +560,19 @@ fn fk_retry<T: Default>(step: &str, result: CmdResult<T>, deferred: &mut Option<
     }
 }
 
+/// A collision means another install writes to our log (restored backup, cloned
+/// DB): move to a fresh device log; the next cycle re-collects and pushes there.
+async fn push_error(db: &sqlx::SqlitePool, e: veydan_sync::SyncError) -> AppError {
+    if let veydan_sync::SyncError::OwnLogCollision(_) = e {
+        if let Err(re) = config::rotate_device_id(db).await {
+            return re;
+        }
+        let _ = config::set_setting(db, "sync_last_warning", "device id rotated after log collision").await;
+        return AppError::other("own log collision: device id rotated, changes are pushed on the next cycle");
+    }
+    AppError::other(e)
+}
+
 /// Returns non-fatal warnings (per-peer integrity problems).
 async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>> {
     let db = &state.db;
@@ -591,7 +604,9 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     };
     emit_progress(app, "push", 22, 0, 0, "");
     if !ops.is_empty() {
-        engine.push(&mut local, ops).await.map_err(AppError::other)?;
+        if let Err(e) = engine.push(&mut local, ops).await {
+            return Err(push_error(db, e).await);
+        }
         state::save_own_state(db, &local, &clock.last()).await?;
         for st in note_rows.states.iter().chain(&table_rows.states) {
             state::save_row_state(db, st).await?;
@@ -618,6 +633,9 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     for op in &pulled.ops {
         clock.observe(&op.hlc);
     }
+    // Persist the advanced clock now: a failure while applying must not let the
+    // next cycle stamp ops with an HLC below what it has already seen.
+    state::save_own_state(db, &local, &clock.last()).await?;
     config::set_setting(db, "sync_last_applied", &pulled.ops.len().to_string()).await?;
     // A parent row missing on this device is not fatal: the ops come again next cycle.
     let mut deferred: Option<String> = None;
@@ -734,6 +752,9 @@ async fn profile_files_phase(
         Ok(files) => {
             if !files.ops.is_empty() {
                 if let Err(e) = engine.push(local, files.ops).await {
+                    if matches!(e, veydan_sync::SyncError::OwnLogCollision(_)) {
+                        return Err(push_error(db, e).await);
+                    }
                     warnings.push(format!("profiles upload: {e}"));
                 } else {
                     state::save_own_state(db, local, &clock.last()).await?;

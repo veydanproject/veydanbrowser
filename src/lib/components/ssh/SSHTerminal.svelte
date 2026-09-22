@@ -24,6 +24,8 @@
     name: string;
     instructions: string;
     prompts: KeyboardPromptItem[];
+    /** First-connection host key awaiting the user's trust decision. */
+    host_key?: string | null;
   }
 
   interface Props {
@@ -90,6 +92,19 @@
       fitAddon?.fit();
       syncSize();
     }));
+  }
+
+  async function answerHostKey(trust: boolean) {
+    if (!activePrompt || promptSubmitting) return;
+    promptSubmitting = true;
+    try {
+      await api.ssh.respondPrompt(sessionId, trust ? 'yes' : 'no');
+      activePrompt = null;
+    } catch (e: unknown) {
+      promptError = String(e);
+    } finally {
+      promptSubmitting = false;
+    }
   }
 
   async function submitPromptResponses() {
@@ -293,6 +308,22 @@
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="prompt-overlay">
         <div class="prompt-card">
+          {#if activePrompt.host_key}
+            <div class="prompt-title">{$t('ssh_hostkey_title')}</div>
+            <div class="prompt-instructions">{$t('ssh_hostkey_text')}</div>
+            <code class="prompt-fingerprint">{activePrompt.instructions}</code>
+            {#if promptError}
+              <div class="prompt-error">{promptError}</div>
+            {/if}
+            <div class="prompt-actions">
+              <button class="btn-sm btn-ghost" onclick={() => answerHostKey(false)} disabled={promptSubmitting}>
+                {$t('ssh_hostkey_reject')}
+              </button>
+              <button class="btn-sm btn-primary" onclick={() => answerHostKey(true)} disabled={promptSubmitting}>
+                {$t('ssh_hostkey_trust')}
+              </button>
+            </div>
+          {:else}
           {#if activePrompt.name}
             <div class="prompt-title">{activePrompt.name}</div>
           {/if}
@@ -333,6 +364,7 @@
               {promptSubmitting ? $t('ssh_connecting') : $t('ssh_btn_send')}
             </button>
           </div>
+          {/if}
         </div>
       </div>
     {/if}
@@ -510,6 +542,15 @@
   .prompt-instructions {
     font-size: var(--fs-sm);
     color: var(--text-2);
+  }
+  .prompt-fingerprint {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    word-break: break-all;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
+    color: var(--text);
   }
   .prompt-field {
     display: flex;

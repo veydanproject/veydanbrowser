@@ -144,7 +144,7 @@ pub async fn launch_profile(
     std::fs::create_dir_all(&firefox_profile_dir).map_err(err)?;
     repair_ui_customization_state(&firefox_profile_dir);
 
-    let (effective_proxy, local_proxy_stop) = setup_proxy(proxy).await?;
+    let (effective_proxy, local_proxy_stop) = setup_proxy(proxy, &state.db).await?;
 
     let user_js_content = userjs::generate(profile, effective_proxy.as_ref());
     std::fs::write(firefox_profile_dir.join("user.js"), user_js_content).map_err(err)?;
@@ -197,6 +197,7 @@ pub async fn launch_profile(
 /// Returns the effective proxy (pointing to 127.0.0.1) and a stop channel.
 async fn setup_proxy(
     proxy: Option<&Proxy>,
+    db: &sqlx::SqlitePool,
 ) -> Result<(Option<Proxy>, Option<tokio::sync::oneshot::Sender<()>>), String> {
     match proxy {
         Some(p) if matches!(p.proxy_type.as_str(), "http" | "https") => {
@@ -259,6 +260,7 @@ async fn setup_proxy(
             .await
             {
                 Ok(r) => {
+                    crate::commands::proxies::pin_ssh_fingerprint(db, p, &r).await;
                     let upstream = crate::proxy::local::Upstream::Ssh { session: r.session };
                     match crate::proxy::local::spawn(upstream).await {
                         Ok((local_port, stop_tx)) => {

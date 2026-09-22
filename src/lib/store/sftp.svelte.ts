@@ -32,6 +32,8 @@ export interface SftpKeyboardPrompt {
   name: string;
   instructions: string;
   prompts: { prompt: string; echo: boolean }[];
+  /** First-connection host key awaiting the user's trust decision. */
+  hostKey: string | null;
 }
 
 export interface TransferInfo {
@@ -127,19 +129,23 @@ class FilesStore {
     import('@tauri-apps/api/event').then(({ listen }) => {
       // SFTP connects relay keyboard-interactive (2FA) prompts under a
       // synthetic session id "sftp:{connection_id}".
-      listen<{ session_id: string; name: string; instructions: string; prompts: { prompt: string; echo: boolean }[] }>(
-        'ssh://keyboard-prompt',
-        (e) => {
-          const { session_id, name, instructions, prompts } = e.payload;
-          if (!session_id.startsWith('sftp:')) return;
-          this.prompt = {
-            connectionId: session_id.slice('sftp:'.length),
-            name,
-            instructions,
-            prompts,
-          };
-        }
-      ).then((fn) => this.unlisten.push(fn));
+      listen<{
+        session_id: string;
+        name: string;
+        instructions: string;
+        prompts: { prompt: string; echo: boolean }[];
+        host_key?: string | null;
+      }>('ssh://keyboard-prompt', (e) => {
+        const { session_id, name, instructions, prompts, host_key } = e.payload;
+        if (!session_id.startsWith('sftp:')) return;
+        this.prompt = {
+          connectionId: session_id.slice('sftp:'.length),
+          name,
+          instructions,
+          prompts,
+          hostKey: host_key ?? null,
+        };
+      }).then((fn) => this.unlisten.push(fn));
 
       listen<{ connection_id: string; status: string; error: string | null }>(
         'sftp://status-changed',

@@ -17,8 +17,8 @@
     enabled: false,
     backend: 'folder',
     folder_path: '',
-    s3: { endpoint: '', region: '', bucket: '', prefix: '', access_key: '', secret_key: '', path_style: true },
-    webdav: { url: '', username: '', password: '' },
+    s3: { endpoint: '', region: '', bucket: '', prefix: '', access_key: '', has_secret_key: false, path_style: true },
+    webdav: { url: '', username: '', has_password: false },
     interval_sec: 60,
     profile_files: true,
     device_name: '',
@@ -233,7 +233,7 @@
       <label class="field"><span class="field-label">{$t('settings_sync_s3_bucket')}</span><input class="input" type="text" bind:value={cfg.s3.bucket} /></label>
       <label class="field"><span class="field-label">{$t('settings_sync_s3_prefix')}</span><input class="input" type="text" bind:value={cfg.s3.prefix} placeholder="veydan" /></label>
       <label class="field"><span class="field-label">{$t('settings_sync_s3_access_key')}</span><input class="input" type="text" bind:value={cfg.s3.access_key} autocomplete="off" /></label>
-      <label class="field"><span class="field-label">{$t('settings_sync_s3_secret_key')}</span><input class="input" type="password" bind:value={cfg.s3.secret_key} autocomplete="off" /></label>
+      <label class="field"><span class="field-label">{$t('settings_sync_s3_secret_key')}</span><input class="input" type="password" bind:value={cfg.s3.secret_key} placeholder={cfg.s3.has_secret_key && cfg.s3.secret_key == null ? $t('secret_stored_placeholder') : ''} autocomplete="off" /></label>
     </div>
     <div class="toggle-row">
       <div class="toggle-info">
@@ -246,7 +246,7 @@
     <div class="grid">
       <label class="field wide"><span class="field-label">{$t('settings_sync_webdav_url')}</span><input class="input" type="text" bind:value={cfg.webdav.url} placeholder="https://webdav.example.com/veydan" /></label>
       <label class="field"><span class="field-label">{$t('settings_sync_webdav_username')}</span><input class="input" type="text" bind:value={cfg.webdav.username} autocomplete="off" /></label>
-      <label class="field"><span class="field-label">{$t('settings_sync_webdav_password')}</span><input class="input" type="password" bind:value={cfg.webdav.password} autocomplete="off" /></label>
+      <label class="field"><span class="field-label">{$t('settings_sync_webdav_password')}</span><input class="input" type="password" bind:value={cfg.webdav.password} placeholder={cfg.webdav.has_password && cfg.webdav.password == null ? $t('secret_stored_placeholder') : ''} autocomplete="off" /></label>
     </div>
   {/if}
 
@@ -436,6 +436,7 @@
     {#if status.joined}
       <details class="passphrase">
         <summary>{$t('settings_sync_change_passphrase')}</summary>
+        <p class="hint">{$t('settings_sync_change_passphrase_hint')}</p>
         <div class="row">
           <input class="input" type="password" bind:value={oldPassphrase} placeholder={$t('settings_sync_passphrase_old')} autocomplete="off" />
           <input class="input" type="password" bind:value={newPassphrase} placeholder={$t('settings_sync_passphrase_new')} autocomplete="new-password" />

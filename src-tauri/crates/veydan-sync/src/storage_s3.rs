@@ -4,7 +4,7 @@
 //! S3-compatible adapter (AWS S3, Cloudflare R2, MinIO, Backblaze B2) with
 //! hand-rolled SigV4 signing. Only four operations are needed.
 
-use crate::storage::{http_client, is_noise_key, status_error, Storage};
+use crate::storage::{http_client, is_noise_key, send_retry, status_error, Storage};
 use crate::{sha256_hex, Result, SyncError};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -98,7 +98,7 @@ impl S3Storage {
         self.request_with(method, path, query, body, &[]).await
     }
 
-    /// `extra` headers are sent unsigned (SigV4 only requires host/date/content-sha256).
+    /// Signed request with transport retries; 429/503 get one more attempt after a pause.
     async fn request_with(
         &self,
         method: Method,
@@ -107,6 +107,24 @@ impl S3Storage {
         body: Vec<u8>,
         extra: &[(&str, &str)],
     ) -> Result<reqwest::Response> {
+        let build = || self.signed(method.clone(), path, query, body.clone(), extra);
+        let resp = send_retry(build).await?;
+        if !matches!(resp.status(), StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE) {
+            return Ok(resp);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        send_retry(build).await
+    }
+
+    /// `extra` headers are sent unsigned (SigV4 only requires host/date/content-sha256).
+    fn signed(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(String, String)],
+        body: Vec<u8>,
+        extra: &[(&str, &str)],
+    ) -> reqwest::RequestBuilder {
         let now = Utc::now();
         let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
         let date = now.format("%Y%m%d").to_string();
@@ -149,7 +167,7 @@ impl S3Storage {
         for (k, v) in extra {
             req = req.header(*k, *v);
         }
-        Ok(req.body(body).send().await?)
+        req.body(body)
     }
 
     async fn fail(resp: reqwest::Response, what: &str) -> SyncError {

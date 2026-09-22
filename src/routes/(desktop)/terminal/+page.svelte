@@ -246,7 +246,7 @@
               <td class="col-auth">
                 <div class="auth-tags">
                   <span class="auth-badge auth-{conn.auth_type}">{authLabel(conn.auth_type)}</span>
-                  {#if conn.password && conn.auth_type !== 'password'}
+                  {#if conn.has_password && conn.auth_type !== 'password'}
                     <span class="auth-badge">pass</span>
                   {/if}
                   {#if conn.requires_2fa}

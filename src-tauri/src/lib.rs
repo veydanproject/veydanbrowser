@@ -98,7 +98,8 @@ use commands::ssh::{
 };
 #[cfg(desktop)]
 use commands::ssh_keys::{
-    ssh_key_delete, ssh_key_generate, ssh_key_get, ssh_key_import, ssh_key_list, ssh_key_update,
+    ssh_key_delete, ssh_key_export_private, ssh_key_generate, ssh_key_get, ssh_key_import, ssh_key_list,
+    ssh_key_update,
 };
 #[cfg(desktop)]
 use commands::workspaces::*;
@@ -200,36 +201,19 @@ fn fingerprint_presets() -> Vec<fingerprint::PresetInfo> {
 }
 
 /// Open an external URL in the user's default browser.
-/// Only http(s) URLs are accepted, so this can never launch an arbitrary
-/// program or open a local file.
+/// Only parseable http(s) URLs are accepted; the opener plugin never goes
+/// through a shell, so URL contents cannot become commands.
 #[cfg(desktop)]
 #[tauri::command]
-fn open_url(url: String) -> Result<(), String> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
+fn open_url(url: String, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
         return Err("only http(s) URLs are allowed".into());
     }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&url)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&url)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &url])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    app.opener()
+        .open_url(parsed.as_str(), None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Whether the updater can install updates in-place for this install method.
@@ -270,6 +254,9 @@ fn run_mobile() {
 
             let (db, legacy) = tauri::async_runtime::block_on(db::init_pool_mobile(&data_dir.join("veydan.db")))
                 .expect("Failed to initialize database");
+            if let Err(e) = tauri::async_runtime::block_on(sync::check_install_marker(&db, &data_dir)) {
+                eprintln!("sync: install marker check failed: {e}");
+            }
             if legacy {
                 // Old index has no FTS row ids or link table; rebuild both from the note files.
                 if let Err(e) = tauri::async_runtime::block_on(commands::notes::sync_notes_index(&db, &data_dir, None)) {
@@ -409,6 +396,7 @@ fn run_desktop() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
@@ -420,6 +408,9 @@ fn run_desktop() {
             let db_path = data_dir.join("profiles.db");
             let db = tauri::async_runtime::block_on(db::init_pool(&db_path))
                 .expect("Failed to initialize database");
+            if let Err(e) = tauri::async_runtime::block_on(sync::check_install_marker(&db, &data_dir)) {
+                eprintln!("sync: install marker check failed: {e}");
+            }
 
             // Load custom notes dir from settings (if set)
             let notes_custom_dir = tauri::async_runtime::block_on(
@@ -741,6 +732,7 @@ fn run_desktop() {
             ssh_key_generate,
             ssh_key_update,
             ssh_key_delete,
+            ssh_key_export_private,
             // SFTP file browser
             sftp_connect,
             sftp_disconnect,

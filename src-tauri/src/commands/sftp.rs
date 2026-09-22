@@ -10,7 +10,7 @@
 //! 2FA with TOTP auto-answer) are reused from `commands::ssh`.
 
 use crate::commands::ssh::{
-    do_authenticate, establish_transport, ssh_connection_get, SshInputCommand, TerminalHandler,
+    confirm_host_key, do_authenticate, establish_transport, ssh_connection_get, SshInputCommand, TerminalHandler,
 };
 use crate::error::{AppError, CmdResult};
 use crate::models::{format_octal, format_permissions, FileEntry};
@@ -86,6 +86,11 @@ fn emit_status(app: &AppHandle, connection_id: &str, status: &str, error: Option
 }
 
 // ── Path helpers (remote paths are POSIX strings, never PathBuf) ───────────────
+
+/// A single path component that cannot escape its parent directory.
+pub(crate) fn is_safe_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0'])
+}
 
 pub(crate) fn join_posix(dir: &str, name: &str) -> String {
     if dir.ends_with('/') {
@@ -225,7 +230,7 @@ async fn do_connect(
 
     let (jump, mut handle, received_fp) = tokio::time::timeout(
         timeout,
-        establish_transport(conn, proxy, config),
+        establish_transport(conn, proxy, config, &state.db),
     )
     .await
     .map_err(|_| anyhow::anyhow!("Connection timeout ({}s)", timeout.as_secs()))??;
@@ -243,6 +248,7 @@ async fn do_connect(
         .insert(conn.id.clone(), tx);
     let prompt_session_id = format!("sftp:{}", conn.id);
 
+    confirm_host_key(app, &prompt_session_id, conn, received_fp.as_deref(), &mut rx).await?;
     do_authenticate(
         &mut handle,
         app,
@@ -290,7 +296,8 @@ async fn list_dir(sess: &SftpSessionState, path: &str) -> anyhow::Result<Vec<Fil
 
     for item in dir {
         let name = item.file_name();
-        if name == "." || name == ".." {
+        // Server-supplied names: drop anything that could escape a directory.
+        if !is_safe_name(&name) {
             continue;
         }
         let md = item.metadata();

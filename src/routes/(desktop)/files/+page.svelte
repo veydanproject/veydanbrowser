@@ -61,13 +61,16 @@
 
 <ConflictDialog />
 
-<!-- Keyboard-interactive (2FA) prompt during SFTP connect -->
+<!-- Host-key trust question or keyboard-interactive (2FA) prompt during SFTP connect -->
 <Dialog
   open={filesStore.prompt !== null}
-  title={filesStore.prompt?.name || $t('files_prompt_title')}
+  title={filesStore.prompt?.hostKey ? $t('ssh_hostkey_title') : filesStore.prompt?.name || $t('files_prompt_title')}
   onclose={() => filesStore.cancelPrompt()}
 >
-  {#if filesStore.prompt}
+  {#if filesStore.prompt?.hostKey}
+    <p class="prompt-instructions">{$t('ssh_hostkey_text')}</p>
+    <code class="prompt-fingerprint">{filesStore.prompt.instructions}</code>
+  {:else if filesStore.prompt}
     {#if filesStore.prompt.instructions}
       <p class="prompt-instructions">{filesStore.prompt.instructions}</p>
     {/if}
@@ -82,8 +85,13 @@
     </div>
   {/if}
   {#snippet footer()}
-    <button class="btn btn-ghost" onclick={() => filesStore.cancelPrompt()}>{$t('cancel')}</button>
-    <button class="btn btn-primary" onclick={submitPrompt}>{$t('files_prompt_send')}</button>
+    {#if filesStore.prompt?.hostKey}
+      <button class="btn btn-ghost" onclick={() => filesStore.respondPrompt('no')}>{$t('ssh_hostkey_reject')}</button>
+      <button class="btn btn-primary" onclick={() => filesStore.respondPrompt('yes')}>{$t('ssh_hostkey_trust')}</button>
+    {:else}
+      <button class="btn btn-ghost" onclick={() => filesStore.cancelPrompt()}>{$t('cancel')}</button>
+      <button class="btn btn-primary" onclick={submitPrompt}>{$t('files_prompt_send')}</button>
+    {/if}
   {/snippet}
 </Dialog>
 
@@ -106,6 +114,16 @@
     margin-top: var(--sp-3);
   }
 
+  .prompt-fingerprint {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    word-break: break-all;
+    padding: 0.4rem 0.6rem;
+    border-radius: var(--radius-sm);
+    background: var(--surface-3);
+    color: var(--text);
+  }
   .prompt-instructions {
     margin-bottom: var(--sp-3);
     color: var(--text-2);

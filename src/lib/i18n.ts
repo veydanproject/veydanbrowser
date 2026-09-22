@@ -846,6 +846,8 @@ const translations = {
     settings_sync_leave_confirm: 'This device forgets the vault key and its sync position. Nothing is deleted from the storage or from local notes.',
     settings_sync_left: 'Left the vault.',
     settings_sync_change_passphrase: 'Change passphrase',
+    settings_sync_change_passphrase_hint:
+      'Only the passphrase is rewrapped; the vault master key stays the same. Anyone holding an older copy of manifest.json can still open the vault with the old passphrase. If it may have leaked, create a new vault instead.',
     settings_sync_passphrase_old: 'Current passphrase',
     settings_sync_passphrase_new: 'New passphrase',
     settings_sync_passphrase_changed: 'Passphrase changed. Other devices keep working; new devices use the new one.',
@@ -932,6 +934,10 @@ const translations = {
     ssh_btn_minimize: 'Minimize',
     ssh_btn_disconnect: 'Disconnect',
     ssh_btn_send: 'Send',
+    ssh_hostkey_title: 'Unknown host key',
+    ssh_hostkey_text: 'First connection to this server. Compare the fingerprint with the one shown by the server before trusting it.',
+    ssh_hostkey_trust: 'Trust and connect',
+    ssh_hostkey_reject: 'Reject',
     ssh_connecting: 'Connecting…',
     ssh_field_workspaces: 'Workspaces',
     ssh_hint_global: 'No workspace assigned — visible globally',
@@ -1003,6 +1009,9 @@ const translations = {
     ssh_key_selected_passphrase_hint: 'Stored passphrase will be used automatically',
     ssh_key_missing_warning: 'The previously selected key was deleted — pick another one',
     ssh_key_none_hint: 'No saved keys yet — add one on the SSH Keys tab',
+    secret_stored_placeholder: 'Stored — leave empty to keep',
+    secret_stored_hint: 'A value is stored. Type to replace it, or clear the field to remove it.',
+    secret_clear: 'Remove stored value',
 
     // Terminal page
     terminal_title: 'SSH Connections',
@@ -1912,6 +1921,8 @@ const translations = {
     settings_sync_leave_confirm: 'Устройство забудет ключ сейфа и позицию синка. В хранилище и в локальных заметках ничего не удаляется.',
     settings_sync_left: 'Сейф покинут.',
     settings_sync_change_passphrase: 'Сменить парольную фразу',
+    settings_sync_change_passphrase_hint:
+      'Меняется только парольная фраза, мастер-ключ хранилища остаётся прежним. Старая копия manifest.json по-прежнему открывается старой фразой. Если она могла утечь — создайте новое хранилище.',
     settings_sync_passphrase_old: 'Текущая фраза',
     settings_sync_passphrase_new: 'Новая фраза',
     settings_sync_passphrase_changed: 'Фраза изменена. Подключённые устройства продолжают работать, новые используют новую фразу.',
@@ -1998,6 +2009,10 @@ const translations = {
     ssh_btn_minimize: 'Свернуть',
     ssh_btn_disconnect: 'Отключить',
     ssh_btn_send: 'Отправить',
+    ssh_hostkey_title: 'Неизвестный ключ сервера',
+    ssh_hostkey_text: 'Первое подключение к этому серверу. Сравните отпечаток с тем, что показывает сервер, прежде чем доверять.',
+    ssh_hostkey_trust: 'Доверять и подключиться',
+    ssh_hostkey_reject: 'Отклонить',
     ssh_connecting: 'Подключение…',
     ssh_field_workspaces: 'Воркспейсы',
     ssh_hint_global: 'Без воркспейса — виден глобально',
@@ -2069,6 +2084,9 @@ const translations = {
     ssh_key_selected_passphrase_hint: 'Сохранённый passphrase будет использован автоматически',
     ssh_key_missing_warning: 'Выбранный ранее ключ был удалён — выберите другой',
     ssh_key_none_hint: 'Сохранённых ключей нет — добавьте на вкладке «SSH-ключи»',
+    secret_stored_placeholder: 'Сохранено — оставьте пустым, чтобы не менять',
+    secret_stored_hint: 'Значение сохранено. Введите новое, чтобы заменить, или очистите поле, чтобы удалить.',
+    secret_clear: 'Удалить сохранённое значение',
 
     // Terminal page
     terminal_title: 'SSH-подключения',

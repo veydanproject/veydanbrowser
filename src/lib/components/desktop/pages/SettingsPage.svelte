@@ -108,6 +108,7 @@
   let backupCfg = $state<BackupConfig>({
     dir: null,
     password: null,
+    has_password: false,
     schedule_enabled: false,
     schedule_mode: 'interval',
     interval_hours: 24,
@@ -213,7 +214,8 @@
 
   function openRestore(b: BackupFileInfo) {
     restoreTarget = b;
-    restorePassword = backupCfg.password ?? '';
+    // Empty = the backend uses the stored backup password.
+    restorePassword = '';
     restoreError = '';
   }
 
@@ -856,9 +858,12 @@
         class="field-input"
         type="password"
         bind:value={backupCfg.password}
-        placeholder={$t('settings_backup_password_placeholder')}
+        placeholder={backupCfg.has_password && backupCfg.password == null ? $t('secret_stored_placeholder') : $t('settings_backup_password_placeholder')}
         autocomplete="off"
       />
+      {#if backupCfg.has_password && backupCfg.password == null}
+        <button type="button" class="link-btn" onclick={() => (backupCfg.password = '')}>{$t('secret_clear')}</button>
+      {/if}
       <p class="muted small">{$t('settings_backup_password_note')}</p>
     </div>
 
@@ -923,7 +928,7 @@
       </button>
       <button
         class="btn btn-ghost btn-sm"
-        disabled={!isTauri || backupRunning || !backupCfg.dir || !backupCfg.password}
+        disabled={!isTauri || backupRunning || !backupCfg.dir || !(backupCfg.password || (backupCfg.has_password && backupCfg.password == null))}
         onclick={runBackupNow}
       >
         {backupRunning ? $t('settings_backup_running') : $t('settings_backup_run_now')}
@@ -1148,7 +1153,7 @@
         class="field-input"
         type="password"
         bind:value={restorePassword}
-        placeholder={$t('settings_backup_password')}
+        placeholder={backupCfg.has_password ? $t('secret_stored_placeholder') : $t('settings_backup_password')}
         autocomplete="off"
         disabled={restoring}
       />
@@ -1166,7 +1171,7 @@
       <button class="btn btn-ghost btn-sm" disabled={restoring} onclick={closeRestore}>
         {$t('settings_backup_cancel')}
       </button>
-      <button class="btn btn-danger btn-sm" disabled={!restorePassword || restoring} onclick={confirmRestore}>
+      <button class="btn btn-danger btn-sm" disabled={(!restorePassword && !backupCfg.has_password) || restoring} onclick={confirmRestore}>
         {restoring ? $t('settings_backup_restoring') : $t('settings_backup_restore_confirm')}
       </button>
     {/snippet}
@@ -1198,6 +1203,11 @@
   /* .muted uses global color; keep font-size delta */
   .muted { font-size: var(--fs-base); }
   .small { font-size: var(--fs-sm); }
+  .link-btn {
+    align-self: flex-start; background: none; border: none; padding: 0; cursor: pointer;
+    font-size: var(--fs-xs); color: var(--text-faint); text-decoration: underline;
+  }
+  .link-btn:hover { color: var(--text); }
   .ok-msg { font-size: var(--fs-sm); color: var(--success-text); }
   .warn-msg { font-size: var(--fs-sm); color: var(--warn-text); }
 
