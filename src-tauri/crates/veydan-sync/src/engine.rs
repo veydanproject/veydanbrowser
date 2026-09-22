@@ -38,6 +38,14 @@ pub struct Engine {
     keys: Keys,
 }
 
+fn name_key(device_id: &str) -> String {
+    format!("devices/{device_id}/name.bin")
+}
+
+fn name_ident(device_id: &str) -> String {
+    format!("device-name/{device_id}")
+}
+
 /// Snapshot (if the chain has a gap) plus every chunk past `head`.
 fn planned_gets(peer: &str, head: &PeerHead, all: &[String]) -> Vec<String> {
     let log_prefix = format!("devices/{peer}/log/");
@@ -129,6 +137,45 @@ impl Engine {
 
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    /// Write this device's display name if it changed. Ciphertext only.
+    pub async fn publish_device_name(&self, name: &str) -> Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(());
+        }
+        if self.read_device_name(&self.device_id).await?.as_deref() == Some(name) {
+            return Ok(());
+        }
+        let bytes = envelope::seal(
+            &self.keys.blob,
+            &self.vault_id,
+            Kind::Blob,
+            &name_ident(&self.device_id),
+            name.as_bytes(),
+        )?;
+        self.storage.put(&name_key(&self.device_id), &bytes).await
+    }
+
+    pub async fn read_device_name(&self, device_id: &str) -> Result<Option<String>> {
+        let Some(bytes) = self.storage.get(&name_key(device_id)).await? else { return Ok(None) };
+        let pt = envelope::open(&self.keys.blob, &self.vault_id, Kind::Blob, &name_ident(device_id), &bytes)?;
+        String::from_utf8(pt).map(Some).map_err(|e| SyncError::Format(e.to_string()))
+    }
+
+    /// Device ids under `devices/`, with the published name when the file is readable.
+    pub async fn list_device_cards(&self) -> Result<Vec<(String, String)>> {
+        let all = self.storage.list("devices/").await?;
+        let mut ids: Vec<String> = all.iter().filter_map(|k| device_from_key(k)).map(str::to_string).collect();
+        ids.sort();
+        ids.dedup();
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let name = self.read_device_name(&id).await.unwrap_or(None).unwrap_or_default();
+            out.push((id, name));
+        }
+        Ok(out)
     }
 
     /// Large files v2 over the same storage and key hierarchy.

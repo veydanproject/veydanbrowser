@@ -7,7 +7,7 @@
   import { page } from '$app/state';
   import Icon from '$lib/Icon.svelte';
   import {
-    api, formatError, onSyncChanged, onSyncStatus,
+    api, formatError, onNoteRemote,
     type NavChild, type Note, type NoteAttachment, type NoteChip, type NoteListItem, type NoteTag,
   } from '$lib/mobile/api';
   import { locale, t } from '$lib/mobile/i18n';
@@ -15,14 +15,18 @@
   import { onAttachmentTransfer } from '$lib/attachmentTransfer';
   import { AttachmentUrls, attachmentHref } from '$lib/mobile/markdown';
   import { fmtDateTime, fmtSize, loadEditorMode, saveEditorMode, type EditorMode } from '$lib/mobile/notes-editor';
+  import { onKeyboard } from '$lib/mobile/keyboard';
   import NoteRichEditor from '$lib/components/mobile/NoteRichEditor.svelte';
   import WikiLinkSheet from '$lib/components/mobile/WikiLinkSheet.svelte';
   import NoteActionsSheet from '$lib/components/mobile/NoteActionsSheet.svelte';
   import NoteHistorySheet from '$lib/components/mobile/NoteHistorySheet.svelte';
   import NoteLinksSheet from '$lib/components/mobile/NoteLinksSheet.svelte';
   import MoveFolderSheet from '$lib/components/mobile/MoveFolderSheet.svelte';
+  import WorkspaceSheet from '$lib/components/mobile/WorkspaceSheet.svelte';
+  import NoteLabelSheet from '$lib/components/mobile/NoteLabelSheet.svelte';
   import NoteAttachSheet from '$lib/components/mobile/NoteAttachSheet.svelte';
   import NoteConflictSheet from '$lib/components/mobile/NoteConflictSheet.svelte';
+  import ChipMark from '$lib/components/notes/ChipMark.svelte';
   import { WIKI_MARK, unclosedWikiAt, wikiMarkup } from '$lib/tiptap-ext';
 
   // "new" means nothing is stored yet; the note is created on the first edit.
@@ -42,14 +46,22 @@
   let ready = $state(untrack(() => id) === 'new');
 
   let mode = $state<EditorMode>(loadEditorMode());
-  let sheet = $state<'none' | 'actions' | 'links' | 'history' | 'move' | 'attach' | 'conflict'>('none');
+  let sheet = $state<'none' | 'actions' | 'links' | 'history' | 'move' | 'attach' | 'conflict' | 'workspace' | 'labels'>('none');
   // Unresolved sync conflict on this note; drives the banner.
   let hasConflict = $state(false);
   let allTags = $state<NoteTag[]>([]);
   let allNotes = $state<NoteListItem[]>([]);
   let folders = $state<NavChild[]>([]);
-  let tagInput = $state('');
-  let addingTag = $state(false);
+  let workspaces = $state<NavChild[]>([]);
+  let profiles = $state<NavChild[]>([]);
+  /** Bindings added on a note that is not saved yet. */
+  let extraBindings = $state<string[]>([]);
+  /** Inherited bindings the user turned off before the first save. */
+  let droppedBindings = $state<string[]>([]);
+  /** Folders picked before the note is saved. */
+  let extraFolders = $state<string[]>([]);
+  /** Inherited folder the user removed before the first save. */
+  let droppedFolders = $state<string[]>([]);
   let attachments = $state<NoteAttachment[]>([]);
   let thumbs = $state<Record<string, string>>({});
   let urls = $state(new AttachmentUrls(untrack(() => id)));
@@ -60,6 +72,9 @@
 
   let rich = $state<NoteRichEditor>();
   let body = $state<HTMLTextAreaElement>();
+  let scrollEl = $state<HTMLDivElement>();
+  /** IME overlap; 0 while the keyboard is closed. */
+  let kb = $state(0);
   /** Large vault transfers of this note's attachments, keyed by `note_id/name`. */
   let transfers = $state<Map<string, AttachmentTransfer>>(new Map());
   /** Vault-only attachments at or above this size ask before downloading. */
@@ -74,9 +89,149 @@
 
   let saveTimer: ReturnType<typeof setTimeout>;
   let saving: Promise<void> | null = null;
+  /** Ignore the watcher echo of our own write. */
+  let ownSaveAt = 0;
+  const CARET_GAP = 16;
+
+  /** Keep the caret line inside the area above the keyboard. */
+  function revealCaret() {
+    const sc = scrollEl;
+    const box = editorCaretBox();
+    if (!sc || !box) return;
+    const frame = visibleFrame(sc);
+    if (frame.bottom <= frame.top) return;
+    if (box.bottom > frame.bottom - CARET_GAP) sc.scrollTop += box.bottom - (frame.bottom - CARET_GAP);
+    else if (box.top < frame.top + CARET_GAP) sc.scrollTop -= frame.top + CARET_GAP - box.top;
+  }
+
+  /** Scrollport clipped to the visual viewport, so the keyboard does not count as visible. */
+  function visibleFrame(sc: HTMLElement): { top: number; bottom: number } {
+    const view = sc.getBoundingClientRect();
+    const vv = window.visualViewport;
+    const top = Math.max(view.top, vv?.offsetTop ?? 0);
+    const bottom = Math.min(view.bottom, (vv?.offsetTop ?? 0) + (vv?.height ?? view.bottom));
+    return { top, bottom };
+  }
+
+  function editorCaretBox(): { top: number; bottom: number } | null {
+    if (mode === 'rich') {
+      const pm = scrollEl?.querySelector('.ProseMirror');
+      const node = document.getSelection()?.anchorNode;
+      if (!pm || !node || !pm.contains(node)) return null;
+      return rich?.caretBox() ?? null;
+    }
+    if (document.activeElement !== body || !body) return null;
+    return textareaCaretBox(body);
+  }
+
+  /** Viewport box of the textarea caret. The selection API has no rect for it. */
+  function textareaCaretBox(ta: HTMLTextAreaElement): { top: number; bottom: number } {
+    const pos = ta.selectionDirection === 'backward' ? ta.selectionStart : ta.selectionEnd;
+    const cs = getComputedStyle(ta);
+    const mirror = document.createElement('div');
+    mirror.style.cssText = 'position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;white-space:pre-wrap;overflow-wrap:break-word;overflow:hidden';
+    mirror.style.boxSizing = 'border-box';
+    mirror.style.width = `${ta.clientWidth}px`;
+    mirror.style.font = cs.font;
+    mirror.style.lineHeight = cs.lineHeight;
+    mirror.style.letterSpacing = cs.letterSpacing;
+    mirror.style.padding = cs.padding;
+    mirror.style.border = cs.border;
+    mirror.textContent = ta.value.slice(0, pos);
+    const mark = document.createElement('span');
+    mark.textContent = '\u200b';
+    mirror.append(mark);
+    document.body.append(mirror);
+    const top = ta.getBoundingClientRect().top + mark.offsetTop - ta.scrollTop;
+    const height = mark.offsetHeight || parseFloat(cs.lineHeight) || 24;
+    mirror.remove();
+    return { top, bottom: top + height };
+  }
+
+  $effect(() => {
+    const sc = scrollEl;
+    const stop = onKeyboard((n) => {
+      kb = n;
+      requestAnimationFrame(revealCaret);
+    });
+    const onSel = () => requestAnimationFrame(revealCaret);
+    document.addEventListener('selectionchange', onSel);
+    sc?.addEventListener('input', onSel);
+    return () => {
+      stop();
+      document.removeEventListener('selectionchange', onSel);
+      sc?.removeEventListener('input', onSel);
+    };
+  });
 
   const folderChip = $derived(chips.find((c) => c.kind === 'folder'));
   const isNew = $derived(id === 'new');
+  const PROFILE_COLOR = '#8b7bff';
+
+  /** Folder or workspace/profile the list was showing when New was tapped. */
+  const createContext = $derived.by(() => {
+    if (!isNew) return { kind: '', id: '' };
+    return {
+      kind: page.url.searchParams.get('kind') ?? '',
+      id: page.url.searchParams.get('id') ?? '',
+    };
+  });
+  const inheritedBindings = $derived(
+    (createContext.kind === 'workspace' || createContext.kind === 'profile') && createContext.id
+      ? [`${createContext.kind}:${createContext.id}`]
+      : [],
+  );
+  const draftBindings = $derived(
+    [...new Set([...inheritedBindings, ...extraBindings])].filter((b) => !droppedBindings.includes(b)),
+  );
+  const inheritedFolderId = $derived(createContext.kind === 'folder' && createContext.id ? createContext.id : '');
+  const folderIds = $derived.by(() => {
+    if (!isNew) return chips.filter((c) => c.kind === 'folder').map((c) => c.id);
+    const ids = new Set(extraFolders);
+    if (inheritedFolderId && !droppedFolders.includes(inheritedFolderId)) ids.add(inheritedFolderId);
+    for (const id of droppedFolders) ids.delete(id);
+    return [...ids];
+  });
+  const activeBindings = $derived(
+    isNew
+      ? draftBindings
+      : chips
+          .filter((c) => c.kind === 'workspace' || c.kind === 'profile' || c.kind === 'domain')
+          .map((c) => `${c.kind}:${c.id}`),
+  );
+  const workspaceIds = $derived(
+    isNew
+      ? draftBindings.filter((b) => b.startsWith('workspace:')).map((b) => b.slice('workspace:'.length))
+      : chips.filter((c) => c.kind === 'workspace').map((c) => c.id),
+  );
+
+  function bindingChip(binding: string): NoteChip | null {
+    if (binding.startsWith('workspace:')) {
+      const wsId = binding.slice('workspace:'.length);
+      const w = workspaces.find((x) => x.id === wsId);
+      return w ? { kind: 'workspace', id: wsId, label: w.name, color: w.color } : null;
+    }
+    if (binding.startsWith('profile:')) {
+      const profileId = binding.slice('profile:'.length);
+      const p = profiles.find((x) => x.id === profileId);
+      return p ? { kind: 'profile', id: profileId, label: p.name, color: PROFILE_COLOR } : null;
+    }
+    return null;
+  }
+
+  function folderChipOf(folderId: string): NoteChip | null {
+    const f = folders.find((x) => x.id === folderId);
+    return f ? { kind: 'folder', id: folderId, label: f.name, color: f.color } : null;
+  }
+
+  const shownChips = $derived(
+    isNew
+      ? [
+          ...folderIds.map(folderChipOf).filter((c): c is NoteChip => !!c),
+          ...draftBindings.map(bindingChip).filter((c): c is NoteChip => !!c),
+        ]
+      : chips.filter((c) => c.kind !== 'tag'),
+  );
 
   function applyNote(n: Note) {
     title = n.title;
@@ -151,7 +306,11 @@
   function loadCatalogs() {
     api.notes.tags().then((x) => (allTags = x)).catch(() => {});
     api.notes.list().then((x) => (allNotes = x)).catch(() => {});
-    api.notes.nav().then((x) => (folders = x.folders)).catch(() => {});
+    api.notes.nav().then((x) => {
+      folders = x.folders;
+      workspaces = x.all_workspaces;
+      profiles = x.all_profiles;
+    }).catch(() => {});
   }
 
   async function refreshConflict() {
@@ -180,19 +339,17 @@
       }
     });
     loadCatalogs();
-    // Remote edit arrived while open: reload unless local edits are pending.
-    const unlisten = onSyncChanged(['note', 'note_attachment', 'note_tag', 'workspace', 'profile', 'note_folder'], () => {
-      if (status !== 'dirty' && status !== 'saving') load();
-      loadCatalogs();
+    const unRemote = onNoteRemote((changedId) => {
+      if (changedId !== id || status === 'dirty' || status === 'saving') return;
+      if (Date.now() - ownSaveAt < 2000) return;
+      void load().then(() => refreshConflict());
     });
-    const unStatus = onSyncStatus(() => void refreshConflict());
     const unTransfer = onAttachmentTransfer((all) => {
       transfers = new Map([...all].filter(([, x]) => x.note_id === id));
       if ([...all.values()].some((x) => x.note_id === id && x.finished)) void loadAttachments();
     });
     return () => {
-      unlisten.then((f) => f());
-      unStatus.then((f) => f());
+      unRemote.then((f) => f());
       unTransfer.then((f) => f());
     };
   });
@@ -216,6 +373,10 @@
     content = '';
     tags = [];
     chips = [];
+    extraBindings = [];
+    droppedBindings = [];
+    extraFolders = [];
+    droppedFolders = [];
     pinned = false;
     archived = false;
     attachments = [];
@@ -259,7 +420,10 @@
     const pos = body?.selectionStart ?? content.length;
     const before = content.slice(0, pos);
     const open = unclosedWikiAt(before);
-    if (open < 0) return;
+    if (open < 0) {
+      wikiOpen = false;
+      return;
+    }
     wikiStart = open;
     wikiQuery = before.slice(open + WIKI_MARK.length);
     wikiOpen = true;
@@ -303,40 +467,101 @@
     void goto(`/notes/${noteId}`);
   }
 
-  // ── Tags ──
+  // ── Tags, folders, workspaces ──
 
-  const tagCloud = $derived.by(() => {
-    const q = tagInput.trim().toLowerCase().replace(/^#/, '');
-    return allTags
-      .filter((x) => !tags.includes(x.name) && (!q || x.name.toLowerCase().includes(q)))
-      .map((x) => x.name);
-  });
-  const canCreateTag = $derived.by(() => {
-    const name = tagInput.trim().replace(/^#/, '');
-    if (!name || tags.includes(name)) return false;
-    return !allTags.some((x) => x.name.toLowerCase() === name.toLowerCase());
-  });
-
-  function pickTag(name: string) {
+  async function addTag(name: string, color?: string) {
     const n = name.trim().replace(/^#/, '');
-    if (!n || tags.includes(n)) return;
-    tags = [...tags, n];
-    tagInput = '';
-    onEdit();
-  }
-
-  function addTag() {
-    pickTag(tagInput);
-  }
-
-  function closeTagInput() {
-    tagInput = '';
-    addingTag = false;
+    if (!n || tags.includes(n)) {
+      sheet = 'none';
+      return;
+    }
+    const existing = allTags.find((t) => t.name === n);
+    try {
+      if (!existing && color) {
+        const created = await api.notes.tagCreate(n, color);
+        allTags = [...allTags, created];
+      }
+      tags = [...tags, existing?.name ?? n];
+      onEdit();
+      sheet = 'none';
+    } catch (e) {
+      error = formatError(e);
+    }
   }
 
   function removeTag(name: string) {
     tags = tags.filter((x) => x !== name);
     onEdit();
+  }
+
+  async function addFolder(folderId: string) {
+    if (folderIds.includes(folderId)) {
+      sheet = 'none';
+      return;
+    }
+    if (id === 'new') {
+      droppedFolders = droppedFolders.filter((x) => x !== folderId);
+      if (folderId !== inheritedFolderId && !extraFolders.includes(folderId)) {
+        extraFolders = [...extraFolders, folderId];
+      }
+      sheet = 'none';
+      return;
+    }
+    busy = true;
+    try {
+      await api.notes.addFolder(id, folderId);
+      chips = (await api.notes.get(id)).chips;
+      sheet = 'none';
+    } catch (e) {
+      error = formatError(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function removeFolder(folderId: string) {
+    if (id === 'new') {
+      extraFolders = extraFolders.filter((x) => x !== folderId);
+      if (folderId === inheritedFolderId && !droppedFolders.includes(folderId)) {
+        droppedFolders = [...droppedFolders, folderId];
+      }
+      return;
+    }
+    busy = true;
+    try {
+      await api.notes.removeFolder(id, folderId);
+      chips = (await api.notes.get(id)).chips;
+    } catch (e) {
+      error = formatError(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function addBinding(binding: string) {
+    if (binding.startsWith('workspace:')) {
+      await setWorkspace(binding.slice('workspace:'.length), true);
+      sheet = 'none';
+      return;
+    }
+    if (id === 'new') {
+      droppedBindings = droppedBindings.filter((b) => b !== binding);
+      if (!extraBindings.includes(binding) && !inheritedBindings.includes(binding)) {
+        extraBindings = [...extraBindings, binding];
+      }
+      sheet = 'none';
+      return;
+    }
+    busy = true;
+    try {
+      await api.notes.addBinding(id, binding);
+      chips = (await api.notes.get(id)).chips;
+      sheet = 'none';
+    } catch (e) {
+      error = formatError(e);
+    } finally {
+      busy = false;
+    }
   }
 
   // ── Attachments ──
@@ -415,17 +640,23 @@
             status = 'idle';
             return;
           }
-          const n = await api.notes.create(title, content, tags);
+          const bindings = draftBindings;
+          const foldersToApply = folderIds;
+          const n = await api.notes.create(title, content, tags, bindings);
           id = n.id;
+          for (const folderId of foldersToApply) await api.notes.addFolder(id, folderId);
+          const fresh = await api.notes.get(id);
           urls = new AttachmentUrls(id);
-          createdAt = n.created_at;
-          updatedAt = n.updated_at;
+          chips = fresh.chips;
+          createdAt = fresh.created_at;
+          updatedAt = fresh.updated_at;
           replaceState(`/notes/${id}`, {});
         } else {
           const n = await api.notes.update(id, { title, content, tags });
           updatedAt = n.updated_at;
           chips = n.chips;
         }
+        ownSaveAt = Date.now();
         status = 'saved';
       } catch (e) {
         error = formatError(e);
@@ -444,9 +675,36 @@
       const n = await api.notes.update(id, input);
       pinned = n.pinned;
       archived = n.archived;
-      api.sync.trigger().catch(() => {});
     } catch (e) {
       error = formatError(e);
+    }
+  }
+
+  async function setWorkspace(wsId: string, on: boolean) {
+    const binding = `workspace:${wsId}`;
+    if (id === 'new') {
+      if (on) {
+        droppedBindings = droppedBindings.filter((b) => b !== binding);
+        if (!extraBindings.includes(binding) && !inheritedBindings.includes(binding)) {
+          extraBindings = [...extraBindings, binding];
+        }
+      } else {
+        extraBindings = extraBindings.filter((b) => b !== binding);
+        if (inheritedBindings.includes(binding) && !droppedBindings.includes(binding)) {
+          droppedBindings = [...droppedBindings, binding];
+        }
+      }
+      return;
+    }
+    busy = true;
+    try {
+      if (on) await api.notes.addBinding(id, binding);
+      else await api.notes.removeBinding(id, binding);
+      chips = (await api.notes.get(id)).chips;
+    } catch (e) {
+      error = formatError(e);
+    } finally {
+      busy = false;
     }
   }
 
@@ -457,7 +715,6 @@
       const n = await api.notes.get(id);
       chips = n.chips;
       sheet = 'none';
-      api.sync.trigger().catch(() => {});
     } catch (e) {
       error = formatError(e);
     } finally {
@@ -491,7 +748,7 @@
   });
 </script>
 
-<div class="editor">
+<div class="editor" style:padding-bottom={kb > 0 ? `max(${kb}px, calc(72px + var(--sab)))` : undefined}>
   <div class="m-header">
     <button class="m-ibtn" onclick={back} aria-label={$t('common_back')}>
       <Icon name="chevron-left" size={24} />
@@ -538,39 +795,20 @@
       <div class="m-error">{error}</div>
     {/if}
     <div class="m-chips tags">
-      {#each chips.filter((c) => c.kind !== 'tag' && c.kind !== 'folder') as c (c.kind + c.id)}
-        <span class="m-chip small" class:ws={c.kind === 'workspace'} style:--chip={c.color}>{c.label}</span>
+      {#each shownChips as c (c.kind + c.id)}
+        {#if c.kind === 'folder'}
+          <button type="button" class="m-chip small" style:--chip={c.color} onclick={() => removeFolder(c.id)}><ChipMark kind="folder" />{c.label}</button>
+        {:else}
+          <span class="m-chip small" class:ws={c.kind === 'workspace'} style:--chip={c.color}><ChipMark kind={c.kind} />{c.label}</span>
+        {/if}
       {/each}
       {#each tags as name (name)}
-        <button type="button" class="m-chip" onclick={() => removeTag(name)} aria-label={$t('notes_tag_add')}>#{name}</button>
+        <button type="button" class="m-chip" style:--chip={allTags.find((t) => t.name === name)?.color} onclick={() => removeTag(name)} aria-label={$t('notes_tag_add')}><ChipMark kind="tag" />{name}</button>
       {/each}
-      {#if addingTag}
-        <input
-          class="tag-input"
-          bind:value={tagInput}
-          onblur={closeTagInput}
-          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } if (e.key === 'Escape') closeTagInput(); }}
-          placeholder={$t('notes_tag_add')}
-          {@attach (el: HTMLInputElement) => el.focus()}
-        />
-      {:else}
-        <button class="m-chip add" onclick={() => (addingTag = true)} aria-label={$t('notes_tag_add')}>
-          <Icon name="plus" size={14} />
-        </button>
-      {/if}
+      <button class="m-chip add" onclick={() => (sheet = 'labels')} aria-label={$t('notes_tags_add')}>
+        <Icon name="plus" size={14} />
+      </button>
     </div>
-    {#if addingTag}
-      <div class="m-chips cloud">
-        {#each tagCloud as name (name)}
-          <button type="button" class="m-chip" onpointerdown={(e) => { e.preventDefault(); pickTag(name); }}>#{name}</button>
-        {/each}
-        {#if canCreateTag}
-          <button type="button" class="m-chip add-new" onpointerdown={(e) => { e.preventDefault(); addTag(); }}>
-            <Icon name="plus" size={14} /> #{tagInput.trim().replace(/^#/, '')}
-          </button>
-        {/if}
-      </div>
-    {/if}
     {#if updatedAt}
       <span class="when">{fmtDateTime(updatedAt, $locale)}</span>
     {/if}
@@ -593,7 +831,7 @@
     {/if}
   </div>
 
-  <div class="scroll">
+  <div class="scroll" bind:this={scrollEl}>
   {#if !ready}
     <div class="body"></div>
   {:else if mode === 'rich'}
@@ -603,7 +841,7 @@
       {resolveSrc}
       placeholder={$t('notes_body_placeholder')}
       onchange={onRichChange}
-      onwiki={(q) => { if (q !== null) { wikiQuery = q; wikiOpen = true; } }}
+      onwiki={(q) => { wikiOpen = q !== null; if (q !== null) wikiQuery = q; }}
       onwikilink={openWikiLink}
     />
   {:else}
@@ -643,8 +881,8 @@
   onpin={() => setFlags({ pinned: !pinned })}
   onarchive={() => setFlags({ archived: !archived })}
   onmove={() => (sheet = 'move')}
+  onworkspace={() => (sheet = 'workspace')}
   ondelete={remove}
-  onsynced={() => { if (status !== 'dirty' && status !== 'saving') load(); }}
 />
 <NoteLinksSheet open={sheet === 'links'} noteId={id} onclose={() => (sheet = 'none')} onopen={openNote} />
 <NoteHistorySheet
@@ -661,6 +899,29 @@
   {busy}
   onclose={() => (sheet = 'none')}
   onmove={moveTo}
+/>
+<WorkspaceSheet
+  open={sheet === 'workspace'}
+  {workspaces}
+  current={workspaceIds}
+  {busy}
+  onclose={() => (sheet = 'none')}
+  ontoggle={setWorkspace}
+/>
+<NoteLabelSheet
+  open={sheet === 'labels'}
+  tags={allTags}
+  selectedTags={tags}
+  {folders}
+  {folderIds}
+  {workspaces}
+  {profiles}
+  bindings={activeBindings}
+  {busy}
+  onclose={() => (sheet = 'none')}
+  onaddTag={addTag}
+  onaddFolder={addFolder}
+  onaddBinding={addBinding}
 />
 <NoteAttachSheet
   open={sheet === 'attach'}
@@ -700,7 +961,8 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    padding: 0 0 calc(72px + env(safe-area-inset-bottom));
+    padding: 0 0 calc(72px + var(--sab));
+    background: var(--bg);
     animation: vfade var(--dur-base) ease-out;
   }
   .m-header {
@@ -711,7 +973,7 @@
   }
   .meta {
     flex-shrink: 0;
-    padding: 0 var(--sp-4) var(--sp-2);
+    padding: var(--sp-2) var(--sp-4) var(--sp-2);
     background: var(--bg);
   }
   .conflict-banner {
@@ -750,7 +1012,7 @@
     min-height: 0;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    padding: 0 var(--sp-4);
+    padding: var(--sp-3) var(--sp-4);
   }
   .crumb {
     flex: 1;
@@ -816,17 +1078,6 @@
   .editor :global(.ProseMirror) { overflow: visible; min-height: 200px; font-size: 16px; line-height: 1.55; }
 
   .tags { margin-bottom: var(--sp-2); }
-  .cloud { margin-bottom: var(--sp-2); }
-  .m-chip.add-new { width: auto; padding: 0 12px; }
-  .tag-input {
-    width: 8em;
-    min-height: 28px;
-    padding: 0 10px;
-    font-size: 13px;
-    border: 0;
-    border-radius: 999px;
-    background: var(--m-field);
-  }
 
   .toolbar {
     position: fixed;
@@ -837,8 +1088,8 @@
     display: flex;
     justify-content: space-around;
     align-items: center;
-    height: calc(56px + env(safe-area-inset-bottom));
-    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(56px + var(--sab));
+    padding-bottom: var(--sab);
     background: var(--m-nav);
     border-top: 1px solid var(--border);
   }

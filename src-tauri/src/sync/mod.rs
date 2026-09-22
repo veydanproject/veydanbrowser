@@ -29,7 +29,7 @@ use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use chrono::Utc;
 use config::{build_storage, load_binding, load_config, VaultBinding};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -154,6 +154,8 @@ pub struct SyncStatus {
     pub profile_leases: Vec<LeaseInfo>,
     /// Remote ops received in the last cycle.
     pub last_applied: Option<u64>,
+    /// Devices seen in storage on the last background cycle.
+    pub storage_devices: Vec<StorageDevice>,
     pub gc_last: Option<String>,
     pub blobs_total: Option<u64>,
     pub blobs_removed_last_gc: Option<u64>,
@@ -198,8 +200,7 @@ pub async fn sync_create_vault(passphrase: String, app: AppHandle, state: tauri:
     let device = config::device_id(db).await?;
     let storage = build_storage(&cfg)?;
     let (engine, vmk) = Engine::create(storage, &passphrase, &device).await.map_err(AppError::other)?;
-    bind(db, engine.vault_id(), &vmk).await?;
-    let _ = app.emit(EVENT_STATUS, ());
+    finish_join(&app, db, engine.vault_id(), &vmk).await?;
     status(&state).await
 }
 
@@ -211,9 +212,36 @@ pub async fn sync_join_vault(passphrase: String, app: AppHandle, state: tauri::S
     let device = config::device_id(db).await?;
     let storage = build_storage(&cfg)?;
     let (engine, vmk) = Engine::open(storage, &passphrase, &device).await.map_err(AppError::other)?;
-    bind(db, engine.vault_id(), &vmk).await?;
-    let _ = app.emit(EVENT_STATUS, ());
+    finish_join(&app, db, engine.vault_id(), &vmk).await?;
     status(&state).await
+}
+
+/// Save the binding and start a cycle without blocking the caller.
+async fn finish_join(app: &AppHandle, db: &sqlx::Pool<sqlx::Sqlite>, vault_id: &str, vmk: &Vmk) -> CmdResult<()> {
+    bind(db, vault_id, vmk).await?;
+    let _ = app.emit(EVENT_STATUS, ());
+    trigger_cycle(app);
+    Ok(())
+}
+
+/// One device found under `devices/` on the last cycle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageDevice {
+    pub id: String,
+    pub name: String,
+    pub own: bool,
+}
+
+async fn cached_devices(db: &sqlx::Pool<sqlx::Sqlite>, own_id: &str, own_name: &str) -> Vec<StorageDevice> {
+    let raw = config::get_setting(db, "sync_devices").await.unwrap_or_default();
+    let mut list: Vec<StorageDevice> = serde_json::from_str(&raw).unwrap_or_default();
+    for d in &mut list {
+        d.own = d.id == own_id;
+        if d.own && d.name.is_empty() {
+            d.name = own_name.to_string();
+        }
+    }
+    list
 }
 
 async fn bind(db: &sqlx::Pool<sqlx::Sqlite>, vault_id: &str, vmk: &Vmk) -> CmdResult<()> {
@@ -387,8 +415,9 @@ async fn status(state: &AppState) -> CmdResult<SyncStatus> {
         joined: binding.is_some(),
         running: state.sync.running.load(Ordering::SeqCst),
         vault_id: binding.map(|b| b.vault_id),
-        device_id,
+        device_id: device_id.clone(),
         peers: local.peers.len(),
+        storage_devices: cached_devices(db, &device_id, &cfg.device_name).await,
         last_run: config::get_setting(db, "sync_last_run").await,
         last_error: config::get_setting(db, "sync_last_error").await.filter(|s| !s.is_empty()),
         last_warning: config::get_setting(db, "sync_last_warning").await.filter(|s| !s.is_empty()),
@@ -651,6 +680,27 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     }
     #[cfg(mobile)]
     let _ = clean;
+
+    if let Err(e) = engine.publish_device_name(&cfg.device_name).await {
+        warnings.push(format!("device name: {e}"));
+    }
+    match engine.list_device_cards().await {
+        Ok(cards) => {
+            let own = engine.device_id();
+            let devices: Vec<StorageDevice> = cards
+                .into_iter()
+                .map(|(id, name)| StorageDevice {
+                    own: id == own,
+                    name: if id == own && name.is_empty() { cfg.device_name.clone() } else { name },
+                    id,
+                })
+                .collect();
+            if let Ok(json) = serde_json::to_string(&devices) {
+                config::set_setting(db, "sync_devices", &json).await?;
+            }
+        }
+        Err(e) => warnings.push(format!("device list: {e}")),
+    }
 
     Ok(warnings)
 }

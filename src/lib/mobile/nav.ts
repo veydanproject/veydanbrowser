@@ -30,10 +30,21 @@ export function rootNav(): NavItem[] {
   ];
 }
 
-export function notesNav(onmore: () => void): NavItem[] {
+const NEW_NOTE_KINDS = new Set(['folder', 'workspace', 'profile']);
+
+/** Keep the open folder, workspace, or profile on the new-note route. */
+export function newNoteHref(url: URL): string {
+  if (url.pathname !== '/notes') return '/notes/new';
+  const kind = url.searchParams.get('kind') ?? '';
+  const id = url.searchParams.get('id') ?? '';
+  if (!id || !NEW_NOTE_KINDS.has(kind)) return '/notes/new';
+  return `/notes/new?${new URLSearchParams({ kind, id })}`;
+}
+
+export function notesNav(onmore: () => void, newHref = '/notes/new'): NavItem[] {
   return [
     { id: 'notes', title: 'app_notes', icon: 'file-text', href: '/notes' },
-    { id: 'new', title: 'nav_new', icon: 'file-plus', href: '/notes/new' },
+    { id: 'new', title: 'nav_new', icon: 'file-plus', href: newHref },
     { id: 'tags', title: 'notes_tags', icon: 'tag', href: '/notes/tags' },
     { id: 'more', title: 'nav_more', icon: 'more-horizontal', onclick: onmore },
   ];

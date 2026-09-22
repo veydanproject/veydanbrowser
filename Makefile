@@ -1,6 +1,6 @@
 .PHONY: dev update push clean \
 	alpha beta rc release linux windows macos android ios \
-	android-dev android-test android-release android-devices
+	android-dev android-test android-release android-devices android-screenshot
 
 # Flags for `make push alpha|beta|rc|release [linux] [windows] [macos] [android] [ios]`
 alpha beta rc release linux windows macos android ios:
@@ -32,6 +32,14 @@ android-release:
 
 android-devices:
 	@bash -c 'source scripts/android/android-env.sh && adb devices'
+
+# usage: make android-screenshot  → screenshots/N.png (next free number)
+android-screenshot:
+	@bash -c 'source scripts/android/android-env.sh && \
+		mkdir -p screenshots && \
+		n=1; while [ -e "screenshots/$$n.png" ]; do n=$$((n+1)); done; \
+		OUT="screenshots/$$n.png" && \
+		adb exec-out screencap -p > "$$OUT" && echo ">> $$OUT"'
 
 update:
 	@bash update.sh

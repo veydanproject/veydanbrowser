@@ -36,7 +36,7 @@
 
   type FolderNode = { item: NavChild; children: FolderNode[]; total: number };
 
-  // Root folders are "spaces"; their children are the folders shown under them.
+  // Folder tree. Children nest under their parent.
   const spaces = $derived.by((): FolderNode[] => {
     const folders = nav?.folders ?? [];
     const map = new Map<string, FolderNode>();
@@ -55,7 +55,7 @@
     return roots;
   });
 
-  const hasBrowser = $derived(!!nav && (nav.workspaces.length > 0 || nav.sites.length > 0));
+  const hasBrowser = $derived(!!nav && (nav.workspaces.length > 0 || nav.counts.global > 0));
 
   function swatch(color: string | undefined): string {
     const c = (color ?? '').trim();
@@ -113,7 +113,6 @@
         onselect({ kind: 'folder', id: f.id });
       }
       edit = null;
-      api.sync.trigger().catch(() => {});
       onchange();
     } catch (e) {
       error = formatError(e);
@@ -132,7 +131,6 @@
       if (kind === 'folder') await api.notes.folderDelete(id);
       else await api.notes.smartViewDelete(id);
       if (filter.kind === kind && filter.id === id) onselect({ kind: 'all' });
-      api.sync.trigger().catch(() => {});
       onchange();
     } catch (e) {
       error = formatError(e);
@@ -180,7 +178,7 @@
         </section>
 
         <section>
-          <div class="m-label">{$t('notes_spaces')}</div>
+          <div class="m-label">{$t('notes_filter_folders')}</div>
           {#each spaces as node (node.item.id)}
             {@render space(node)}
           {/each}
@@ -217,14 +215,20 @@
                   </button>
                 {/each}
               {/each}
-              {#each nav.sites as s (s.id)}
-                <button class="item" class:on={active('domain', s.id)} onclick={() => pick('domain', s.id)}>
-                  <Icon name="globe" size={18} />
-                  <span class="name">{s.name}</span>
-                  <span class="n">{s.count}</span>
-                </button>
-              {/each}
             {/if}
+          </section>
+        {/if}
+
+        {#if nav.sites.length}
+          <section>
+            <div class="m-label">{$t('notes_filter_sites')}</div>
+            {#each nav.sites as s (s.id)}
+              <button class="item" class:on={active('domain', s.id)} onclick={() => pick('domain', s.id)}>
+                <Icon name="globe" size={18} />
+                <span class="name">{s.name}</span>
+                <span class="n">{s.count}</span>
+              </button>
+            {/each}
           </section>
         {/if}
 
@@ -286,7 +290,7 @@
     viewId={smartId}
     {nav}
     onclose={() => (smartOpen = false)}
-    onsaved={(id) => { onselect({ kind: 'smart', id }); api.sync.trigger().catch(() => {}); onchange(); }}
+    onsaved={(id) => { onselect({ kind: 'smart', id }); onchange(); }}
   />
 {/if}
 
@@ -338,7 +342,7 @@
     z-index: 51;
     display: flex;
     flex-direction: column;
-    padding-top: env(safe-area-inset-top);
+    padding-top: var(--sat);
     animation: slide var(--dur-drawer) var(--ease-drawer);
     border-radius: 0 24px 24px 0;
   }
@@ -358,7 +362,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 var(--sp-3) calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--sp-6));
+    padding: 0 var(--sp-3) calc(var(--nav-h) + var(--sab) + var(--sp-6));
   }
   section { display: flex; flex-direction: column; }
   section + section { margin-top: var(--sp-2); }

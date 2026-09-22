@@ -34,6 +34,9 @@
   let axis: 'x' | 'y' | null = null;
   let pressTimer: ReturnType<typeof setTimeout> | undefined;
   let suppressTap = false;
+  let tagDrag = false;
+
+  const tagChips = $derived(note.chips.filter((c) => c.kind === 'tag'));
 
   type Btn = { action: RowAction; icon: string; label: Key; danger?: boolean };
   const buttons = $derived.by((): Btn[] => {
@@ -169,6 +172,20 @@
         </span>
       </span>
       {#if note.preview}<span class="preview">{note.preview}</span>{/if}
+      {#if tagChips.length}
+        <!-- Horizontal strip: don't let the card swipe steal the drag. -->
+        <span
+          class="tags"
+          ontouchstart={(e) => { tagDrag = false; e.stopPropagation(); }}
+          ontouchmove={(e) => { tagDrag = true; e.stopPropagation(); }}
+          ontouchend={(e) => e.stopPropagation()}
+          onclick={(e) => { if (tagDrag) { e.stopPropagation(); e.preventDefault(); } }}
+        >
+          {#each tagChips as c (c.id)}
+            <span class="m-chip small" style:--chip={c.color}>{c.label}</span>
+          {/each}
+        </span>
+      {/if}
     </span>
   </button>
 </div>
@@ -209,4 +226,15 @@
     transition: transform var(--dur-base) var(--ease);
   }
   .m-note.dragging { transition: none; }
+  .tags {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    min-width: 0;
+    margin-top: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    touch-action: pan-x pan-y;
+  }
+  .tags::-webkit-scrollbar { display: none; }
 </style>

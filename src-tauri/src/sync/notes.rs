@@ -132,14 +132,16 @@ pub async fn collect_local_changes(engine: &Engine, state: &AppState, clock: &mu
     for row in &rows {
         let prev = states.remove(&row.id);
         if row.deleted != 0 {
-            // Only propagate deletes of notes the vault knows about.
-            if let Some(mut st) = prev.filter(|s| !s.deleted) {
-                let hlc = clock.now();
-                out.ops.push(delete_op(&row.id, hlc.clone(), vec![st.head_blob.clone()]));
-                st.deleted = true;
-                st.head_hlc = Some(hlc);
-                out.states.push(st);
+            // Tombstone once; a note the vault never saw gets one without parents.
+            if prev.as_ref().map(|s| s.deleted).unwrap_or(false) {
+                continue;
             }
+            let mut st = prev.unwrap_or_else(|| NoteSyncState { note_id: row.id.clone(), ..Default::default() });
+            let hlc = clock.now();
+            out.ops.push(delete_op(&row.id, hlc.clone(), head_parents(&st)));
+            st.deleted = true;
+            st.head_hlc = Some(hlc);
+            out.states.push(st);
             continue;
         }
         // An unresolved conflict holds the note back; resolving clears the flag.
@@ -247,6 +249,8 @@ pub async fn apply_remote(
     let mut outcome = ApplyOutcome::default();
     let total = ops.iter().filter(|op| op.entity_type == ENTITY && !op.deleted && valid_id(&op.entity_id)).count() as u32;
     let mut current = 0u32;
+    // Notes trashed on this device that a newer remote put tried to revive.
+    let mut reassert: Vec<String> = Vec::new();
 
     for op in ops {
         if op.entity_type != ENTITY || !valid_id(&op.entity_id) {
@@ -283,6 +287,14 @@ pub async fn apply_remote(
             total,
             &id,
         );
+        // Our own delete wins over a newer remote put; a peer's tombstone may be
+        // undone by a put, since that is how a restore on another device arrives.
+        if deleted_here(engine, prev.as_ref(), row.as_ref()) {
+            if !reassert.contains(&id) {
+                reassert.push(id);
+            }
+            continue;
+        }
         let Some(remote_raw) = engine.get_blob(&payload.blob).await.map_err(AppError::other)? else {
             // Chunk arrived before its blob; deliver the rest again next cycle.
             outcome.retry = Some(format!("blob for note {id} not available yet"));
@@ -428,7 +440,41 @@ pub async fn apply_remote(
         .await?;
         outcome.changed.push(id);
     }
+
+    // The clock already observed every pulled op, so these tombstones sort after the puts.
+    if !reassert.is_empty() {
+        let mut ops = Vec::new();
+        let mut states = Vec::new();
+        for id in &reassert {
+            let mut st = load_note_state(db, id).await?.unwrap_or_else(|| NoteSyncState { note_id: id.clone(), ..Default::default() });
+            let hlc = clock.now();
+            ops.push(delete_op(id, hlc.clone(), head_parents(&st)));
+            st.deleted = true;
+            st.conflict = false;
+            st.head_hlc = Some(hlc);
+            states.push(st);
+        }
+        engine.push(local, ops).await.map_err(AppError::other)?;
+        super::state::save_own_state(db, local, &clock.last()).await?;
+        for st in &states {
+            save_note_state(db, st).await?;
+        }
+    }
     Ok(outcome)
+}
+
+/// Tombstone parents: the last known head, if any.
+fn head_parents(st: &NoteSyncState) -> Vec<String> {
+    std::iter::once(st.head_blob.clone()).filter(|b| !b.is_empty()).collect()
+}
+
+/// True when this device trashed the note: its own tombstone is the head, or
+/// the row went to the trash after the tombstone was collected.
+fn deleted_here(engine: &Engine, prev: Option<&NoteSyncState>, row: Option<&NoteHead>) -> bool {
+    match prev {
+        Some(s) if s.deleted => s.head_hlc.as_ref().map(|h| h.device_id == engine.device_id()).unwrap_or(false),
+        _ => row.map(|r| r.deleted != 0).unwrap_or(false),
+    }
 }
 
 /// Conflict snapshot for the UI; `token` ties a resolution to this exact state.

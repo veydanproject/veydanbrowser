@@ -246,6 +246,17 @@
   export function insertText(text: string) {
     editor?.chain().focus().insertContent(text).run();
   }
+
+  /** Viewport box of the caret line, so the page can keep it above the keyboard. */
+  export function caretBox(): { top: number; bottom: number } | null {
+    if (!editor) return null;
+    try {
+      const c = editor.view.coordsAtPos(editor.state.selection.head);
+      return { top: c.top, bottom: c.bottom };
+    } catch {
+      return null;
+    }
+  }
 </script>
 
 <div class="rich">
@@ -385,7 +396,7 @@
     width: 100%;
     height: 100%;
     margin: 0;
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    padding: var(--sat) var(--sar) var(--sab) var(--sal);
     border: 0;
     border-radius: 0;
     background: rgba(0, 0, 0, 0.92);

@@ -3,7 +3,7 @@
   "productName": "Veydan",
   "identifier": "net.veydan.mobile",
   "build": {
-    "devUrl": "http://localhost:1420"
+    "devUrl": "http://localhost:1430"
   },
   "app": {
     "windows": [

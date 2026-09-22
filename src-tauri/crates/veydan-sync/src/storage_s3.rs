@@ -60,9 +60,17 @@ impl S3Storage {
         Ok(Self { cfg, client: http_client()?, base })
     }
 
+    /// Prefix + key. An empty key is the prefix alone, so list can strip `prefix/` once.
     fn full_key(&self, key: &str) -> String {
         let p = self.cfg.prefix.trim_matches('/');
-        if p.is_empty() { key.to_string() } else { format!("{p}/{key}") }
+        let k = key.trim_start_matches('/');
+        if p.is_empty() {
+            k.to_string()
+        } else if k.is_empty() {
+            p.to_string()
+        } else {
+            format!("{p}/{k}")
+        }
     }
 
     /// Canonical URI path for an object key ("" = bucket root).

@@ -49,8 +49,8 @@
     flex-shrink: 0;
     display: grid;
     grid-template-columns: repeat(var(--cols), 1fr);
-    height: calc(var(--nav-h) + env(safe-area-inset-bottom));
-    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(var(--nav-h) + var(--sab));
+    padding-bottom: var(--sab);
     background: var(--m-nav);
     --hub-ring: var(--m-nav);
     border-top: 1px solid var(--border);
@@ -83,7 +83,7 @@
     height: 50px;
     border-radius: 50%;
     background: var(--m-hub);
-    box-shadow: 0 0 0 4px var(--hub-ring), var(--shadow-accent);
+    box-shadow: 0 0 0 4px var(--hub-ring), var(--m-hub-shadow);
     transform: translateY(-10px);
     transition: transform var(--dur-fast), filter var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast);
   }

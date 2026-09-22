@@ -7,6 +7,11 @@ const host = process.env.TAURI_DEV_HOST;
 // Only this value reaches the frontend; other TAURI_* env stays in the build process.
 const platform = process.env.TAURI_ENV_PLATFORM ?? "unknown";
 
+// Separate ports so desktop and android can run at the same time.
+const isAndroid = platform === "android";
+const port = isAndroid ? 1430 : 1420;
+const hmrPort = isAndroid ? 1431 : host ? 1421 : 1420;
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
@@ -20,7 +25,7 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 1420,
+    port,
     strictPort: true,
     // Bind IPv4 loopback explicitly: on dual-stack hosts `false`/localhost binds
     // only IPv6 (::1), and the WebKitGTK dev webview's HMR websocket resolves
@@ -30,9 +35,9 @@ export default defineConfig(async () => ({
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: hmrPort,
         }
-      : { protocol: "ws", host: "127.0.0.1", port: 1420 },
+      : { protocol: "ws", host: "127.0.0.1", port },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri` and local toolchain dirs
       ignored: ["**/src-tauri/**", "**/.dev-prefix/**", "**/.toolchains/**", "**/.pnpm-store/**"],

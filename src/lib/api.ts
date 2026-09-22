@@ -453,6 +453,14 @@ export const api = {
     getLocale: () => call<string>('app_locale_get'),
     windowMinimize: () => call<void>('window_minimize'),
   },
+
+  demo: {
+    seed: (locale: 'ru' | 'en') => call<void>('demo_seed', { locale }),
+  },
+
+  app: {
+    clearData: () => call<void>('app_clear_data'),
+  },
 };
 
 /** Save-as dialog, then copy the attachment to the chosen path. */
@@ -575,6 +583,12 @@ export interface SyncProgress {
   detail: string;
 }
 
+export interface StorageDevice {
+  id: string;
+  name: string;
+  own: boolean;
+}
+
 export interface SyncStatus {
   enabled: boolean;
   joined: boolean;
@@ -591,6 +605,8 @@ export interface SyncStatus {
   profile_leases: SyncLease[];
   /** Remote ops received in the last cycle. */
   last_applied: number | null;
+  /** Filled by the background sync cycle. */
+  storage_devices: StorageDevice[];
   gc_last: string | null;
   blobs_total: number | null;
   blobs_removed_last_gc: number | null;

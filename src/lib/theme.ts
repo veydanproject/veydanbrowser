@@ -128,11 +128,17 @@ function persistCustom(val: ThemeCustom) {
   }
 }
 
+export function syncAndroidChrome(t: Theme) {
+  const bridge = (window as Window & { VeydanChrome?: { setLightBars: (light: boolean) => void } }).VeydanChrome;
+  bridge?.setLightBars(t === 'light');
+}
+
 function applyAll(t: Theme, custom: ThemeCustom) {
   if (typeof document === 'undefined') return;
   document.documentElement.dataset.theme = t;
   document.body.dataset.theme = t;
   applyCustom(t, custom);
+  syncAndroidChrome(t);
 }
 
 export const theme = writable<Theme>(loadTheme());

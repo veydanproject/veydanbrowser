@@ -4,6 +4,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { portal } from '$lib/portal';
+  import { acquireScrollLock, releaseScrollLock } from '$lib/scrollLock';
   import Icon from '$lib/Icon.svelte';
 
   interface Props {
@@ -34,6 +35,12 @@
     children,
     footer,
   }: Props = $props();
+
+  $effect(() => {
+    if (!open) return;
+    acquireScrollLock();
+    return () => releaseScrollLock();
+  });
 
   function close() {
     open = false;

@@ -9,9 +9,8 @@
   import '$lib/styles/mobile.css';
   import { onMount, type Snippet } from 'svelte';
   import { page } from '$app/state';
-  import { theme } from '$lib/theme';
-  import { api } from '$lib/mobile/api';
-  import { navActive, navKind, notesNav, rootNav } from '$lib/mobile/nav';
+  import { syncAndroidChrome, theme } from '$lib/theme';
+  import { navActive, navKind, newNoteHref, notesNav, rootNav } from '$lib/mobile/nav';
   import BottomNav from '$lib/components/mobile/BottomNav.svelte';
   import HubSheet from '$lib/components/mobile/HubSheet.svelte';
   import NotesMoreSheet from '$lib/components/mobile/NotesMoreSheet.svelte';
@@ -23,7 +22,7 @@
 
   const kind = $derived(navKind(page.url.pathname));
   const active = $derived(navActive(page.url.pathname));
-  const items = $derived(kind === 'notes' ? notesNav(() => (moreOpen = true)) : rootNav());
+  const items = $derived(kind === 'notes' ? notesNav(() => (moreOpen = true), newNoteHref(page.url)) : rootNav());
 
   // Mobile defaults to the light theme; the shared store defaults to dark and
   // has already persisted it, so a one-time flag marks the first launch.
@@ -39,11 +38,8 @@
 
   // Android freezes the process in background; catch up when the app comes back.
   onMount(() => {
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') api.sync.trigger().catch(() => {});
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    // Theme may have applied before the native chrome bridge was ready.
+    syncAndroidChrome($theme);
   });
 </script>
 
@@ -72,8 +68,8 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    padding-top: env(safe-area-inset-top);
-    background: var(--bg);
+    padding-top: var(--sat);
+    background: var(--m-nav);
   }
   .screen > :global(.m-page) {
     flex: 1;

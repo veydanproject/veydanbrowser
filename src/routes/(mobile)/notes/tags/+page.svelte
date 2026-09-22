@@ -6,7 +6,7 @@
   import { goto } from '$app/navigation';
   import Icon from '$lib/Icon.svelte';
   import NotesBurger from '$lib/components/mobile/NotesBurger.svelte';
-  import { api, formatError, onSyncChanged, type NoteTag } from '$lib/mobile/api';
+  import { api, formatError, type NoteTag } from '$lib/mobile/api';
   import { t } from '$lib/mobile/i18n';
   import { NAV_COLORS } from '$lib/mobile/nav-colors';
   import { longpress } from '$lib/mobile/longpress';
@@ -57,7 +57,6 @@
       if (edit.id) await api.notes.tagUpdate(edit.id, name, color);
       else await api.notes.tagCreate(name, color);
       edit = null;
-      api.sync.trigger().catch(() => {});
       await load();
     } catch (e) {
       error = formatError(e);
@@ -73,7 +72,6 @@
     menu = null;
     try {
       await api.notes.tagDelete(id);
-      api.sync.trigger().catch(() => {});
       await load();
     } catch (e) {
       error = formatError(e);
@@ -82,8 +80,6 @@
 
   onMount(() => {
     load();
-    const unlisten = onSyncChanged(['note', 'note_tag'], load);
-    return () => unlisten.then((f) => f());
   });
 </script>
 

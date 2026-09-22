@@ -89,7 +89,7 @@ pub use window::note_open_window;
 // Internals the sync module builds on (file format, index, tag links).
 pub(crate) use attachments::{attachments_dir_for, is_staging_name, safe_file_name};
 pub(crate) use settings::load_attachment_policy;
-pub(crate) use crud::update_note;
+pub(crate) use crud::{insert_note, update_note, NewNote};
 pub(crate) use files::{effective_docs_dir, parse_note_file, resolve_note_abs_path, write_note_file};
 pub(crate) use history::{history_content_by_id, history_snapshot_by};
 // Legacy mobile DB upgrade converts plain-text history into the compressed form.
@@ -97,7 +97,8 @@ pub(crate) use history::{history_content_by_id, history_snapshot_by};
 pub(crate) use files::compute_hash;
 #[cfg(mobile)]
 pub(crate) use history::compress_content;
-pub(crate) use index::sync_notes_index;
+pub(crate) use index::{rebuild_manifest, sync_notes_index};
+pub(crate) use links::reindex_links;
 pub(crate) use merge::{merge3, MergeResult};
-pub(crate) use models::{NoteRow, NoteUpdateInput};
+pub(crate) use models::{NoteFilter, NoteRow, NoteUpdateInput};
 pub(crate) use tags::set_note_tag_links;

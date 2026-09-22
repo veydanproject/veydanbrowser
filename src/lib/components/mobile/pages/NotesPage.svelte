@@ -2,7 +2,6 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import Icon from '$lib/Icon.svelte';
@@ -13,7 +12,6 @@
   import {
     api,
     formatError,
-    onSyncChanged,
     type NavChild,
     type NoteListFilter,
     type NoteListItem,
@@ -128,7 +126,6 @@
     error = '';
     try {
       await fn();
-      api.sync.trigger().catch(() => {});
       await load();
     } catch (e) {
       error = formatError(e);
@@ -240,24 +237,11 @@
     }
     pull = 48;
     refreshing = true;
-    try {
-      await api.sync.runNow();
-    } catch {
-      /* sync may be off */
-    }
     await load();
     refreshing = false;
     pull = 0;
   }
 
-  onMount(() => {
-    api.sync.trigger().catch(() => {});
-    const unlisten = onSyncChanged(
-      ['note', 'note_meta', 'note_tag', 'workspace', 'profile', 'note_folder', 'note_smart_view'],
-      load,
-    );
-    return () => unlisten.then((f) => f());
-  });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -372,9 +356,6 @@
     <button type="button" class="m-row" disabled={!notes.length} onclick={() => { sheet = 'none'; startSelect(); }}>
       <Icon name="check-square" size={20} /><span class="m-row-label">{$t('notes_select')}</span>
     </button>
-    <button type="button" class="m-row" onclick={() => { sheet = 'none'; void run(() => api.sync.runNow()); }}>
-      <Icon name="refresh-cw" size={20} /><span class="m-row-label">{$t('notes_sync_now')}</span>
-    </button>
   </div>
 </BottomSheet>
 
@@ -440,8 +421,8 @@
     display: flex;
     background: var(--m-nav);
     border-top: 1px solid var(--border);
-    height: calc(var(--nav-h) + env(safe-area-inset-bottom));
-    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(var(--nav-h) + var(--sab));
+    padding-bottom: var(--sab);
   }
   .bulk button {
     flex: 1;

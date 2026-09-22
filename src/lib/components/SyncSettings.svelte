@@ -29,6 +29,7 @@
   const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.floor(v || lo)));
   const peakMib = $derived(largeFilePeakMib(cfg.large_files));
   let status = $state<SyncStatus | null>(null);
+  let devicesOpen = $state(false);
   let passphrase = $state('');
   let oldPassphrase = $state('');
   let newPassphrase = $state('');
@@ -373,6 +374,19 @@
         <div class="trow"><span class="tlabel">{$t('settings_sync_vault_id')}</span><span class="tvalue">{status.vault_id?.slice(0, 12)}…</span></div>
         <div class="trow"><span class="tlabel">{$t('settings_sync_device_id')}</span><span class="tvalue">{status.device_id}</span></div>
         <div class="trow"><span class="tlabel">{$t('settings_sync_peers')}</span><span class="tvalue">{status.peers}</span></div>
+        <button type="button" class="trow device-toggle" onclick={() => (devicesOpen = !devicesOpen)}>
+          <span class="tlabel">{$t('settings_sync_storage_devices')}</span>
+          <span class="tvalue">{status.storage_devices.length}</span>
+        </button>
+        {#if devicesOpen}
+          {#each status.storage_devices as d (d.id)}
+            <div class="trow device-card">
+              <span class="tlabel">{d.name || $t('settings_sync_device_unnamed')}{d.own ? ` · ${$t('settings_sync_device_id')}` : ''}</span>
+              <span class="tvalue mono">{d.id}</span>
+            </div>
+          {/each}
+        {/if}
+        <div class="trow"><span class="tlabel">{$t('settings_sync_last_applied')}</span><span class="tvalue">{status.last_applied ?? 0}</span></div>
         <div class="trow"><span class="tlabel">{$t('settings_sync_last_run')}</span><span class="tvalue">{status.last_run ? new Date(status.last_run).toLocaleString() : $t('settings_backup_never')}</span></div>
         {#if status.last_error}
           <div class="trow"><span class="tlabel">{$t('settings_sync_last_error')}</span><span class="tvalue error">{status.last_error}</span></div>
@@ -472,6 +486,10 @@
   .table { display: flex; flex-direction: column; gap: 0.35rem; }
   .trow { display: flex; align-items: baseline; gap: var(--sp-2); }
   .tlabel { font-size: 0.82rem; color: var(--text-faint); min-width: 120px; flex-shrink: 0; }
+  .device-toggle { width: 100%; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; color: inherit; }
+  .device-card { flex-direction: column; align-items: stretch; gap: 2px; padding-left: var(--sp-3); }
+  .device-card .tlabel { min-width: 0; word-break: break-word; }
+  .mono { font-family: var(--font-mono); }
   .tvalue { font-size: var(--fs-sm); color: var(--text-body); font-family: var(--font-mono); word-break: break-all; }
   .conflicts { margin: 0; padding-left: 1.2rem; font-size: var(--fs-sm); }
   .conflicts a { color: var(--warn-text); }

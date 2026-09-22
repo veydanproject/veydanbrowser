@@ -8,6 +8,11 @@
   --touch: 44px;
   --nav-h: 64px;
   --m-radius: 14px;
+  /* Android injects real insets into these; env() covers iOS / fixed WebViews. */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
 }
 
 [data-theme='light'] {
@@ -18,7 +23,8 @@
   --m-seg: #eeedf5;
   --m-tile: #ffffff;
   --m-nav: #ffffff;
-  --m-hub: #1a1a3a;
+  --m-hub: #f5f4fa;
+  --m-hub-shadow: 0 2px 10px rgba(23, 20, 60, 0.08), 0 0 0 1px rgba(23, 20, 60, 0.06);
   --m-tag: rgba(109, 92, 240, 0.1);
   --m-highlight: rgba(109, 92, 240, 0.18);
   --m-sheet: #ffffff;
@@ -35,6 +41,7 @@
   --m-tile: var(--surface-2);
   --m-nav: var(--chrome);
   --m-hub: #14141b;
+  --m-hub-shadow: var(--shadow-accent);
   --m-tag: var(--accent-tint);
   --m-highlight: rgba(139, 123, 255, 0.28);
   --m-sheet: var(--surface);
@@ -76,13 +83,15 @@ html.scanning, html.scanning body, html.scanning .shell, html.scanning .screen {
 .m-page.home {
   overflow-y: auto;
   padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  background: var(--bg);
 }
 .m-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 0 var(--sp-4) var(--sp-4);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  background: var(--bg);
 }
 .m-title {
   font-size: 22px;
@@ -130,7 +139,7 @@ html.scanning, html.scanning body, html.scanning .shell, html.scanning .screen {
   min-height: 48px;
   margin: 0;
   padding: var(--sp-2) var(--sp-2);
-  background: var(--bg);
+  background: var(--m-nav);
 }
 .m-header .m-title {
   flex: 1;
@@ -194,7 +203,7 @@ input, select, textarea {
   flex-shrink: 0;
   margin: 0;
   padding: 0 var(--sp-4) var(--sp-2);
-  background: var(--bg);
+  background: var(--m-nav);
 }
 .m-page > .m-search:first-child {
   padding-top: var(--sp-2);
@@ -249,7 +258,7 @@ input, select, textarea {
   flex-shrink: 0;
   margin: 0;
   padding: 0 var(--sp-4) var(--sp-2);
-  background: var(--bg);
+  background: var(--m-nav);
 }
 .m-seg {
   display: flex;
@@ -475,7 +484,7 @@ input, select, textarea {
 .m-fab {
   position: fixed;
   right: var(--sp-4);
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--sp-4));
+  bottom: calc(var(--nav-h) + var(--sab) + var(--sp-4));
   width: 52px;
   height: 52px;
   border-radius: 50%;
@@ -493,7 +502,7 @@ input, select, textarea {
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + var(--sp-4));
+  bottom: calc(var(--nav-h) + var(--sab) + var(--sp-4));
   transform: translateX(-50%);
   padding: var(--sp-2) var(--sp-4);
   background: var(--surface-2);
@@ -617,7 +626,7 @@ mark.m-highlight {
   flex-direction: column;
   background: var(--m-sheet);
   border-radius: 24px 24px 0 0;
-  padding: var(--sp-2) var(--sp-4) calc(var(--sp-4) + env(safe-area-inset-bottom));
+  padding: var(--sp-2) var(--sp-4) calc(var(--sp-4) + var(--sab));
   will-change: transform;
 }
 .m-sheet .handle {

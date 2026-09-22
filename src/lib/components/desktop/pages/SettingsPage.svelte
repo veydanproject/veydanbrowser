@@ -132,6 +132,14 @@
   let restorePhase = $state('');
   let restorePercent = $state(0);
 
+  // Demo / clear data
+  let demoLocale = $state<'en' | 'ru'>('en');
+  let demoBusy = $state(false);
+  let pendingData = $state<'load' | 'clear' | null>(null);
+  let clearBusy = $state(false);
+  let dataMsg = $state('');
+  let dataError = $state('');
+
   const modeOptions = $derived([
     { value: 'interval', label: $t('settings_backup_mode_interval') },
     { value: 'daily', label: $t('settings_backup_mode_daily') },
@@ -348,6 +356,93 @@
 
   function formatMb(bytes: number) {
     return (bytes / 1024 / 1024).toFixed(0) + ' MB';
+  }
+
+  async function refreshCatalogStores() {
+    const { workspacesStore } = await import('$lib/store/workspaces.svelte');
+    const { profilesStore } = await import('$lib/store/profiles.svelte');
+    const { proxiesStore } = await import('$lib/store/proxies.svelte');
+    const { totpStore } = await import('$lib/store/totp.svelte');
+    const { notesStore } = await import('$lib/store/notes.svelte');
+    const { sshStore } = await import('$lib/store/ssh.svelte');
+    await Promise.all([
+      workspacesStore.refresh(),
+      profilesStore.refresh(),
+      proxiesStore.refresh(),
+      totpStore.refresh(),
+      notesStore.refresh(),
+      notesStore.refreshTags(),
+      notesStore.refreshFolders(),
+      notesStore.refreshSmartViews(),
+      sshStore.loadConnections(),
+    ]);
+  }
+
+  function askLoadDemo() {
+    if (demoBusy || clearBusy) return;
+    if (!isTauri) {
+      dataError = formatError('Not running in app');
+      return;
+    }
+    pendingData = 'load';
+  }
+
+  function askClearData() {
+    if (demoBusy || clearBusy) return;
+    if (!isTauri) {
+      dataError = formatError('Not running in app');
+      return;
+    }
+    pendingData = 'clear';
+  }
+
+  async function confirmDataAction() {
+    const action = pendingData;
+    pendingData = null;
+    if (action === 'load') await loadDemoData();
+    else if (action === 'clear') await clearAppData();
+  }
+
+  async function loadDemoData() {
+    if (demoBusy || clearBusy) return;
+    if (!isTauri) {
+      dataError = formatError('Not running in app');
+      return;
+    }
+    demoBusy = true;
+    dataMsg = '';
+    dataError = '';
+    try {
+      await api.demo.seed(demoLocale);
+      await refreshCatalogStores();
+      dataMsg = $t('settings_demo_done');
+      setTimeout(() => (dataMsg = ''), 4000);
+    } catch (e) {
+      dataError = formatError(e);
+    } finally {
+      demoBusy = false;
+    }
+  }
+
+  async function clearAppData() {
+    if (demoBusy || clearBusy) return;
+    if (!isTauri) {
+      dataError = formatError('Not running in app');
+      return;
+    }
+    clearBusy = true;
+    dataMsg = '';
+    dataError = '';
+    try {
+      await api.app.clearData();
+      await refreshCatalogStores();
+      dataMsg = $t('settings_clear_done');
+      setTimeout(() => (dataMsg = ''), 4000);
+    } catch (e) {
+      dataError = formatError(e);
+    } finally {
+      clearBusy = false;
+    }
   }
 
   async function downloadCamoufox() {
@@ -1001,7 +1096,48 @@
 
     <div class="about-copyright">{$t('settings_about_copyright')}</div>
   </div>
+
+  <div class="demo-foot">
+    <span class="demo-label">{$t('settings_demo_locale')}</span>
+    <button type="button" class="demo-chip" class:active={demoLocale === 'en'} onclick={() => (demoLocale = 'en')}>
+      {$t('settings_demo_locale_en')}
+    </button>
+    <button type="button" class="demo-chip" class:active={demoLocale === 'ru'} onclick={() => (demoLocale = 'ru')}>
+      {$t('settings_demo_locale_ru')}
+    </button>
+    <button type="button" class="demo-link" disabled={demoBusy || clearBusy} onclick={askLoadDemo}>
+      {demoBusy ? $t('settings_demo_loading') : $t('settings_demo_load')}
+    </button>
+    <button type="button" class="demo-link danger" disabled={demoBusy || clearBusy} onclick={askClearData}>
+      {clearBusy ? $t('settings_clear_clearing') : $t('settings_clear_data')}
+    </button>
+  </div>
+  {#if dataMsg}<p class="ok-msg">{dataMsg}</p>{/if}
+  {#if dataError}<div class="error-msg">{dataError}</div>{/if}
 </div>
+
+{#if pendingData}
+  <Dialog
+    open={true}
+    onclose={() => (pendingData = null)}
+    title={pendingData === 'clear' ? $t('settings_clear_data') : $t('settings_demo_load')}
+  >
+    <p>{pendingData === 'clear' ? $t('settings_clear_confirm') : $t('settings_demo_confirm')}</p>
+    {#snippet footer()}
+      <button class="btn btn-ghost btn-sm" onclick={() => (pendingData = null)}>
+        {$t('settings_backup_cancel')}
+      </button>
+      <button
+        class="btn btn-sm"
+        class:btn-danger={pendingData === 'clear'}
+        class:btn-primary={pendingData !== 'clear'}
+        onclick={confirmDataAction}
+      >
+        {pendingData === 'clear' ? $t('settings_clear_data') : $t('settings_demo_load')}
+      </button>
+    {/snippet}
+  </Dialog>
+{/if}
 
 {#if restoreTarget}
   <Dialog open={true} onclose={closeRestore} title={$t('settings_backup_restore_title')}>
@@ -1092,6 +1228,20 @@
   .link-btn:hover { color: var(--accent-text); }
   .link-btn:hover { text-decoration: underline; }
   .about-copyright { font-size: var(--fs-xs); color: var(--text-3); }
+
+  .demo-foot {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.15rem 0.45rem;
+    margin-top: var(--sp-2);
+  }
+  .demo-label, .demo-chip, .demo-link {
+    border: none; background: transparent; color: var(--text-faint);
+    font-size: 0.72rem; line-height: 1.2; padding: 0.1rem 0.2rem;
+  }
+  .demo-chip, .demo-link { cursor: pointer; }
+  .demo-chip.active { color: var(--text-body); }
+  .demo-chip:hover, .demo-link:hover:not(:disabled) { color: var(--text); text-decoration: underline; }
+  .demo-link.danger:hover:not(:disabled) { color: var(--danger-text); }
+  .demo-link:disabled { opacity: 0.45; cursor: default; }
 
   .btn-sm { padding: 0.35rem var(--sp-3); font-size: var(--fs-sm); }
   .btn-row { display: flex; gap: var(--sp-2); align-items: center; }

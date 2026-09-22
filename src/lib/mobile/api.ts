@@ -205,6 +205,11 @@ export async function onSyncChanged(entities: string[], cb: () => void): Promise
   return () => unlisteners.forEach((f) => f());
 }
 
+/** Remote apply of one note body. Does not start a sync cycle. */
+export function onNoteRemote(cb: (id: string) => void): Promise<UnlistenFn> {
+  return listen<string>('notes://external-change', (e) => cb(e.payload));
+}
+
 export function onSyncStatus(cb: () => void): Promise<UnlistenFn> {
   return listen('sync://status', cb);
 }
@@ -260,8 +265,8 @@ export const api = {
       const [n, nav] = await Promise.all([shared.notes.get(id), shared.notes.nav()]);
       return toNote(n, nav);
     },
-    create: async (title: string, content = '', tags: string[] = []): Promise<Note> => {
-      const n = await shared.notes.create({ title, content, tag_names: tags });
+    create: async (title: string, content = '', tags: string[] = [], bindings: string[] = []): Promise<Note> => {
+      const n = await shared.notes.create({ title, content, tag_names: tags, bindings });
       return toNote(n, await shared.notes.nav());
     },
     update: async (id: string, input: NoteUpdateInput): Promise<Note> => {
@@ -283,6 +288,10 @@ export const api = {
     purge: (id: string) => shared.notes.delete(id, true),
     emptyTrash: () => shared.notes.emptyTrash(),
     setFolder: (noteId: string, folderId: string | null) => shared.notes.noteSetFolder(noteId, folderId),
+    addFolder: (noteId: string, folderId: string) => shared.notes.noteAddFolder(noteId, folderId),
+    removeFolder: (noteId: string, folderId: string) => shared.notes.noteRemoveFolder(noteId, folderId),
+    addBinding: (noteId: string, binding: string) => shared.notes.noteAddBinding(noteId, binding),
+    removeBinding: (noteId: string, binding: string) => shared.notes.noteRemoveBinding(noteId, binding),
     /** Title hits first, body-only hits with an excerpt after. */
     search: async (query: string): Promise<NoteSearchResult> => {
       const q = query.trim().toLowerCase();

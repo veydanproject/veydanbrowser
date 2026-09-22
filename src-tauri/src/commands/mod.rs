@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 // Shared on every platform
+pub mod demo;
 pub mod notes;
 pub mod password;
 pub mod totp;

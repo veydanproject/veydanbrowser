@@ -62,7 +62,7 @@
 </script>
 
 {#if open && !expanded}
-  <div class="bar" style:bottom="{kb}px" style:padding-bottom="{kb > 0 ? '8px' : 'calc(8px + env(safe-area-inset-bottom))'}">
+  <div class="bar" style:bottom="{kb}px" style:padding-bottom="{kb > 0 ? '8px' : 'calc(8px + var(--sab))'}">
     <button type="button" class="find" onclick={() => (expanded = true)}>
       <span class="ico"><Icon name="search" size={18} /></span>
       <span class="ph">{query.trim() || $t('notes_link_search')}</span>

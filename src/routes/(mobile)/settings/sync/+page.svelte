@@ -14,6 +14,7 @@
 
   const clampNum = (raw: string, [lo, hi]: readonly [number, number]) => Math.min(hi, Math.max(lo, Math.floor(Number(raw) || lo)));
   let status = $state<SyncStatus | null>(null);
+  let devicesOpen = $state(false);
   let probe = $state<SyncProbe | null>(null);
   let progress = $state<SyncProgress | null>(null);
   let passphrase = $state('');
@@ -21,9 +22,18 @@
   let error = $state('');
   let toast = $state('');
   let toastTimer: ReturnType<typeof setTimeout>;
+  let saveState = $state<'idle' | 'saving' | 'saved'>('idle');
+  let saveResetTimer: ReturnType<typeof setTimeout>;
+  let syncBtnState = $state<'idle' | 'syncing' | 'done'>('idle');
+  let syncResetTimer: ReturnType<typeof setTimeout>;
 
   const running = $derived(!!status?.running);
   const progressLine = $derived(progress ? syncProgressText($t, progress) : '');
+  const syncVisual = $derived(
+    syncBtnState === 'done' ? 'done'
+      : running || syncBtnState === 'syncing' ? 'syncing'
+        : 'idle',
+  );
 
   const intervals = [30, 60, 300, 900, 3600];
 
@@ -90,12 +100,33 @@
       showToast($t('settings_sync_joined'));
     });
 
-  const doSyncNow = () =>
-    run(async () => {
+  const doSyncNow = async () => {
+    if (busy || running || syncBtnState === 'syncing') return;
+    error = '';
+    busy = true;
+    syncBtnState = 'syncing';
+    clearTimeout(syncResetTimer);
+    try {
+      await save();
       status = await api.sync.runNow();
-      showToast($t('settings_sync_done'));
-    });
+      if (!status.running) finishSyncBtn(status.last_error);
+    } catch (e) {
+      error = formatError(e);
+      syncBtnState = 'idle';
+    } finally {
+      busy = false;
+    }
+  };
 
+  function finishSyncBtn(lastError: string | null | undefined) {
+    if (lastError) {
+      syncBtnState = 'idle';
+      return;
+    }
+    syncBtnState = 'done';
+    clearTimeout(syncResetTimer);
+    syncResetTimer = setTimeout(() => (syncBtnState = 'idle'), 1500);
+  }
   const doLeave = () =>
     run(async () => {
       if (!confirm($t('settings_sync_leave_confirm'))) return;
@@ -109,16 +140,39 @@
       if (cfg) cfg.enabled = !cfg.enabled;
     });
 
+  async function doSave() {
+    if (busy || saveState === 'saving') return;
+    error = '';
+    busy = true;
+    saveState = 'saving';
+    clearTimeout(saveResetTimer);
+    try {
+      await save();
+      saveState = 'saved';
+      saveResetTimer = setTimeout(() => (saveState = 'idle'), 1500);
+    } catch (e) {
+      error = formatError(e);
+      saveState = 'idle';
+    } finally {
+      busy = false;
+    }
+  }
+
   onMount(() => {
     load();
     const unStatus = onSyncStatus(() =>
       api.sync.status().then((s) => {
         status = s;
-        if (!s.running) progress = null;
+        if (!s.running) {
+          progress = null;
+          if (syncBtnState === 'syncing') finishSyncBtn(s.last_error);
+        }
       }).catch(() => {}),
     );
     const unProgress = onSyncProgress((p) => (progress = p));
     return () => {
+      clearTimeout(saveResetTimer);
+      clearTimeout(syncResetTimer);
       unStatus.then((f) => f());
       unProgress.then((f) => f());
     };
@@ -153,6 +207,24 @@
         <div class="m-row">
           <span class="m-row-label">{$t('settings_sync_peers')}</span>
           <span class="m-row-value">{status.peers}</span>
+        </div>
+        <button type="button" class="m-row" onclick={() => (devicesOpen = !devicesOpen)}>
+          <span class="m-row-label">{$t('settings_sync_storage_devices')}</span>
+          <span class="m-row-value">{status.storage_devices.length}</span>
+          <Icon name={devicesOpen ? 'chevron-down' : 'chevron-right'} size={16} />
+        </button>
+        {#if devicesOpen}
+          {#each status.storage_devices as d (d.id)}
+            <div class="m-row device-card">
+              <span class="device-name">{d.name || $t('settings_sync_device_unnamed')}</span>
+              {#if d.own}<span class="device-own">{$t('settings_sync_device_id')}</span>{/if}
+              <span class="device-id mono">{d.id}</span>
+            </div>
+          {/each}
+        {/if}
+        <div class="m-row">
+          <span class="m-row-label">{$t('settings_sync_last_applied')}</span>
+          <span class="m-row-value">{status.last_applied ?? 0}</span>
         </div>
         <div class="m-row">
           <span class="m-row-label">{$t('settings_sync_last_run')}</span>
@@ -193,11 +265,27 @@
       {/if}
 
       <div class="actions group">
-        <button class="btn btn-primary" onclick={doSyncNow} disabled={busy || running}>
-          <Icon name="refresh-cw" size={16} />
-          {running ? (progress ? `${progress.percent}%` : $t('settings_sync_running')) : $t('settings_sync_now')}
+        <button
+          class="btn action-btn"
+          class:btn-primary={syncVisual !== 'done'}
+          class:btn-success={syncVisual === 'done'}
+          class:busy-anim={syncVisual === 'syncing'}
+          class:just-done={syncVisual === 'done'}
+          onclick={doSyncNow}
+          disabled={busy || syncVisual === 'syncing'}
+        >
+          <span class="action-icon" class:spin={syncVisual === 'syncing'}>
+            <Icon name={syncVisual === 'done' ? 'check-circle' : 'refresh-cw'} size={16} />
+          </span>
+          {#if syncVisual === 'syncing'}
+            {progress ? `${progress.percent}%` : $t('settings_sync_running')}
+          {:else if syncVisual === 'done'}
+            {$t('settings_sync_done')}
+          {:else}
+            {$t('settings_sync_now')}
+          {/if}
         </button>
-        <button class="btn btn-ghost danger" onclick={doLeave} disabled={busy}>
+        <button class="btn btn-ghost danger" onclick={doLeave} disabled={busy || syncVisual === 'syncing'}>
           <Icon name="shield-off" size={16} />
           {$t('settings_sync_leave')}
         </button>
@@ -344,9 +432,22 @@
         {/if}
       {/if}
     {:else}
-      <button class="btn btn-ghost wide" onclick={() => run(async () => showToast($t('common_saved')))} disabled={busy}>
-        <Icon name="check" size={16} />
-        {$t('common_save')}
+      <button
+        class="btn wide action-btn"
+        class:btn-primary={saveState !== 'saved'}
+        class:btn-success={saveState === 'saved'}
+        class:busy-anim={saveState === 'saving'}
+        class:just-done={saveState === 'saved'}
+        onclick={doSave}
+        disabled={busy || saveState === 'saving'}
+      >
+        <span class="action-icon" class:spin={saveState === 'saving'}>
+          <Icon
+            name={saveState === 'saving' ? 'loader' : saveState === 'saved' ? 'check-circle' : 'check'}
+            size={16}
+          />
+        </span>
+        {saveState === 'saving' ? $t('notes_saving') : saveState === 'saved' ? $t('common_saved') : $t('common_save')}
       </button>
     {/if}
   {/if}
@@ -360,6 +461,10 @@
 <style>
   .group { margin-bottom: var(--sp-4); }
   .mono { font-family: var(--font-mono); }
+  .device-card { flex-direction: column; align-items: stretch; gap: 2px; }
+  .device-name { font-size: var(--fs-base); color: var(--text-1); }
+  .device-own { font-size: var(--fs-xs); color: var(--text-3); }
+  .device-id { font-size: var(--fs-sm); color: var(--text-2); word-break: break-all; }
   .backend { display: flex; width: 100%; }
   .backend .seg-btn { flex: 1; justify-content: center; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
@@ -375,4 +480,13 @@
   .fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.2s ease; }
   .prog-label { font-size: var(--fs-sm); color: var(--text-body); }
   .prog-detail { display: block; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-3); word-break: break-all; }
+  .action-btn { justify-content: center; transition: background 0.25s ease, box-shadow 0.25s ease, transform 0.2s ease; }
+  .action-btn.busy-anim { opacity: 1; }
+  .action-btn.just-done { animation: action-pop 0.45s ease; }
+  .action-icon { display: inline-flex; }
+  @keyframes action-pop {
+    0% { transform: scale(0.96); }
+    40% { transform: scale(1.03); }
+    100% { transform: scale(1); }
+  }
 </style>

@@ -4,6 +4,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { portal } from '$lib/portal';
+  import { acquireScrollLock, releaseScrollLock } from '$lib/scrollLock';
   import { notesStore } from '$lib/store/notes.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
@@ -144,6 +145,12 @@
     }
   });
 
+  $effect(() => {
+    if (!open) return;
+    acquireScrollLock();
+    return () => releaseScrollLock();
+  });
+
   const isTrash = $derived(activeFilter.type === 'trash');
 
   // Filtering happens on the backend (notesStore.view); only the 1-char
@@ -221,6 +228,10 @@
 
     try {
       const note = await notesStore.createNote(input);
+      if (activeFilter.type === 'folder' && activeFilter.id) {
+        await api.notes.noteAddFolder(note.id, activeFilter.id);
+        await notesStore.refresh();
+      }
       showCreate = false;
       createTitle = '';
       await notesStore.openNote(note.id);
@@ -379,10 +390,11 @@
                   <Icon name="sidebar" size={14} />
                 </button>
               {/if}
-              <ListBulkActions {isTrash} notes={displayList} />
-              {#if !isTrash}
-                <button class="btn btn-primary btn-new" onclick={() => (showCreate = true)}>
-                  <Icon name="plus" size={14} /> {$t('notes_btn_new')}
+              {#if isTrash}
+                <ListBulkActions {isTrash} notes={displayList} />
+              {:else}
+                <button class="btn-new" onclick={() => (showCreate = true)} title={$t('notes_btn_new')} aria-label={$t('notes_btn_new')}>
+                  <Icon name="plus" size={16} />
                 </button>
               {/if}
             </div>
@@ -668,11 +680,21 @@
   .list-actions .icon-btn { width: 32px; height: 32px; }
 
   .btn-new {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
     height: 34px;
-    padding: 0 14px;
-    font-size: 0.82rem;
-    border-radius: 9px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent-grad);
+    color: #fff;
+    box-shadow: var(--shadow-accent);
+    cursor: pointer;
+    flex-shrink: 0;
   }
+  .btn-new:hover { filter: brightness(1.08); }
 
   .list-scroll {
     flex: 1;

@@ -39,6 +39,7 @@ use commands::camoufox::{
     camoufox_download, camoufox_download_cancel, camoufox_download_state, camoufox_latest_version,
     camoufox_status, DownloadManager,
 };
+use commands::demo::{app_clear_data, demo_seed};
 use commands::notes::{
     note_archive, note_create, note_delete, note_delete_many, note_trash_empty, note_draft_discard,
     note_draft_get, note_draft_save, note_get,
@@ -104,8 +105,8 @@ use commands::workspaces::*;
 use sqlx::{Pool, Sqlite};
 use sync::{
     note_sync_info, start_sync_scheduler, sync_attachment_cancel, sync_change_passphrase, sync_conflict_get,
-    sync_conflict_resolve, sync_create_vault, sync_get_config, sync_join_vault, sync_leave, sync_probe, sync_run_now,
-    sync_set_config, sync_status, sync_trigger, SyncManager,
+    sync_conflict_resolve, sync_create_vault, sync_get_config, sync_join_vault, sync_leave, sync_probe,
+    sync_run_now, sync_set_config, sync_status, sync_trigger, SyncManager,
 };
 #[cfg(desktop)]
 use sync::{sync_profile_files_push_mine, sync_profile_files_take_remote};
@@ -298,6 +299,9 @@ fn run_mobile() {
         })
         .invoke_handler(tauri::generate_handler![
             host_info,
+            // Demo / clear
+            demo_seed,
+            app_clear_data,
             // Sync
             sync_get_config,
             sync_set_config,
@@ -545,6 +549,9 @@ fn run_desktop() {
             fingerprint_presets,
             open_url,
             update_supported,
+            // Demo / clear
+            demo_seed,
+            app_clear_data,
             // Tray / UI settings
             tray_settings_get,
             tray_settings_set,

@@ -6,8 +6,10 @@
   import { api } from '$lib/api';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/i18n';
+  import ChipMark from './ChipMark.svelte';
 
   interface ContextChip {
+    kind: string;
     label: string;
     color: string;
     onremove?: () => void;
@@ -124,6 +126,7 @@
   <div class="tags-wrap">
     {#each contextChips as chip}
       <span class="chip chip-context" style="border-color:{chip.color}22;color:{chip.color};background:{chip.color}18">
+        <ChipMark kind={chip.kind} />
         {chip.label}
         {#if chip.onremove}
           <button class="chip-x" onclick={chip.onremove}>×</button>
@@ -133,6 +136,7 @@
 
     {#each selectedTags as tag (tag.id)}
       <span class="chip" style="border-color:{tag.color};color:{tag.color};background:{tag.color}18">
+        <ChipMark kind="tag" />
         {tag.name}
         <button class="chip-x" onclick={() => removeTag(tag.name)}>×</button>
       </span>

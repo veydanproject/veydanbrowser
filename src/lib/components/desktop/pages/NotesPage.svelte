@@ -309,10 +309,11 @@
               <Icon name="sidebar" size={14} />
             </button>
           {/if}
-          <ListBulkActions {isTrash} notes={displayList} />
-          {#if !isTrash}
-            <button class="btn btn-primary btn-new" onclick={() => (showCreate = true)}>
-              <Icon name="plus" size={14} /> {$t('notes_btn_new')}
+          {#if isTrash}
+            <ListBulkActions {isTrash} notes={displayList} />
+          {:else}
+            <button class="btn-new" onclick={() => (showCreate = true)} title={$t('notes_btn_new')} aria-label={$t('notes_btn_new')}>
+              <Icon name="plus" size={16} />
             </button>
           {/if}
         </div>
@@ -502,11 +503,21 @@
   }
   .sidebar-footer .icon-btn { width: 32px; height: 32px; }
   .btn-new {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
     height: 36px;
-    padding: 0 14px;
-    font-size: 0.82rem;
-    border-radius: 9px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent-grad);
+    color: #fff;
+    box-shadow: var(--shadow-accent);
+    cursor: pointer;
+    flex-shrink: 0;
   }
+  .btn-new:hover { filter: brightness(1.08); }
 
   .list-scroll {
     flex: 1;

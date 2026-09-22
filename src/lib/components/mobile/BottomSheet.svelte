@@ -118,7 +118,6 @@
     max-height: 95vh;
     overflow: hidden;
     transition: transform var(--dur-base) var(--ease-drawer);
-    touch-action: none;
   }
   .m-sheet.dragging { transition: none; }
   .handle {

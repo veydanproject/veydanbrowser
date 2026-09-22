@@ -11,16 +11,31 @@
   import { t, locale, type Locale } from '$lib/mobile/i18n';
   import { APPS, loadDefaultApp, saveDefaultApp } from '$lib/mobile/apps';
   import PickerSheet from '$lib/components/mobile/PickerSheet.svelte';
+  import Dialog from '$lib/components/ui/Dialog.svelte';
+  import { formatError } from '$lib/utils';
+  import { notesStore } from '$lib/store/notes.svelte';
+  import { totpStore } from '$lib/store/totp.svelte';
 
   const locales: { id: Locale; label: string }[] = [
     { id: 'en', label: 'English' },
     { id: 'ru', label: 'Русский' },
   ];
 
-  let picker = $state<'none' | 'app' | 'theme' | 'lang'>('none');
+  const demoLocales: { id: 'en' | 'ru'; label: string }[] = [
+    { id: 'en', label: 'English' },
+    { id: 'ru', label: 'Русский' },
+  ];
+
+  let picker = $state<'none' | 'app' | 'theme' | 'lang' | 'demoLang'>('none');
   let defaultApp = $state(loadDefaultApp());
   let info = $state<HostInfo | null>(null);
   let sync = $state<SyncStatus | null>(null);
+  let demoLocale = $state<'en' | 'ru'>('ru');
+  let demoBusy = $state(false);
+  let clearBusy = $state(false);
+  let pendingData = $state<'load' | 'clear' | null>(null);
+  let dataMsg = $state('');
+  let dataError = $state('');
 
   const themeOptions = $derived([
     { id: 'light', label: $t('settings_theme_light'), icon: 'sun' },
@@ -33,6 +48,7 @@
   const defaultAppLabel = $derived(appOptions.find((o) => o.id === defaultApp)?.label ?? '');
   const themeLabel = $derived(themeOptions.find((o) => o.id === $theme)?.label ?? '');
   const localeLabel = $derived(locales.find((l) => l.id === $locale)?.label ?? '');
+  const demoLocaleLabel = $derived(demoLocales.find((l) => l.id === demoLocale)?.label ?? '');
   const syncLabel = $derived(
     sync?.running ? $t('settings_sync_running')
     : sync?.enabled && sync.joined ? $t('settings_sync_connected')
@@ -42,6 +58,65 @@
   function pickApp(id: string) {
     defaultApp = id;
     saveDefaultApp(id);
+  }
+
+  async function refreshStores() {
+    await Promise.all([
+      notesStore.refresh(),
+      notesStore.refreshTags(),
+      notesStore.refreshFolders(),
+      notesStore.refreshSmartViews(),
+      totpStore.refresh(),
+    ]);
+  }
+
+  function askLoadDemo() {
+    if (demoBusy || clearBusy) return;
+    pendingData = 'load';
+  }
+
+  function askClearData() {
+    if (demoBusy || clearBusy) return;
+    pendingData = 'clear';
+  }
+
+  async function confirmDataAction() {
+    const action = pendingData;
+    pendingData = null;
+    if (action === 'load') await loadDemoData();
+    else if (action === 'clear') await clearAppData();
+  }
+
+  async function loadDemoData() {
+    if (demoBusy || clearBusy) return;
+    demoBusy = true;
+    dataMsg = '';
+    dataError = '';
+    try {
+      await shared.demo.seed(demoLocale);
+      await refreshStores();
+      dataMsg = $t('settings_demo_done');
+    } catch (e) {
+      dataError = formatError(e);
+    } finally {
+      demoBusy = false;
+    }
+  }
+
+  async function clearAppData() {
+    if (demoBusy || clearBusy) return;
+    clearBusy = true;
+    dataMsg = '';
+    dataError = '';
+    try {
+      await shared.app.clearData();
+      await refreshStores();
+      dataMsg = $t('settings_clear_done');
+    } catch (e) {
+      dataError = formatError(e);
+    } finally {
+      clearBusy = false;
+    }
   }
 
   onMount(() => {
@@ -97,12 +172,57 @@
       </div>
     </div>
   </div>
+
+  <div class="demo-foot">
+    <button type="button" class="demo-chip" onclick={() => (picker = 'demoLang')}>
+      {$t('settings_demo_locale')}: {demoLocaleLabel}
+    </button>
+    <button type="button" class="demo-link" disabled={demoBusy || clearBusy} onclick={askLoadDemo}>
+      {demoBusy ? $t('settings_demo_loading') : $t('settings_demo_load')}
+    </button>
+    <button type="button" class="demo-link danger" disabled={demoBusy || clearBusy} onclick={askClearData}>
+      {clearBusy ? $t('settings_clear_clearing') : $t('settings_clear_data')}
+    </button>
+  </div>
+  {#if dataMsg}<p class="ok-msg">{dataMsg}</p>{/if}
+  {#if dataError}<p class="err-msg">{dataError}</p>{/if}
   </div>
 </div>
+
+{#if pendingData}
+  <Dialog
+    open={true}
+    onclose={() => (pendingData = null)}
+    title={pendingData === 'clear' ? $t('settings_clear_data') : $t('settings_demo_load')}
+  >
+    <p>{pendingData === 'clear' ? $t('settings_clear_confirm') : $t('settings_demo_confirm')}</p>
+    {#snippet footer()}
+      <button class="btn btn-ghost btn-sm" onclick={() => (pendingData = null)}>
+        {$t('settings_backup_cancel')}
+      </button>
+      <button
+        class="btn btn-sm"
+        class:btn-danger={pendingData === 'clear'}
+        class:btn-primary={pendingData !== 'clear'}
+        onclick={confirmDataAction}
+      >
+        {pendingData === 'clear' ? $t('settings_clear_data') : $t('settings_demo_load')}
+      </button>
+    {/snippet}
+  </Dialog>
+{/if}
 
 <PickerSheet open={picker === 'app'} title={$t('settings_default_app')} options={appOptions} value={defaultApp} onclose={() => (picker = 'none')} onpick={pickApp} />
 <PickerSheet open={picker === 'theme'} title={$t('settings_theme')} options={themeOptions} value={$theme} onclose={() => (picker = 'none')} onpick={(id) => ($theme = id as Theme)} />
 <PickerSheet open={picker === 'lang'} title={$t('settings_language')} options={locales} value={$locale} onclose={() => (picker = 'none')} onpick={(id) => ($locale = id as Locale)} />
+<PickerSheet
+  open={picker === 'demoLang'}
+  title={$t('settings_demo_locale')}
+  options={demoLocales}
+  value={demoLocale}
+  onclose={() => (picker = 'none')}
+  onpick={(id) => { demoLocale = id as 'en' | 'ru'; }}
+/>
 
 <style>
   .ok { color: var(--success-text); font-weight: 600; }
@@ -110,4 +230,17 @@
   .about-logo { width: 40px; height: 40px; object-fit: contain; flex-shrink: 0; }
   .about-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .mono { font-family: var(--font-mono); font-size: 12px; }
+  .demo-foot {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.15rem 0.5rem;
+    padding: var(--sp-4) var(--sp-4) var(--sp-6);
+  }
+  .demo-chip, .demo-link {
+    border: none; background: transparent; color: var(--text-faint);
+    font-size: 12px; line-height: 1.2; padding: 0.1rem 0.15rem; cursor: pointer;
+  }
+  .demo-chip:hover, .demo-link:hover:not(:disabled) { color: var(--text); text-decoration: underline; }
+  .demo-link.danger:hover:not(:disabled) { color: var(--danger-text); }
+  .demo-link:disabled { opacity: 0.45; cursor: default; }
+  .ok-msg { margin: 0 var(--sp-4) var(--sp-2); font-size: 13px; color: var(--success-text); }
+  .err-msg { margin: 0 var(--sp-4) var(--sp-2); font-size: 13px; color: var(--danger-text); }
 </style>

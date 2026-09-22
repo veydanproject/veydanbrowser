@@ -429,14 +429,14 @@
 
   const contextChips = $derived.by(() => {
     if (!note) return [];
-    const chips: { label: string; color: string; onremove?: () => void }[] = [];
+    const chips: { kind: string; label: string; color: string; onremove?: () => void }[] = [];
 
-    // Folders first — they represent the original context
     const folderIds = notesStore.list.find(n => n.id === note.id)?.folder_ids ?? [];
     for (const fid of folderIds) {
       const folder = folders.find(f => f.id === fid);
       if (folder) {
         chips.push({
+          kind: 'folder',
           label: folder.name,
           color: folder.color,
           onremove: () => notesStore.removeNoteFolder(note!.id, fid),
@@ -447,12 +447,12 @@
     for (const b of note.bindings) {
       if (b.startsWith('workspace:')) {
         const ws = workspacesStore.list.find(w => w.id === b.slice('workspace:'.length));
-        if (ws) chips.push({ label: ws.name, color: ws.color, onremove: () => notesStore.removeNoteBinding(note!.id, b) });
+        if (ws) chips.push({ kind: 'workspace', label: ws.name, color: ws.color, onremove: () => notesStore.removeNoteBinding(note!.id, b) });
       } else if (b.startsWith('profile:')) {
         const pr = profilesStore.list.find(p => p.id === b.slice('profile:'.length));
-        if (pr) chips.push({ label: pr.name, color: 'var(--accent)', onremove: () => notesStore.removeNoteBinding(note!.id, b) });
+        if (pr) chips.push({ kind: 'profile', label: pr.name, color: 'var(--accent)', onremove: () => notesStore.removeNoteBinding(note!.id, b) });
       } else if (b.startsWith('domain:')) {
-        chips.push({ label: b.slice('domain:'.length), color: 'var(--text-2)', onremove: () => notesStore.removeNoteBinding(note!.id, b) });
+        chips.push({ kind: 'domain', label: b.slice('domain:'.length), color: 'var(--text-2)', onremove: () => notesStore.removeNoteBinding(note!.id, b) });
       }
     }
 
