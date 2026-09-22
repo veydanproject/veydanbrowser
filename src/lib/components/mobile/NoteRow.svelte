@@ -3,6 +3,7 @@
 
 <script lang="ts">
   import Icon from '$lib/Icon.svelte';
+  import ChipMark from '$lib/components/notes/ChipMark.svelte';
   import type { NoteListItem } from '$lib/mobile/api';
   import { locale, t, type Key } from '$lib/mobile/i18n';
   import { fmtListDate, noteColor, type RowAction, type RowMode } from '$lib/mobile/notes-editor';
@@ -35,8 +36,6 @@
   let pressTimer: ReturnType<typeof setTimeout> | undefined;
   let suppressTap = false;
   let tagDrag = false;
-
-  const tagChips = $derived(note.chips.filter((c) => c.kind === 'tag'));
 
   type Btn = { action: RowAction; icon: string; label: Key; danger?: boolean };
   const buttons = $derived.by((): Btn[] => {
@@ -172,7 +171,7 @@
         </span>
       </span>
       {#if note.preview}<span class="preview">{note.preview}</span>{/if}
-      {#if tagChips.length}
+      {#if note.chips.length}
         <!-- Horizontal strip: don't let the card swipe steal the drag. -->
         <span
           class="tags"
@@ -181,8 +180,8 @@
           ontouchend={(e) => e.stopPropagation()}
           onclick={(e) => { if (tagDrag) { e.stopPropagation(); e.preventDefault(); } }}
         >
-          {#each tagChips as c (c.id)}
-            <span class="m-chip small" style:--chip={c.color}>{c.label}</span>
+          {#each note.chips as c (c.kind + c.id)}
+            <span class="m-chip small" style:--chip={c.color}><ChipMark kind={c.kind} />{c.label}</span>
           {/each}
         </span>
       {/if}
