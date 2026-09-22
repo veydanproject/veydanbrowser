@@ -2,7 +2,9 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Icon from '$lib/Icon.svelte';
+  import { api as shared } from '$lib/api';
   import { api, formatError, type NoteListFilter, type NoteNav, type NavChild } from '$lib/mobile/api';
   import { NAV_COLORS } from '$lib/mobile/nav-colors';
   import { longpress } from '$lib/mobile/longpress';
@@ -33,6 +35,11 @@
   let smartOpen = $state(false);
   let smartId = $state<string | null>(null);
   let saving = $state(false);
+  let version = $state('');
+
+  onMount(() => {
+    void shared.system.hostInfo().then((h) => (version = h.version)).catch(() => {});
+  });
 
   type FolderNode = { item: NavChild; children: FolderNode[]; total: number };
 
@@ -178,7 +185,12 @@
         </section>
 
         <section>
-          <div class="m-label">{$t('notes_filter_folders')}</div>
+          <div class="label-row">
+            <span class="m-label">{$t('notes_filter_folders')}</span>
+            <button type="button" class="m-ibtn small" onclick={() => openNewFolder()} aria-label={$t('notes_create_folder')}>
+              <Icon name="plus" size={16} />
+            </button>
+          </div>
           {#each spaces as node (node.item.id)}
             {@render space(node)}
           {/each}
@@ -255,9 +267,13 @@
           {/if}
         </section>
 
-        <button type="button" class="m-link create" onclick={() => openNewFolder()}>
-          <Icon name="plus" size={18} /> {$t('notes_create_folder')}
-        </button>
+        <div class="brand">
+          <img src="/logo.png" alt="" />
+          <div class="brand-text">
+            <span class="brand-name">Veydan Notes</span>
+            {#if version}<span class="brand-ver">v{version}</span>{/if}
+          </div>
+        </div>
       </nav>
     {/if}
   </div>
@@ -362,7 +378,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 var(--sp-3) calc(var(--nav-h) + var(--sab) + var(--sp-6));
+    padding: 0 var(--sp-3) calc(var(--sab) + var(--sp-3));
   }
   section { display: flex; flex-direction: column; }
   section + section { margin-top: var(--sp-2); }
@@ -428,7 +444,33 @@
   .label-row .m-label { flex: 1; }
   .label-row > :global(svg) { color: var(--text-3); flex-shrink: 0; margin-right: 10px; }
   .m-ibtn.small { width: 36px; height: 36px; color: var(--text-3); }
-  .create { margin-top: var(--sp-3); }
+  .brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: var(--sp-4);
+    padding: var(--sp-3) var(--sp-2) 0;
+    border-top: 1px solid var(--border);
+  }
+  .brand img {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    flex-shrink: 0;
+  }
+  .brand-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .brand-name {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text-2);
+  }
+  .brand-ver {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-3);
+  }
   .pad { padding: 0 var(--sp-3); }
   .danger { color: var(--danger-text); }
 </style>

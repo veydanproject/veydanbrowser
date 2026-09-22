@@ -499,6 +499,10 @@ export interface MergeResult {
 export interface ConflictView {
   token: string;
   merge: MergeResult;
+  /** This device's sync name. Empty when the user has not set one. */
+  local_device: string;
+  /** Other device's sync name. Empty when the name is unknown. */
+  remote_device: string;
 }
 
 export interface DiffLine {

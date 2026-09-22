@@ -12,6 +12,7 @@
   import { APPS, loadDefaultApp, saveDefaultApp } from '$lib/mobile/apps';
   import PickerSheet from '$lib/components/mobile/PickerSheet.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
+  import BugReportDialog from '$lib/components/BugReportDialog.svelte';
   import { formatError } from '$lib/utils';
   import { notesStore } from '$lib/store/notes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
@@ -36,6 +37,7 @@
   let pendingData = $state<'load' | 'clear' | null>(null);
   let dataMsg = $state('');
   let dataError = $state('');
+  let bugOpen = $state(false);
 
   const themeOptions = $derived([
     { id: 'light', label: $t('settings_theme_light'), icon: 'sun' },
@@ -171,7 +173,13 @@
         <span class="m-row-value mono">{info ? `${info.version} · ${info.os}/${info.arch}` : ''}</span>
       </div>
     </div>
+    <button type="button" class="m-row" onclick={() => (bugOpen = true)}>
+      <span class="m-row-label">{$t('settings_bug_report')}</span>
+      <span class="chev"><Icon name="chevron-right" size={16} /></span>
+    </button>
   </div>
+
+  <BugReportDialog bind:open={bugOpen} />
 
   <div class="demo-foot">
     <button type="button" class="demo-chip" onclick={() => (picker = 'demoLang')}>

@@ -4,11 +4,15 @@
 <script lang="ts">
   import type { MergeBlock, MergeResult } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
+  import MergeHunk from './MergeHunk.svelte';
   import {
-    buildMergeContent,
+    buildResolvedContent,
     emptySelections,
-    isComplete,
+    nextLineToggle,
+    selectAllChoice,
+    shownLinePick,
     unresolvedCount as countUnresolved,
+    type LinePick,
     type MergeChoice,
     type MergeSelections,
   } from '$lib/notes/merge-result';
@@ -16,23 +20,48 @@
   interface Props {
     /** Fetches the merge; history merge and sync conflicts share this UI */
     load: () => Promise<MergeResult>;
-    /** Name of the "theirs" side: history version or other device */
-    theirsLabel?: string;
-    theirsShort?: string;
+    /** Side titles. Device names are appended when set. */
+    localTitle?: string;
+    remoteTitle?: string;
+    localName?: string;
+    remoteName?: string;
+    oursAction?: string;
+    bothAction?: string;
+    theirsAction?: string;
     onresolved: (content: string) => void;
     oncancel: () => void;
   }
 
-  let { load, theirsLabel = 'Версия из истории', theirsShort = 'Из истории', onresolved, oncancel }: Props = $props();
+  let {
+    load,
+    localTitle = 'Текущая версия',
+    remoteTitle = 'Версия из истории',
+    localName = '',
+    remoteName = '',
+    oursAction = 'Принять текущую',
+    bothAction = 'Принять обе версии',
+    theirsAction = 'Принять из истории',
+    onresolved,
+    oncancel,
+  }: Props = $props();
 
   let blocks = $state<MergeBlock[]>([]);
   let choices = $state<MergeSelections>([]);
+  /** Set when the user toggles lines; null means the whole-side choice applies. */
+  let picks = $state<(LinePick | null)[]>([]);
   let loading = $state(true);
   let error = $state('');
   let hasConflicts = $state(false);
+  let scrollEl = $state<HTMLDivElement | null>(null);
 
   $effect(() => {
     loadMerge();
+  });
+
+  // Unchanged text can fill the panel; keep the conflict, and its line buttons, in view.
+  $effect(() => {
+    if (loading || !hasConflicts || !scrollEl) return;
+    scrollEl.querySelector('.conflict-block')?.scrollIntoView({ block: 'start' });
   });
 
   async function loadMerge() {
@@ -42,6 +71,7 @@
       const result = await load();
       blocks = result.blocks;
       choices = emptySelections(blocks);
+      picks = blocks.map(() => null);
       // Only blocks the user can act on count; never claim "all resolved" over plain text
       hasConflicts = blocks.some((b) => b.kind === 'conflict');
     } catch (e) {
@@ -51,16 +81,41 @@
     }
   }
 
-  function setChoice(index: number, choice: MergeChoice) {
-    if (blocks[index]?.kind !== 'conflict') return;
-    choices[index] = choice;
+  function sideHead(title: string, name: string): string {
+    const n = name.trim();
+    return n ? `${title} · ${n}` : title;
   }
 
-  const allResolved = $derived(isComplete(blocks, choices));
-  const unresolvedCount = $derived(countUnresolved(blocks, choices));
+  /** Picks one whole-block choice for every conflict. */
+  function chooseAll(choice: MergeChoice) {
+    choices = selectAllChoice(blocks, choice);
+    picks = blocks.map(() => null);
+  }
+
+  function allChosen(choice: MergeChoice): boolean {
+    return blocks.some((b) => b.kind === 'conflict')
+      && blocks.every((b, i) => b.kind !== 'conflict' || (choices[i] === choice && !picks[i]));
+  }
+
+  /** Toggles one line. A pattern that matches a whole side collapses back to that choice. */
+  function toggleLine(index: number, side: 'ours' | 'theirs', line: number) {
+    const block = blocks[index];
+    if (!block) return;
+    const next = nextLineToggle(block, shownLinePick(block, choices[index] ?? null, picks[index] ?? null), side, line);
+    if (!next) return;
+    choices[index] = next.choice;
+    picks[index] = next.pick;
+  }
+
+  function blockResolved(index: number): boolean {
+    return choices[index] != null || picks[index] != null;
+  }
+
+  const unresolvedCount = $derived(countUnresolved(blocks, choices, picks));
+  const allResolved = $derived(unresolvedCount === 0);
 
   function apply() {
-    onresolved(buildMergeContent(blocks, choices));
+    onresolved(buildResolvedContent(blocks, choices, picks));
   }
 </script>
 
@@ -98,68 +153,45 @@
       </div>
     {:else}
       <div class="conflicts-summary">
-        {#if unresolvedCount > 0}
-          <span class="badge badge-warn">
-            <Icon name="alert-triangle" size={12} />
-            {unresolvedCount} конфликт{unresolvedCount > 1 ? 'а' : ''} не разрешено
-          </span>
-        {:else}
-          <span class="badge badge-ok">
-            <Icon name="check-circle" size={12} />
-            Все конфликты разрешены
-          </span>
-        {/if}
-        <span class="legend">
-          <span class="l-current">Текущая</span>
-          <span class="l-history">{theirsShort}</span>
-        </span>
+        <div class="summary-top">
+          {#if unresolvedCount > 0}
+            <span class="badge badge-warn">
+              <Icon name="alert-triangle" size={12} />
+              {unresolvedCount} конфликт{unresolvedCount > 1 ? 'а' : ''} не разрешено
+            </span>
+          {:else}
+            <span class="badge badge-ok">
+              <Icon name="check-circle" size={12} />
+              Все конфликты разрешены
+            </span>
+          {/if}
+        </div>
+        <div class="summary-actions">
+          <button type="button" class="btn btn-ghost btn-sm" class:active={allChosen('ours')} onclick={() => chooseAll('ours')}>
+            {oursAction}
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" class:active={allChosen('both')} onclick={() => chooseAll('both')}>
+            {bothAction}
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" class:active={allChosen('theirs')} onclick={() => chooseAll('theirs')}>
+            {theirsAction}
+          </button>
+        </div>
       </div>
 
-      <div class="blocks-scroll">
+      <div class="blocks-scroll" bind:this={scrollEl}>
         {#each blocks as block, i}
-          {#if block.kind === 'normal'}
-            <pre class="normal-block">{block.text}</pre>
-          {:else}
-            {@const choice = choices[i]}
-            <div class="conflict-block" class:resolved={choice !== null}>
-              <div class="conflict-side side-current" class:chosen={choice === 'ours' || choice === 'both'}>
-                <div class="side-label">
-                  <Icon name="arrow-up" size={10} />
-                  Текущая версия
-                </div>
-                <pre class="side-content">{block.ours || '(пусто)'}</pre>
-              </div>
-              <div class="conflict-actions">
-                <button
-                  class="choice-btn"
-                  class:active={choice === 'ours'}
-                  onclick={() => setChoice(i, 'ours')}
-                >
-                  Принять текущую
-                </button>
-                <button
-                  class="choice-btn choice-both"
-                  class:active={choice === 'both'}
-                  onclick={() => setChoice(i, 'both')}
-                >
-                  Обе версии
-                </button>
-                <button
-                  class="choice-btn"
-                  class:active={choice === 'theirs'}
-                  onclick={() => setChoice(i, 'theirs')}
-                >
-                  Принять: {theirsShort}
-                </button>
-              </div>
-              <div class="conflict-side side-history" class:chosen={choice === 'theirs' || choice === 'both'}>
-                <div class="side-label">
-                  <Icon name="clock" size={10} />
-                  {theirsLabel}
-                </div>
-                <pre class="side-content">{block.theirs || '(пусто)'}</pre>
-              </div>
-            </div>
+          {#if block.kind === 'conflict'}
+            <MergeHunk
+              {blocks}
+              index={i}
+              {choices}
+              {picks}
+              localLabel={sideHead(localTitle, localName)}
+              remoteLabel={sideHead(remoteTitle, remoteName)}
+              resolved={blockResolved(i)}
+              ontoggle={(side, line) => toggleLine(i, side, line)}
+            />
           {/if}
         {/each}
       </div>
@@ -256,110 +288,44 @@
 
   .conflicts-summary {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-direction: column;
+    align-items: stretch;
     padding: 0.4rem var(--sp-4);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     gap: var(--sp-2);
   }
 
-  .legend {
+  .summary-top {
     display: flex;
-    gap: var(--sp-3);
-    font-size: var(--fs-2xs);
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
   }
 
-  .l-current { color: var(--accent-text); }
-  .l-history { color: var(--success-text); }
+  .summary-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+  }
+
+  .summary-actions .btn { flex: 1 1 8rem; }
+
+  .summary-actions .btn.active {
+    background: var(--accent-bg);
+    color: var(--accent-text);
+    border-color: var(--accent-border);
+  }
 
   .blocks-scroll {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: var(--sp-2);
     display: flex;
     flex-direction: column;
     gap: var(--sp-2);
   }
-
-  .normal-block {
-    margin: 0;
-    padding: 0.4rem var(--sp-3);
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-    color: var(--text-3);
-    white-space: pre-wrap;
-    word-break: break-all;
-    border-radius: var(--radius-sm);
-    background: var(--surface-2);
-  }
-
-  .conflict-block {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-  }
-
-  .conflict-block.resolved { border-color: var(--accent-border); }
-
-  .conflict-side {
-    padding: 0.4rem var(--sp-3);
-    opacity: 0.5;
-    transition: opacity 0.15s;
-  }
-
-  .conflict-side.chosen { opacity: 1; }
-  .side-current { background: var(--accent-tint); border-bottom: 1px solid var(--border); }
-  .side-history { background: var(--success-bg); border-top: 1px solid var(--border); }
-
-  .side-label {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    font-size: var(--fs-2xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    margin-bottom: 0.3rem;
-  }
-
-  .side-current .side-label { color: var(--accent-text); }
-  .side-history .side-label { color: var(--success-text); }
-
-  .side-content {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-    white-space: pre-wrap;
-    word-break: break-all;
-    color: var(--text);
-  }
-
-  .conflict-actions {
-    display: flex;
-    gap: 0;
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-2);
-  }
-
-  .choice-btn {
-    flex: 1;
-    background: none;
-    border: none;
-    border-right: 1px solid var(--border);
-    padding: 0.3rem var(--sp-2);
-    font-size: var(--fs-2xs);
-    cursor: pointer;
-    color: var(--text-2);
-    transition: background 0.12s, color 0.12s;
-    text-align: center;
-  }
-
-  .choice-btn:last-child { border-right: none; }
-  .choice-btn:hover { background: var(--surface-hover); color: var(--text); }
-  .choice-btn.active { background: var(--accent-bg); color: var(--accent-text); font-weight: var(--fw-medium); }
-  .choice-both.active { background: var(--success-bg); color: var(--success-text); }
 
   .footer {
     display: flex;

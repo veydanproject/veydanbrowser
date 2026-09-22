@@ -155,11 +155,6 @@
     </div>
   {/if}
 
-  <a class="m-btn-grad add" href="/totp/add">
-    <Icon name="plus" size={18} />
-    {$t('totp_add_account')}
-  </a>
-
   {#if toast}
     <div class="toast">{toast}</div>
   {/if}
@@ -206,7 +201,6 @@
   .ring circle { fill: none; stroke-width: 3; }
   .track { stroke: var(--border); }
   .progress { transition: stroke-dashoffset 0.9s linear; }
-  .add { margin-top: auto; }
   .m-cards { padding-bottom: var(--sp-6); }
   .danger { color: var(--danger-text); }
 </style>

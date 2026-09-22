@@ -27,6 +27,7 @@
   import NoteAttachmentPolicy from '$lib/components/notes/NoteAttachmentPolicy.svelte';
   import NoteLockSettings from '$lib/components/notes/NoteLockSettings.svelte';
   import SyncSettings from '$lib/components/SyncSettings.svelte';
+  import BugReportDialog from '$lib/components/BugReportDialog.svelte';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -72,6 +73,7 @@
   let unlisteners: (() => void)[] = [];
 
   let appVersion = $state('');
+  let bugOpen = $state(false);
   let latestCamoufox = $state<string | null>(null);
   let checkingUpdate = $state(false);
   let checkUpdateError = $state('');
@@ -1075,6 +1077,10 @@
     <p class="about-note">{$t('settings_about_license_note')}</p>
 
     <div class="about-links">
+      <button type="button" class="link-btn" onclick={() => (bugOpen = true)}>
+        <Icon name="info" size={14} />
+        <span>{$t('settings_bug_report')}</span>
+      </button>
       <button type="button" class="link-btn" onclick={() => openExternal(LICENSE_URL)}>
         <Icon name="external-link" size={14} />
         <span>{$t('settings_about_link_license')}</span>
@@ -1101,6 +1107,8 @@
 
     <div class="about-copyright">{$t('settings_about_copyright')}</div>
   </div>
+
+  <BugReportDialog bind:open={bugOpen} camoufox={camoufox?.installed ? camoufox.version : null} />
 
   <div class="demo-foot">
     <span class="demo-label">{$t('settings_demo_locale')}</span>

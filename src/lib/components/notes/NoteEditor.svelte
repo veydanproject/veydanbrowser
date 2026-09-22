@@ -59,6 +59,8 @@
   let showHistory = $state(false);
   let mergeHistoryId = $state<string | null>(null);
   let showSyncConflict = $state(false);
+  let syncLocalDevice = $state('');
+  let syncRemoteDevice = $state('');
   // Token of the loaded conflict snapshot; bumping the key reloads a stale one.
   let syncConflictToken = '';
   let syncConflictKey = $state(0);
@@ -490,6 +492,8 @@
   async function loadSyncConflict(id: string) {
     const view = await api.sync.conflictGet(id);
     syncConflictToken = view.token;
+    syncLocalDevice = view.local_device;
+    syncRemoteDevice = view.remote_device;
     return view.merge;
   }
 
@@ -836,8 +840,13 @@
       {#key syncConflictKey}
         <NoteHistoryMerge
           load={() => loadSyncConflict(noteId)}
-          theirsLabel={$t('note_sync_conflict_remote')}
-          theirsShort={$t('note_sync_conflict_remote_short')}
+          localTitle="Локальная версия"
+          remoteTitle="Удалённая версия"
+          localName={syncLocalDevice || 'Этот компьютер'}
+          remoteName={syncRemoteDevice}
+          oursAction="Принять локальную версию"
+          bothAction="Принять обе версии"
+          theirsAction="Принять удалённую версию"
           onresolved={onSyncConflictResolved}
           oncancel={() => (showSyncConflict = false)}
         />

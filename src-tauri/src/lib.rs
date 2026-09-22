@@ -200,16 +200,15 @@ fn fingerprint_presets() -> Vec<fingerprint::PresetInfo> {
     fingerprint::list_presets()
 }
 
-/// Open an external URL in the user's default browser.
-/// Only parseable http(s) URLs are accepted; the opener plugin never goes
-/// through a shell, so URL contents cannot become commands.
+/// Open an http(s) URL in the default browser, or a mailto: link in the mail client.
+/// The opener plugin never goes through a shell, so URL contents cannot become commands.
 #[cfg(desktop)]
 #[tauri::command]
 fn open_url(url: String, app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let parsed = url::Url::parse(&url).map_err(|e| e.to_string())?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("only http(s) URLs are allowed".into());
+    if !matches!(parsed.scheme(), "http" | "https" | "mailto") {
+        return Err("only http(s) and mailto URLs are allowed".into());
     }
     app.opener()
         .open_url(parsed.as_str(), None::<&str>)

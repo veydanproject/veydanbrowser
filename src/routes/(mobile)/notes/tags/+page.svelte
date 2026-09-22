@@ -121,10 +121,6 @@
       <p>{query.trim() ? $t('common_nothing_found') : $t('notes_areas_empty')}</p>
     </div>
   {/if}
-
-  <button type="button" class="m-link create" onclick={openNew}>
-    <Icon name="plus" size={18} /> {$t('notes_tag_create')}
-  </button>
   </div>
 </div>
 
@@ -147,6 +143,5 @@
 />
 
 <style>
-  .create { margin-top: var(--sp-3); }
   .danger { color: var(--danger-text); }
 </style>

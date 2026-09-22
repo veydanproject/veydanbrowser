@@ -9,8 +9,8 @@
 //! A delete op carries only `parents`.
 //!
 //! Apply rules for a remote op against the local head:
-//! - op.hlc <= head.hlc: skip. Either already applied, or our head is newer and
-//!   the other side (holding the older version) is the one that merges.
+//! - op.hlc <= head.hlc: skip only when that blob is already in our head.
+//!   A divergent older put still merges, so both devices show the conflict.
 //! - delete: apply (fast-forward or newer-wins).
 //! - put whose parents include our head: fast-forward.
 //! - put that diverged: 3-way merge from the exact common ancestor; a clean
@@ -259,7 +259,11 @@ pub async fn apply_remote(
         let id = op.entity_id.clone();
         let payload: NotePayload = serde_json::from_value(op.payload.clone()).unwrap_or_default();
         let prev = load_note_state(db, &id).await?;
-        if prev.as_ref().and_then(|s| s.head_hlc.as_ref()).map(|h| *h >= op.hlc).unwrap_or(false) {
+        // Older than our head: drop it only if we already have that version.
+        // A fork with an older clock still merges, so the conflict shows here too.
+        let stale = prev.as_ref().and_then(|s| s.head_hlc.as_ref()).is_some_and(|h| *h >= op.hlc);
+        let already = prev.as_ref().is_some_and(|s| s.head_blob == payload.blob || s.head_parents.contains(&payload.blob));
+        if stale && (op.deleted || already) {
             continue;
         }
         let row = load_head(db, &id).await?;
@@ -532,6 +536,10 @@ fn deleted_here(engine: &Engine, prev: Option<&NoteSyncState>, row: Option<&Note
 pub struct ConflictView {
     pub token: String,
     pub merge: MergeResult,
+    /// Name from sync settings. Empty when the user has not set one.
+    pub local_device: String,
+    /// Name of the device that wrote the remote side. Empty when unknown.
+    pub remote_device: String,
 }
 
 /// Unresolved conflict state plus the current local body.
@@ -558,15 +566,52 @@ fn conflict_token(st: &NoteSyncState, local: &str) -> String {
     sha256_hex(seed.as_bytes())
 }
 
+/// Device id stored on the remote conflict snapshot.
+async fn history_device(db: &sqlx::SqlitePool, history_id: &str) -> String {
+    if history_id.is_empty() {
+        return String::new();
+    }
+    let row: Option<(Option<String>,)> = sqlx::query_as("SELECT device FROM note_history WHERE id = ?")
+        .bind(history_id)
+        .fetch_optional(db)
+        .await
+        .unwrap_or(None);
+    row.and_then(|(id,)| id).unwrap_or_default()
+}
+
+/// Human name for a device id from the last sync device list. Never the raw id.
+fn cached_device_name(raw: &str, device_id: &str) -> String {
+    if device_id.is_empty() {
+        return String::new();
+    }
+    #[derive(Deserialize)]
+    struct Named {
+        id: String,
+        #[serde(default)]
+        name: String,
+    }
+    let list: Vec<Named> = serde_json::from_str(raw).unwrap_or_default();
+    list.into_iter()
+        .find(|d| d.id == device_id)
+        .map(|d| d.name.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_default()
+}
+
 /// Merge data for the conflict UI: ancestor and remote from history, local from the file.
 pub async fn conflict_merge(state: &AppState, note_id: &str) -> CmdResult<ConflictView> {
     let db = &state.db;
     let (st, local) = load_conflict(state, note_id).await?;
     let ancestor = history_content_by_id(&st.conflict_ancestor_id, db).await.unwrap_or_default();
     let remote = history_content_by_id(&st.conflict_remote_id, db).await?;
+    let local_device = super::config::get_setting(db, "sync_device_name").await.unwrap_or_default().trim().to_string();
+    let remote_id = history_device(db, &st.conflict_remote_id).await;
+    let devices = super::config::get_setting(db, "sync_devices").await.unwrap_or_default();
     Ok(ConflictView {
         token: conflict_token(&st, &local),
         merge: merge3(&ancestor, &local, &remote).or_whole_texts(&local, &remote),
+        local_device,
+        remote_device: cached_device_name(&devices, &remote_id),
     })
 }
 

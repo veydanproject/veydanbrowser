@@ -187,7 +187,7 @@
 
 <style>
   .input { width: 100%; border: 0; border-radius: 12px; background: var(--m-field); padding: 0 14px; }
-  .swatches { display: flex; gap: 12px; flex-wrap: wrap; }
+  .swatches { display: flex; gap: 12px; flex-wrap: wrap; padding: 3px; }
   .swatch {
     width: 32px;
     height: 32px;

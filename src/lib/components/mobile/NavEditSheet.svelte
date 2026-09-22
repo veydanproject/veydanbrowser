@@ -39,7 +39,7 @@
     background: var(--m-field);
     padding: 0 14px;
   }
-  .swatches { display: flex; gap: 12px; flex-wrap: wrap; padding: var(--sp-1) 0; }
+  .swatches { display: flex; gap: 12px; flex-wrap: wrap; padding: var(--sp-1) 3px; }
   .swatch {
     width: 32px;
     height: 32px;
