@@ -18,6 +18,12 @@
   import NoteFindBar from './NoteFindBar.svelte';
   import NoteAttachments from './NoteAttachments.svelte';
   import NoteLinks from './NoteLinks.svelte';
+  import Dialog from '$lib/components/ui/Dialog.svelte';
+  import CaptureScreen from '$lib/components/media/CaptureScreen.svelte';
+  import MediaPrefsBar from '$lib/components/media/MediaPrefsBar.svelte';
+  import { loadPrefs, savePrefs } from '$lib/media/prefs';
+  import { mediaT } from '$lib/media/strings';
+  import type { CaptureFile, MediaKind, MediaPrefs } from '$lib/media/types';
   import WikiLinkPicker from './WikiLinkPicker.svelte';
   import { WIKI_MARK, unclosedWikiAt, wikiMarkup } from '$lib/tiptap-ext';
   import { applyAction, shiftIndent, continueList, type EditAction, type EditResult } from '$lib/markdown-edit';
@@ -305,6 +311,32 @@
 
   async function pickFiles() {
     await uploadPaths(await pickNativeFiles());
+  }
+
+  // ── Audio / video recording ──
+
+  /** Kind being recorded; null while the recorder dialog is closed. */
+  let recording = $state<MediaKind | null>(null);
+  let mediaPrefs = $state<MediaPrefs>(loadPrefs());
+  const mt = $derived(mediaT($locale));
+
+  function setMediaPrefs(next: MediaPrefs) {
+    mediaPrefs = next;
+    savePrefs(next);
+  }
+
+  /** Stores the take as an attachment and links it at the cursor. */
+  async function storeCapture(file: CaptureFile) {
+    recording = null;
+    if (!note || readonly) return;
+    attachError = null;
+    try {
+      const bytes = new Uint8Array(await file.blob.arrayBuffer());
+      insertAttachmentLink(await api.notes.attachmentAdd(note.id, file.name, bytes));
+    } catch (e) {
+      attachError = formatError(e);
+    }
+    await loadAttachments();
   }
 
   /** Files copied in the OS file manager: the webview hides their paths, so read them via Rust. */
@@ -731,6 +763,7 @@
       {#if attachmentsOpen}
         <NoteAttachments
           noteId={note.id}
+          baseDir={note.base_dir}
           {attachments}
           {readonly}
           {transfers}
@@ -738,6 +771,7 @@
           oninsert={insertAttachmentLink}
           onchanged={loadAttachments}
           onpick={pickFiles}
+          onrecord={(kind) => (recording = kind)}
           onfetch={fetchAttachment}
         />
       {/if}
@@ -873,9 +907,31 @@
     </div>
   {/if}
   </div>
+
+  <Dialog open={recording !== null} title={recording ? mt(recording) : ''} width="560px" closeOnBackdrop={false} onclose={() => (recording = null)}>
+    {#if recording}
+      {@const kind = recording}
+      <div class="rec-dialog">
+        <MediaPrefsBar {kind} prefs={mediaPrefs} t={mt} onprefs={setMediaPrefs} />
+        {#key `${kind}:${mediaPrefs.videoHeight}`}
+          <CaptureScreen
+            {kind}
+            prefs={mediaPrefs}
+            t={mt}
+            embedded
+            ondone={storeCapture}
+            oncancel={() => (recording = null)}
+            onfacing={(facing) => setMediaPrefs({ ...mediaPrefs, facing })}
+          />
+        {/key}
+      </div>
+    {/if}
+  </Dialog>
 {/if}
 
 <style>
+  .rec-dialog { display: flex; flex-direction: column; gap: var(--sp-3); }
+
   /* .empty-state covers the centering; keep only the delta needed to fill the editor pane */
   .editor-empty {
     flex: 1;

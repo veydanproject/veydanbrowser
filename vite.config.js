@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+import { svelteCssGuard } from "./vite-svelte-css.js";
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -17,7 +18,7 @@ const cacheDir = isAndroid ? "node_modules/.vite-android" : "node_modules/.vite-
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [sveltekit()],
+  plugins: [svelteCssGuard(), sveltekit()],
   cacheDir,
   define: {
     __TAURI_PLATFORM__: JSON.stringify(platform),

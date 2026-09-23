@@ -3,6 +3,7 @@
 
 // Shared on every platform
 pub mod demo;
+pub mod media;
 pub mod notes;
 pub mod password;
 pub mod totp;

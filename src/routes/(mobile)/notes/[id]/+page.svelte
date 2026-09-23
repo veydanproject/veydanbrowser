@@ -28,6 +28,9 @@
   import NoteLabelSheet from '$lib/components/mobile/NoteLabelSheet.svelte';
   import NoteAttachSheet from '$lib/components/mobile/NoteAttachSheet.svelte';
   import NoteConflictSheet from '$lib/components/mobile/NoteConflictSheet.svelte';
+  import MediaCapture from '$lib/components/media/MediaCapture.svelte';
+  import { mediaKindOf } from '$lib/media/kind';
+  import type { CaptureFile, MediaItem, MediaKind } from '$lib/media/types';
   import ChipMark from '$lib/components/notes/ChipMark.svelte';
   import { WIKI_MARK, unclosedWikiAt, wikiMarkup } from '$lib/tiptap-ext';
 
@@ -65,6 +68,13 @@
   /** Inherited folder the user removed before the first save. */
   let droppedFolders = $state<string[]>([]);
   let attachments = $state<NoteAttachment[]>([]);
+  /** Audio and video attachments as seen by the capture module. */
+  const mediaItems = $derived<MediaItem[]>(
+    attachments.flatMap((a) => {
+      const kind = mediaKindOf(a.name);
+      return kind ? [{ name: a.name, size: a.size, kind, present: a.present }] : [];
+    }),
+  );
   let thumbs = $state<Record<string, string>>({});
   let urls = $state(new AttachmentUrls(untrack(() => id)));
   let wikiQuery = $state('');
@@ -610,17 +620,47 @@
   /** Native picker; files are streamed into the note by Rust. */
   async function attach(imagesOnly: boolean) {
     try {
-      if (id === 'new') {
-        status = 'dirty';
-        await save();
-        if (id === 'new') return;
-      }
+      if (!(await ensureSaved())) return;
       const added = await api.attachments.pick(id, imagesOnly);
       await loadAttachments();
       for (const a of added) if (a.is_image) insertAttachment(a);
     } catch (err) {
       error = formatError(err);
     }
+  }
+
+  /** Creates the note first when it is not stored yet; false if that failed. */
+  async function ensureSaved(): Promise<boolean> {
+    if (id !== 'new') return true;
+    status = 'dirty';
+    await save();
+    return id !== 'new';
+  }
+
+  async function attachMedia(kind: MediaKind) {
+    try {
+      if (!(await ensureSaved())) return;
+      await api.attachments.pickMedia(id, kind);
+      await loadAttachments();
+    } catch (err) {
+      error = formatError(err);
+    }
+  }
+
+  /** Stores a finished recording and links it in the body. */
+  async function storeCapture(file: CaptureFile) {
+    try {
+      if (!(await ensureSaved())) return;
+      const added = await api.attachments.addBlob(id, file.name, file.blob);
+      await loadAttachments();
+      insertAttachment(added);
+    } catch (err) {
+      error = formatError(err);
+    }
+  }
+
+  function attachmentOf(item: MediaItem): NoteAttachment | undefined {
+    return attachments.find((a) => a.name === item.name);
   }
 
   function insertText(text: string) {
@@ -923,6 +963,16 @@
   <button type="button" onclick={() => (sheet = 'attach')} aria-label={$t('notes_attach')}>
     <Icon name="paperclip" size={22} />
   </button>
+  <MediaCapture
+    items={mediaItems}
+    locale={$locale}
+    oncapture={storeCapture}
+    onpick={attachMedia}
+    oninsert={(i) => { const a = attachmentOf(i); if (a) insertAttachment(a); }}
+    onremove={(i) => { const a = attachmentOf(i); if (a) removeAttachment(a); }}
+    onsave={(i) => { const a = attachmentOf(i); if (a) saveAttachment(a); }}
+    resolveSrc={(i) => urls.get(i.name)}
+  />
   <button type="button" disabled={isNew} onclick={() => (sheet = 'links')} aria-label={$t('notes_links')}>
     <Icon name="link" size={22} />
   </button>

@@ -7,6 +7,9 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { api as shared, downloadNoteAttachment } from '$lib/api';
 import { pickNativeFiles } from '$lib/attachmentTransfer';
+import { pickMediaFiles } from '$lib/media/pick';
+import type { MediaKind } from '$lib/media/types';
+import { capabilities } from '$lib/platform';
 import { formatError } from '$lib/utils';
 import type {
   ConflictView,
@@ -354,6 +357,25 @@ export const api = {
       const out: NoteAttachment[] = [];
       for (const uri of await pickNativeFiles(imagesOnly)) out.push(await shared.notes.attachmentAddFromPath(noteId, uri));
       return out;
+    },
+    /** Native picker limited to audio or video files. */
+    pickMedia: async (noteId: string, kind: MediaKind): Promise<NoteAttachment[]> => {
+      const out: NoteAttachment[] = [];
+      for (const uri of await pickMediaFiles(kind)) out.push(await shared.notes.attachmentAddFromPath(noteId, uri));
+      return out;
+    },
+    /** Stores in-memory bytes; mobile goes through a temp file since raw IPC bodies are desktop-only. */
+    addBlob: async (noteId: string, name: string, blob: Blob): Promise<NoteAttachment> => {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (capabilities.hasRawIpc) return shared.notes.attachmentAdd(noteId, name, bytes);
+      const { BaseDirectory, remove, writeFile } = await import('@tauri-apps/plugin-fs');
+      const { appCacheDir, join } = await import('@tauri-apps/api/path');
+      await writeFile(name, bytes, { baseDir: BaseDirectory.AppCache });
+      try {
+        return await shared.notes.attachmentAddFromPath(noteId, await join(await appCacheDir(), name));
+      } finally {
+        remove(name, { baseDir: BaseDirectory.AppCache }).catch(() => {});
+      }
     },
     read: (noteId: string, name: string) => shared.notes.attachmentRead(noteId, name),
     delete: (noteId: string, name: string) => shared.notes.attachmentDelete(noteId, name),

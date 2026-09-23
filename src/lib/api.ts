@@ -219,6 +219,10 @@ export const api = {
     trim: (limit: number) => call<void>('pwgen_history_trim', { limit }),
   },
 
+  media: {
+    /** Lets the webview answer camera / microphone requests before `getUserMedia`. */
+    grantAccess: () => call<void>('media_grant_access'),
+  },
   totp: {
     list: () => call<TotpEntry[]>('totp_list'),
     add: (req: TotpAddRequest) => call<TotpEntry>('totp_add', { req }),

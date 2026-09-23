@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- QR scanning for 2FA (tauri-plugin-barcode-scanner) -->
+    <!-- QR scanning for 2FA (tauri-plugin-barcode-scanner), video capture in notes -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Audio and video recording in notes -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Requested by the WebView together with RECORD_AUDIO; missing it auto-denies the prompt -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

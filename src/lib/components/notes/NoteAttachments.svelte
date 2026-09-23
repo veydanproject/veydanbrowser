@@ -2,14 +2,20 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
+  import { convertFileSrc } from '@tauri-apps/api/core';
   import type { NoteAttachment } from '$lib/types';
   import { api, downloadNoteAttachment, type AttachmentTransfer } from '$lib/api';
   import { transferKey, transferPercent } from '$lib/attachmentTransfer';
   import Icon from '$lib/Icon.svelte';
-  import { t } from '$lib/i18n';
+  import { locale, t } from '$lib/i18n';
+  import { mediaKindOf, mediaMimeOf } from '$lib/media/kind';
+  import { mediaT } from '$lib/media/strings';
+  import type { MediaKind } from '$lib/media/types';
 
   interface Props {
     noteId: string;
+    /** Absolute dir of the note file; media players load `rel_path` against it. */
+    baseDir: string;
     attachments: NoteAttachment[];
     readonly?: boolean;
     /** Vault uploads/downloads in flight for this note, keyed by `note_id/name`. */
@@ -19,14 +25,70 @@
     onchanged: () => void;
     /** Opens the native file picker. */
     onpick: () => void;
+    /** Opens the audio / video recorder. */
+    onrecord: (kind: MediaKind) => void;
     /** Downloads a vault-only attachment. */
     onfetch: (a: NoteAttachment) => void;
   }
 
-  let { noteId, attachments, readonly = false, transfers = new Map(), error = null, oninsert, onchanged, onpick, onfetch }: Props = $props();
+  let {
+    noteId, baseDir, attachments, readonly = false, transfers = new Map(), error = null,
+    oninsert, onchanged, onpick, onrecord, onfetch,
+  }: Props = $props();
 
   let gcResult = $state<string | null>(null);
   let gcBusy = $state(false);
+  const mt = $derived(mediaT($locale));
+  /** Attachment whose inline player is open, and its blob URL. */
+  let playing = $state<string | null>(null);
+  let playSrc = $state<string | null>(null);
+
+  function stopPlay() {
+    if (playSrc) URL.revokeObjectURL(playSrc);
+    playSrc = null;
+    playing = null;
+  }
+
+  // Close the player when the note changes or the file disappears.
+  $effect(() => {
+    if (playing && !attachments.some((a) => a.name === playing)) stopPlay();
+  });
+
+  function iconOf(a: NoteAttachment): string {
+    if (a.is_image) return 'image';
+    const kind = mediaKindOf(a.name);
+    return kind === 'audio' ? 'mic' : kind === 'video' ? 'video' : 'file-text';
+  }
+
+  /**
+   * Bytes for the player. WebKitGTK's media stack fetches `asset.localhost`
+   * outside the webview and fails, so the file is replayed from a blob.
+   */
+  async function mediaBytes(a: NoteAttachment): Promise<Uint8Array> {
+    try {
+      const res = await fetch(convertFileSrc(`${baseDir}/${a.rel_path}`));
+      if (res.ok) return new Uint8Array(await res.arrayBuffer());
+    } catch {
+      // Asset URL blocked; the IPC read below covers it.
+    }
+    return api.notes.attachmentRead(noteId, a.name);
+  }
+
+  /** Media plays inline; everything else opens in the system app. */
+  async function open(a: NoteAttachment) {
+    if (!a.present) return onfetch(a);
+    if (!mediaKindOf(a.name)) return api.notes.attachmentOpen(noteId, a.name);
+    if (playing === a.name) return stopPlay();
+    stopPlay();
+    playing = a.name;
+    const bytes = await mediaBytes(a);
+    const mime = mediaMimeOf(a.name) ?? 'application/octet-stream';
+    const copy = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(copy).set(bytes);
+    const url = URL.createObjectURL(new Blob([copy], { type: mime }));
+    if (playing !== a.name) return URL.revokeObjectURL(url);
+    playSrc = url;
+  }
 
   const transferOf = (name: string) => transfers.get(transferKey(noteId, name));
   /** Transfers of files not on disk yet (remote downloads in progress). */
@@ -75,6 +137,12 @@
         <button class="att-btn" title={$t('note_att_add')} onclick={onpick}>
           <Icon name="plus" size={12} />
         </button>
+        <button class="att-btn" title={mt('record')} onclick={() => onrecord('audio')}>
+          <Icon name="mic" size={12} />
+        </button>
+        <button class="att-btn" title={mt('camera')} onclick={() => onrecord('video')}>
+          <Icon name="video" size={12} />
+        </button>
       {/if}
       <button class="att-btn" title={$t('note_att_gc')} onclick={gc} disabled={gcBusy}>
         <Icon name="trash-2" size={12} />
@@ -93,9 +161,15 @@
     <ul class="att-list">
       {#each attachments as a (a.name)}
         {@const x = transferOf(a.name)}
+        {@const kind = mediaKindOf(a.name)}
         <li class="att-item" class:att-busy={(x && !x.error) || !a.present}>
-          <Icon name={a.is_image ? 'image' : 'file-text'} size={13} />
-          <button class="att-name" title={a.name} onclick={() => (a.present ? api.notes.attachmentOpen(noteId, a.name) : onfetch(a))}>{a.name}</button>
+          <Icon name={iconOf(a)} size={13} />
+          <button class="att-name" title={a.name} onclick={() => open(a)}>{a.name}</button>
+          {#if kind && a.present}
+            <button class="att-btn" title={mt(playing === a.name ? 'stop_play' : 'play')} onclick={() => open(a)}>
+              <Icon name={playing === a.name ? 'square' : 'play'} size={12} />
+            </button>
+          {/if}
           {#if x}
             <span class="att-size" class:att-error={!!x.error} title={x.error ?? ''}>{transferLabel(x)}</span>
             {#if !x.finished}
@@ -122,6 +196,16 @@
             <button class="att-btn att-danger" title={$t('note_att_delete')} onclick={() => remove(a)}><Icon name="x" size={12} /></button>
           {/if}
         </li>
+        {#if kind && playing === a.name && playSrc}
+          <li class="att-player">
+            {#if kind === 'audio'}
+              <audio controls autoplay src={playSrc} onended={stopPlay}></audio>
+            {:else}
+              <!-- svelte-ignore a11y_media_has_caption -->
+              <video controls autoplay src={playSrc} onended={stopPlay}></video>
+            {/if}
+          </li>
+        {/if}
       {/each}
       {#each pendingDownloads as x (x.name)}
         <li class="att-item att-busy">
@@ -204,6 +288,9 @@
   }
   .att-name:hover { text-decoration: underline; }
   .att-size { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-3); }
+  .att-player { padding: 0.2rem 0.2rem 0.4rem; }
+  .att-player audio { width: 100%; height: 32px; }
+  .att-player video { width: 100%; max-height: 150px; border-radius: 6px; background: #000; }
   .att-busy { opacity: 0.8; }
   .att-error { color: var(--danger); }
 </style>

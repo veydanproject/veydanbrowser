@@ -117,6 +117,29 @@ export XDG_DATA_DIRS="$DEV_PREFIX/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/u
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="$SCRIPT_DIR/webkit-run.sh"
 # Don't let WebKit start its own (nested) bwrap sandbox inside ours.
 export WEBKIT_DISABLE_SANDBOX=1
+# WebKit's media player needs the fakevideosink element, which ships inside
+# gst-plugins-bad's debugutils plugin. Without it HTML audio and video stay silent.
+debugutils="$LIBDIR/gstreamer-1.0/libgstdebugutilsbad.so"
+if [ ! -f "$debugutils" ]; then
+  echo ">> WebKit media: extracting fakevideosink ..."
+  tmp=$(mktemp -d)
+  if ( cd "$tmp" && apt-get download gstreamer1.0-plugins-bad && dpkg-deb -x ./*.deb "$tmp/root" ); then
+    found=$(find "$tmp/root" -name 'libgstdebugutilsbad.so' -print -quit)
+    if [ -n "$found" ]; then
+      mkdir -p "$(dirname "$debugutils")"
+      cp -f "$found" "$debugutils"
+    fi
+  fi
+  rm -rf "$tmp"
+fi
+# A failed first scan blacklists pulsesink forever, and WebKit then plays
+# through OSS, which is silent under WSLg. Drop that registry so the next
+# launch retries PulseAudio.
+gst_reg="${XDG_CACHE_HOME:-$HOME/.cache}/gstreamer-1.0/registry.x86_64.bin"
+if [ -f "$gst_reg" ] && strings "$gst_reg" | grep -q 'libgstpulseaudio.so' \
+  && strings "$gst_reg" | grep -q 'BLACKLIST'; then
+  rm -f "$gst_reg"
+fi
 # OpenSSL: use the headers from the prefix and the host's runtime .so, and
 # skip the vendored build. Setting both dirs makes openssl-sys skip pkg-config
 # (whose prefix=/usr would otherwise point at non-existent system headers).

@@ -94,3 +94,5 @@ jni = "0.21"
 # exposes separate left-click (Activate) and right-click (ContextMenu) handlers,
 # which KDE Plasma honors — used for the Linux tray so left-click opens the app.
 ksni = "0.3"
+# Answer WebKitGTK media permission requests (camera / microphone in notes)
+webkit2gtk = "2"

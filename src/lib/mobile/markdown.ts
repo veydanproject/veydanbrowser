@@ -7,6 +7,7 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { api } from '$lib/mobile/api';
+import { mediaMimeOf } from '$lib/media/kind';
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -53,7 +54,7 @@ function mimeOf(name: string): string {
     svg: 'image/svg+xml',
     avif: 'image/avif',
   };
-  return map[ext] ?? 'application/octet-stream';
+  return map[ext] ?? mediaMimeOf(name) ?? 'application/octet-stream';
 }
 
 /** Markdown link target for an attachment, path segments percent-encoded. */

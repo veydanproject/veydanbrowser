@@ -66,6 +66,7 @@ use commands::notes::{
     note_open_window, notes_capture_rules_get, notes_capture_rules_set, notes_get_dir, notes_set_dir,
     open_quick_capture, quick_capture_shortcut_get, quick_capture_shortcut_set,
 };
+use commands::media::media_grant_access;
 use commands::password::{
     pwgen_history_add, pwgen_history_clear, pwgen_history_list, pwgen_history_trim,
 };
@@ -315,6 +316,8 @@ fn run_mobile() {
             totp_generate_code,
             totp_generate_codes,
             totp_preview_uri,
+            // Media capture
+            media_grant_access,
             // Notes
             note_list,
             note_nav,
@@ -635,6 +638,8 @@ fn run_desktop() {
             totp_generate_code,
             totp_generate_codes,
             totp_preview_uri,
+            // Media capture
+            media_grant_access,
             // Notes
             note_list,
             note_nav,
