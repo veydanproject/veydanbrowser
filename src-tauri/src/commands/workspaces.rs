@@ -192,14 +192,13 @@ pub async fn workspace_stats(
             .map_err(AppError::db)?;
 
     let ws_tag = format!("workspace:{}", id);
-    let (proxy_count,): (i64,) =
-        sqlx::query_as(
-            "SELECT COUNT(*) FROM proxies WHERE EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)",
-        )
-        .bind(&ws_tag)
-        .fetch_one(&state.db)
-        .await
-        .map_err(AppError::db)?;
+    let (proxy_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM proxies WHERE EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)",
+    )
+    .bind(&ws_tag)
+    .fetch_one(&state.db)
+    .await
+    .map_err(AppError::db)?;
 
     let (active_count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM profiles WHERE workspace_id = ? AND status = 'running'",

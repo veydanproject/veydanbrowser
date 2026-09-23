@@ -29,7 +29,10 @@ pub(crate) fn folder_descendants(root: &str, folders: &[NoteFolder]) -> HashSet<
     let mut out = HashSet::from([root.to_string()]);
     let mut stack = vec![root.to_string()];
     while let Some(cur) = stack.pop() {
-        for f in folders.iter().filter(|f| f.parent_id.as_deref() == Some(cur.as_str())) {
+        for f in folders
+            .iter()
+            .filter(|f| f.parent_id.as_deref() == Some(cur.as_str()))
+        {
             if out.insert(f.id.clone()) {
                 stack.push(f.id.clone());
             }
@@ -70,7 +73,14 @@ impl FilterContext {
             .updated_within_days
             .map(|days| (chrono::Utc::now() - chrono::Duration::days(days.max(0))).to_rfc3339());
 
-        Ok(Self { tags, folders, folder_scope, open_tasks, updated_after, app_data_dir: state.app_data_dir.clone() })
+        Ok(Self {
+            tags,
+            folders,
+            folder_scope,
+            open_tasks,
+            updated_after,
+            app_data_dir: state.app_data_dir.clone(),
+        })
     }
 
     fn has_attachments(&self, row: &NoteRow) -> bool {
@@ -107,7 +117,9 @@ impl FilterContext {
             }
         }
         if filter.global_only == Some(true)
-            && bindings.iter().any(|b| b.starts_with("workspace:") || b.starts_with("profile:"))
+            && bindings
+                .iter()
+                .any(|b| b.starts_with("workspace:") || b.starts_with("profile:"))
         {
             return false;
         }
@@ -121,7 +133,10 @@ impl FilterContext {
         }
         if let Some(prefix) = &filter.tag_prefix {
             let sub = format!("{prefix}/");
-            if !tags.iter().any(|t| &t.name == prefix || t.name.starts_with(&sub)) {
+            if !tags
+                .iter()
+                .any(|t| &t.name == prefix || t.name.starts_with(&sub))
+            {
                 return false;
             }
         }
@@ -138,7 +153,10 @@ impl FilterContext {
 
         if let Some(scope) = &self.folder_scope {
             let folders = self.folders.get(&row.id);
-            if !folders.map(|v| v.iter().any(|f| scope.contains(f))).unwrap_or(false) {
+            if !folders
+                .map(|v| v.iter().any(|f| scope.contains(f)))
+                .unwrap_or(false)
+            {
                 return false;
             }
         }
@@ -149,7 +167,11 @@ impl FilterContext {
             }
         }
         if let Some(want) = filter.has_open_tasks {
-            let has = self.open_tasks.as_ref().map(|s| s.contains(&row.id)).unwrap_or(false);
+            let has = self
+                .open_tasks
+                .as_ref()
+                .map(|s| s.contains(&row.id))
+                .unwrap_or(false);
             if has != want {
                 return false;
             }

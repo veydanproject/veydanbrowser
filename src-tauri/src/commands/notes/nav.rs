@@ -53,18 +53,40 @@ pub struct NoteNav {
     pub all_profiles: Vec<NavChild>,
 }
 
-fn child(id: String, name: String, color: String, count: i64, parent_id: Option<String>) -> NavChild {
-    NavChild { id, name, color, count, parent_id, profiles: Vec::new() }
+fn child(
+    id: String,
+    name: String,
+    color: String,
+    count: i64,
+    parent_id: Option<String>,
+) -> NavChild {
+    NavChild {
+        id,
+        name,
+        color,
+        count,
+        parent_id,
+        profiles: Vec::new(),
+    }
 }
 
 #[tauri::command]
 pub async fn note_nav(state: tauri::State<'_, AppState>) -> CmdResult<NoteNav> {
     let db = &state.db;
-    let rows = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes").fetch_all(db).await.map_err(AppError::db)?;
+    let rows = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes")
+        .fetch_all(db)
+        .await
+        .map_err(AppError::db)?;
     let tags_map = fetch_all_note_tags_map(db).await?;
     let folders_of = fetch_all_note_folder_ids_map(db).await?;
 
-    let mut counts = NavCounts { all: 0, global: 0, pinned: 0, archived: 0, trash: 0 };
+    let mut counts = NavCounts {
+        all: 0,
+        global: 0,
+        pinned: 0,
+        archived: 0,
+        trash: 0,
+    };
     let mut ws_direct: HashMap<String, i64> = HashMap::new();
     let mut pr_count: HashMap<String, i64> = HashMap::new();
     let mut folder_count: HashMap<String, i64> = HashMap::new();
@@ -117,14 +139,24 @@ pub async fn note_nav(state: tauri::State<'_, AppState>) -> CmdResult<NoteNav> {
     }
 
     let ws_rows: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT id, name, color FROM workspaces ORDER BY name").fetch_all(db).await.map_err(AppError::db)?;
+        sqlx::query_as("SELECT id, name, color FROM workspaces ORDER BY name")
+            .fetch_all(db)
+            .await
+            .map_err(AppError::db)?;
     let pr_rows: Vec<(String, String, Option<String>)> =
-        sqlx::query_as("SELECT id, name, workspace_id FROM profiles ORDER BY name").fetch_all(db).await.map_err(AppError::db)?;
+        sqlx::query_as("SELECT id, name, workspace_id FROM profiles ORDER BY name")
+            .fetch_all(db)
+            .await
+            .map_err(AppError::db)?;
 
-    let all_workspaces: Vec<NavChild> =
-        ws_rows.iter().map(|(id, name, color)| child(id.clone(), name.clone(), color.clone(), 0, None)).collect();
-    let all_profiles: Vec<NavChild> =
-        pr_rows.iter().map(|(id, name, ws)| child(id.clone(), name.clone(), String::new(), 0, ws.clone())).collect();
+    let all_workspaces: Vec<NavChild> = ws_rows
+        .iter()
+        .map(|(id, name, color)| child(id.clone(), name.clone(), color.clone(), 0, None))
+        .collect();
+    let all_profiles: Vec<NavChild> = pr_rows
+        .iter()
+        .map(|(id, name, ws)| child(id.clone(), name.clone(), String::new(), 0, ws.clone()))
+        .collect();
 
     let mut profiles_of: HashMap<String, Vec<NavChild>> = HashMap::new();
     for (id, name, ws_id) in pr_rows {
@@ -133,7 +165,10 @@ pub async fn note_nav(state: tauri::State<'_, AppState>) -> CmdResult<NoteNav> {
             continue;
         }
         if let Some(ws_id) = ws_id {
-            profiles_of.entry(ws_id).or_default().push(child(id, name, String::new(), count, None));
+            profiles_of
+                .entry(ws_id)
+                .or_default()
+                .push(child(id, name, String::new(), count, None));
         }
     }
     let workspaces = ws_rows
@@ -144,7 +179,14 @@ pub async fn note_nav(state: tauri::State<'_, AppState>) -> CmdResult<NoteNav> {
             if count == 0 && profiles.is_empty() {
                 return None;
             }
-            Some(NavChild { id, name, color, count, parent_id: None, profiles })
+            Some(NavChild {
+                id,
+                name,
+                color,
+                count,
+                parent_id: None,
+                profiles,
+            })
         })
         .collect();
 
@@ -161,16 +203,23 @@ pub async fn note_nav(state: tauri::State<'_, AppState>) -> CmdResult<NoteNav> {
     })
     .collect();
 
-    let tags = sqlx::query_as::<_, (String, String, String)>("SELECT id, name, color FROM note_tags ORDER BY name")
-        .fetch_all(db)
-        .await
-        .map_err(AppError::db)?
-        .into_iter()
-        .map(|(id, name, color)| {
-            let count = *tag_count.get(&id).unwrap_or(&0);
-            NavTag { id, name, color, count }
-        })
-        .collect();
+    let tags = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT id, name, color FROM note_tags ORDER BY name",
+    )
+    .fetch_all(db)
+    .await
+    .map_err(AppError::db)?
+    .into_iter()
+    .map(|(id, name, color)| {
+        let count = *tag_count.get(&id).unwrap_or(&0);
+        NavTag {
+            id,
+            name,
+            color,
+            count,
+        }
+    })
+    .collect();
 
     let smart = sqlx::query_as::<_, (String, String, String)>(
         "SELECT id, name, color FROM note_smart_views ORDER BY sort_order ASC, created_at ASC",
@@ -182,9 +231,20 @@ pub async fn note_nav(state: tauri::State<'_, AppState>) -> CmdResult<NoteNav> {
     .map(|(id, name, color)| child(id, name, color, 0, None))
     .collect();
 
-    let mut sites: Vec<NavChild> =
-        site_count.into_iter().map(|(id, count)| child(id.clone(), id, String::new(), count, None)).collect();
+    let mut sites: Vec<NavChild> = site_count
+        .into_iter()
+        .map(|(id, count)| child(id.clone(), id, String::new(), count, None))
+        .collect();
     sites.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
 
-    Ok(NoteNav { counts, workspaces, folders, tags, smart, sites, all_workspaces, all_profiles })
+    Ok(NoteNav {
+        counts,
+        workspaces,
+        folders,
+        tags,
+        smart,
+        sites,
+        all_workspaces,
+        all_profiles,
+    })
 }

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-use crate::error::AppError;
 use super::models::*;
+use crate::error::AppError;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -31,14 +31,20 @@ pub(crate) fn manifest_path(app_data_dir: &PathBuf) -> PathBuf {
 
 /// Returns the effective documents directory: custom if set, otherwise default.
 pub(crate) fn effective_docs_dir(app_data_dir: &PathBuf, custom_dir: Option<&PathBuf>) -> PathBuf {
-    custom_dir.cloned().unwrap_or_else(|| documents_dir(app_data_dir))
+    custom_dir
+        .cloned()
+        .unwrap_or_else(|| documents_dir(app_data_dir))
 }
 
 /// Resolves a stored file_path to an absolute path.
 /// New notes with custom dir store absolute paths; legacy notes store paths relative to app_data_dir.
 pub(crate) fn resolve_note_abs_path(app_data_dir: &PathBuf, file_path: &str) -> PathBuf {
     let p = PathBuf::from(file_path);
-    if p.is_absolute() { p } else { app_data_dir.join(file_path) }
+    if p.is_absolute() {
+        p
+    } else {
+        app_data_dir.join(file_path)
+    }
 }
 
 /// Absolute directory containing the note file (base for relative attachment links).
@@ -86,9 +92,13 @@ pub(crate) fn make_preview(content: &str) -> String {
             .replace("__", "");
         let stripped = stripped.trim();
         if !stripped.is_empty() {
-            if !result.is_empty() { result.push(' '); }
+            if !result.is_empty() {
+                result.push(' ');
+            }
             result.push_str(stripped);
-            if result.chars().count() >= 120 { break; }
+            if result.chars().count() >= 120 {
+                break;
+            }
         }
     }
     result.chars().take(120).collect()
@@ -248,14 +258,21 @@ pub(crate) fn parse_note_file(raw: &str) -> (HashMap<String, String>, Vec<String
 }
 
 /// Read note file: returns (kv, tags, body content)
-pub(crate) fn read_note_file(path: &PathBuf) -> Result<(HashMap<String, String>, Vec<String>, String), AppError> {
+pub(crate) fn read_note_file(
+    path: &PathBuf,
+) -> Result<(HashMap<String, String>, Vec<String>, String), AppError> {
     let raw = std::fs::read_to_string(path).map_err(AppError::io)?;
     Ok(parse_note_file(&raw))
 }
 
 // ── Helpers for row → public structs ─────────────────────────────────────────
 
-pub(crate) fn row_to_list_item(row: NoteRow, tags: Vec<NoteTagInfo>, folder_ids: Vec<String>, has_draft: bool) -> NoteListItem {
+pub(crate) fn row_to_list_item(
+    row: NoteRow,
+    tags: Vec<NoteTagInfo>,
+    folder_ids: Vec<String>,
+    has_draft: bool,
+) -> NoteListItem {
     let bindings: Vec<String> = serde_json::from_str(&row.bindings).unwrap_or_default();
     NoteListItem {
         id: row.id,
@@ -286,7 +303,10 @@ mod title_escaping_tests {
         // Legacy file with an unquoted title still parses to the same value.
         let raw = "---\nid: n1\ntitle: My note: draft #2\nformat: md\n---\n\nbody";
         let (kv, _, body) = parse_note_file(raw);
-        assert_eq!(kv.get("title").map(String::as_str), Some("My note: draft #2"));
+        assert_eq!(
+            kv.get("title").map(String::as_str),
+            Some("My note: draft #2")
+        );
         assert_eq!(body, "body");
     }
 
@@ -299,11 +319,11 @@ mod title_escaping_tests {
             "---",
         ] {
             let encoded = encode_fm_title(title);
-            assert!(!encoded.contains('\n'), "encoded title must stay single-line");
-            let raw = format!(
-                "---\nid: n1\ntitle: {}\nformat: md\n---\n\nbody",
-                encoded
+            assert!(
+                !encoded.contains('\n'),
+                "encoded title must stay single-line"
             );
+            let raw = format!("---\nid: n1\ntitle: {}\nformat: md\n---\n\nbody", encoded);
             let (kv, _, body) = parse_note_file(&raw);
             assert_eq!(kv.get("title").map(String::as_str), Some(title));
             assert_eq!(body, "body", "frontmatter must terminate at the real ---");
@@ -332,4 +352,3 @@ pub(crate) fn open_path(path: &std::path::Path) -> Result<(), AppError> {
         .map_err(AppError::io)?;
     Ok(())
 }
-

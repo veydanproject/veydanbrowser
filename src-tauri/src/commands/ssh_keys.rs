@@ -4,7 +4,7 @@
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use chrono::Utc;
-use russh::keys::ssh_key::private::{Ed25519Keypair, EcdsaKeypair, KeypairData, RsaKeypair};
+use russh::keys::ssh_key::private::{EcdsaKeypair, Ed25519Keypair, KeypairData, RsaKeypair};
 use russh::keys::ssh_key::{EcdsaCurve, LineEnding};
 use russh::keys::{decode_secret_key, Algorithm, HashAlg, PrivateKey};
 use serde::{Deserialize, Serialize};
@@ -127,10 +127,7 @@ pub struct KeyMaterial {
     pub fingerprint: String,
 }
 
-pub fn derive_material(
-    key: &PrivateKey,
-    private_pem: String,
-) -> Result<KeyMaterial, AppError> {
+pub fn derive_material(key: &PrivateKey, private_pem: String) -> Result<KeyMaterial, AppError> {
     let (algorithm, bits) = algo_meta(key);
     let public_openssh = key
         .public_key()
@@ -173,9 +170,7 @@ pub fn generate_key_material(
                 256 => EcdsaCurve::NistP256,
                 384 => EcdsaCurve::NistP384,
                 521 => EcdsaCurve::NistP521,
-                other => {
-                    return Err(AppError::other(format!("Unsupported ECDSA curve: {other}")))
-                }
+                other => return Err(AppError::other(format!("Unsupported ECDSA curve: {other}"))),
             };
             KeypairData::Ecdsa(
                 EcdsaKeypair::random(&mut rng, curve)

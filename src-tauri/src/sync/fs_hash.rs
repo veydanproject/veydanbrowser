@@ -38,7 +38,14 @@ impl HashCache {
             }
         }
         let hash = hash_file(path).ok()?;
-        cache.insert(path.to_path_buf(), FileStamp { mtime, size, hash: hash.clone() });
+        cache.insert(
+            path.to_path_buf(),
+            FileStamp {
+                mtime,
+                size,
+                hash: hash.clone(),
+            },
+        );
         Some(hash)
     }
 }

@@ -4,13 +4,13 @@
 //! Export notes (Markdown + frontmatter + attachments) to a folder or zip,
 //! and import Markdown files/folders produced by us or other editors.
 
-use crate::error::{AppError, CmdResult};
-use crate::AppState;
 use super::attachments::{attachments_dir_for, safe_file_name, store_attachment};
 use super::crud::{current_docs_dir, insert_note, NewNote};
 use super::files::*;
 use super::history::history_snapshot;
 use super::models::*;
+use crate::error::{AppError, CmdResult};
+use crate::AppState;
 use age::secrecy::SecretString;
 use chrono::Utc;
 use serde::Serialize;
@@ -45,7 +45,10 @@ fn export_file_name(title: &str, ext: &str, taken: &mut HashSet<String>) -> Stri
 }
 
 /// (archive-relative path, source file) pairs for the given notes.
-async fn collect_export_entries(ids: &[String], state: &AppState) -> Result<Vec<(String, PathBuf)>, AppError> {
+async fn collect_export_entries(
+    ids: &[String],
+    state: &AppState,
+) -> Result<Vec<(String, PathBuf)>, AppError> {
     let mut entries = Vec::new();
     let mut taken = HashSet::new();
     for id in ids {
@@ -54,10 +57,14 @@ async fn collect_export_entries(ids: &[String], state: &AppState) -> Result<Vec<
             .fetch_optional(&state.db)
             .await
             .map_err(AppError::db)?
-        else { continue };
+        else {
+            continue;
+        };
 
         let file = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
-        if !file.is_file() { continue; }
+        if !file.is_file() {
+            continue;
+        }
         let ext = if row.format == "txt" { "txt" } else { "md" };
         entries.push((export_file_name(&row.title, ext, &mut taken), file.clone()));
 
@@ -85,7 +92,11 @@ fn write_zip<W: Write + Seek>(out: W, entries: &[(String, PathBuf)]) -> Result<W
 }
 
 /// Zip the entries in memory and write them passphrase-encrypted with age.
-fn write_encrypted_zip(dest: &Path, password: &str, entries: &[(String, PathBuf)]) -> Result<(), AppError> {
+fn write_encrypted_zip(
+    dest: &Path,
+    password: &str,
+    entries: &[(String, PathBuf)],
+) -> Result<(), AppError> {
     let zipped = write_zip(Cursor::new(Vec::new()), entries)?.into_inner();
     let file = std::fs::File::create(dest).map_err(AppError::io)?;
     let encryptor = age::Encryptor::with_user_passphrase(SecretString::from(password.to_owned()));
@@ -98,7 +109,8 @@ fn write_encrypted_zip(dest: &Path, password: &str, entries: &[(String, PathBuf)
 /// Decrypt an age file into memory; `None` when the password is wrong.
 fn decrypt_age(src: &Path, password: &str) -> Result<Vec<u8>, AppError> {
     let file = std::fs::File::open(src).map_err(AppError::io)?;
-    let decryptor = age::Decryptor::new(file).map_err(|e| AppError::other(format!("Cannot read archive: {e}")))?;
+    let decryptor = age::Decryptor::new(file)
+        .map_err(|e| AppError::other(format!("Cannot read archive: {e}")))?;
     let mut identity = age::scrypt::Identity::new(SecretString::from(password.to_owned()));
     identity.set_max_work_factor(MAX_SCRYPT_WORK_FACTOR);
     let mut reader = decryptor
@@ -118,7 +130,9 @@ fn unpack_zip(src: &Path, password: Option<&str>, dest: &Path) -> Result<(), App
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let Some(rel) = entry.enclosed_name() else { continue };
+        let Some(rel) = entry.enclosed_name() else {
+            continue;
+        };
         let target = dest.join(rel);
         if entry.is_dir() {
             std::fs::create_dir_all(&target).map_err(AppError::io)?;
@@ -134,7 +148,13 @@ fn unpack_zip(src: &Path, password: Option<&str>, dest: &Path) -> Result<(), App
 }
 
 fn is_archive(path: &Path) -> bool {
-    matches!(path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(), Some("zip" | "age"))
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("zip" | "age")
+    )
 }
 
 fn write_dir(dest: &Path, entries: &[(String, PathBuf)]) -> Result<(), AppError> {
@@ -164,12 +184,18 @@ pub async fn note_export(
     if let Some(pw) = password {
         write_encrypted_zip(&dest_path, &pw, &entries)?;
     } else if as_zip {
-        write_zip(std::fs::File::create(&dest_path).map_err(AppError::io)?, &entries)?;
+        write_zip(
+            std::fs::File::create(&dest_path).map_err(AppError::io)?,
+            &entries,
+        )?;
     } else {
         std::fs::create_dir_all(&dest_path).map_err(AppError::io)?;
         write_dir(&dest_path, &entries)?;
     }
-    let count = entries.iter().filter(|(n, _)| !n.starts_with("attachments/")).count();
+    let count = entries
+        .iter()
+        .filter(|(n, _)| !n.starts_with("attachments/"))
+        .count();
     Ok(ExportResult { count, path: dest })
 }
 
@@ -185,15 +211,21 @@ fn is_note_file(path: &Path) -> bool {
 /// Recursively collect note files, skipping hidden dirs and `attachments/`.
 fn collect_note_files(path: &Path, out: &mut Vec<PathBuf>) {
     if path.is_file() {
-        if is_note_file(path) { out.push(path.to_path_buf()); }
+        if is_note_file(path) {
+            out.push(path.to_path_buf());
+        }
         return;
     }
-    let Ok(entries) = std::fs::read_dir(path) else { return };
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
     for entry in entries.flatten() {
         let p = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         if p.is_dir() {
-            if name.starts_with('.') || name == "attachments" { continue; }
+            if name.starts_with('.') || name == "attachments" {
+                continue;
+            }
             collect_note_files(&p, out);
         } else if is_note_file(&p) {
             out.push(p);
@@ -212,7 +244,10 @@ fn is_external_target(target: &str) -> bool {
 /// Resolve a link target relative to the source note; also look in a sibling `attachments/`.
 fn resolve_local(src_dir: &Path, target: &str) -> Option<PathBuf> {
     let decoded = percent_decode_simple(target);
-    let candidates = [src_dir.join(&decoded), src_dir.join("attachments").join(&decoded)];
+    let candidates = [
+        src_dir.join(&decoded),
+        src_dir.join("attachments").join(&decoded),
+    ];
     candidates.into_iter().find(|p| p.is_file())
 }
 
@@ -236,7 +271,12 @@ fn percent_decode_simple(s: &str) -> String {
 
 /// Copy locally referenced files into the new note's attachments and rewrite links.
 /// Handles `[x](rel/path)` / `![x](rel/path)` and Obsidian `![[file]]` embeds.
-fn rewrite_links(body: &str, src_dir: &Path, note_file: &Path, note_id: &str) -> Result<String, AppError> {
+fn rewrite_links(
+    body: &str,
+    src_dir: &Path,
+    note_file: &Path,
+    note_id: &str,
+) -> Result<String, AppError> {
     let mut out = String::with_capacity(body.len());
     let mut rest = body;
 
@@ -253,10 +293,18 @@ fn rewrite_links(body: &str, src_dir: &Path, note_file: &Path, note_id: &str) ->
         out.push_str(&rest[..start]);
         rest = &rest[start..];
 
-        let close = if is_wiki { rest.find("]]") } else { rest.find(')') };
+        let close = if is_wiki {
+            rest.find("]]")
+        } else {
+            rest.find(')')
+        };
         let Some(close) = close else { break };
         let raw_target = &rest[..close];
-        let target = if is_wiki { raw_target.split('|').next().unwrap_or("") } else { raw_target.split(' ').next().unwrap_or("") };
+        let target = if is_wiki {
+            raw_target.split('|').next().unwrap_or("")
+        } else {
+            raw_target.split(' ').next().unwrap_or("")
+        };
 
         let replacement = if is_external_target(target) {
             None
@@ -264,7 +312,9 @@ fn rewrite_links(body: &str, src_dir: &Path, note_file: &Path, note_id: &str) ->
             resolve_local(src_dir, target).and_then(|src| {
                 let data = std::fs::read(&src).ok()?;
                 let name = src.file_name()?.to_str()?;
-                store_attachment(note_file, note_id, name, &data).ok().map(|a| a.rel_path)
+                store_attachment(note_file, note_id, name, &data)
+                    .ok()
+                    .map(|a| a.rel_path)
             })
         };
 
@@ -330,7 +380,11 @@ pub async fn note_import(
         if path.is_file() && is_archive(path) {
             let dir = unpack_root.join(files.len().to_string());
             std::fs::create_dir_all(&dir).map_err(AppError::io)?;
-            let pw = path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("age")).unwrap_or(false);
+            let pw = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("age"))
+                .unwrap_or(false);
             if let Err(e) = unpack_zip(path, if pw { password.as_deref() } else { None }, &dir) {
                 let _ = std::fs::remove_dir_all(&unpack_root);
                 return Err(e);
@@ -346,14 +400,24 @@ pub async fn note_import(
     result
 }
 
-async fn import_files(files: Vec<PathBuf>, bindings: Vec<String>, state: &AppState) -> CmdResult<Vec<String>> {
+async fn import_files(
+    files: Vec<PathBuf>,
+    bindings: Vec<String>,
+    state: &AppState,
+) -> CmdResult<Vec<String>> {
     let docs_dir = current_docs_dir(state);
     let mut created = Vec::new();
 
     for src in files {
-        let Ok(raw) = std::fs::read_to_string(&src) else { continue };
+        let Ok(raw) = std::fs::read_to_string(&src) else {
+            continue;
+        };
         let (kv, tags, body) = parse_note_file(&raw);
-        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("Imported").to_string();
+        let stem = src
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Imported")
+            .to_string();
 
         let (title, body) = match kv.get("title") {
             Some(t) => (t.clone(), body),
@@ -361,18 +425,29 @@ async fn import_files(files: Vec<PathBuf>, bindings: Vec<String>, state: &AppSta
         };
 
         let id = match kv.get("id") {
-            Some(existing) if Uuid::parse_str(existing).is_ok() && id_is_free(existing, state).await => existing.clone(),
+            Some(existing)
+                if Uuid::parse_str(existing).is_ok() && id_is_free(existing, state).await =>
+            {
+                existing.clone()
+            }
             _ => Uuid::new_v4().to_string(),
         };
 
-        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("md").to_ascii_lowercase();
+        let ext = src
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("md")
+            .to_ascii_lowercase();
         let format = if ext == "txt" { "txt" } else { "md" }.to_string();
 
         let mtime = std::fs::metadata(&src)
             .and_then(|m| m.modified())
             .map(|t| chrono::DateTime::<Utc>::from(t).to_rfc3339())
             .unwrap_or_else(|_| Utc::now().to_rfc3339());
-        let created_at = kv.get("created_at").cloned().unwrap_or_else(|| mtime.clone());
+        let created_at = kv
+            .get("created_at")
+            .cloned()
+            .unwrap_or_else(|| mtime.clone());
         let updated_at = kv.get("updated_at").cloned().unwrap_or(mtime);
 
         let note_bindings: Vec<String> = kv
@@ -385,7 +460,16 @@ async fn import_files(files: Vec<PathBuf>, bindings: Vec<String>, state: &AppSta
         let content = rewrite_links(&body, src_dir, &note_file, &id)?;
 
         let note = insert_note(
-            NewNote { id: id.clone(), title: title.clone(), format, bindings: note_bindings, tags, content: content.clone(), created_at, updated_at },
+            NewNote {
+                id: id.clone(),
+                title: title.clone(),
+                format,
+                bindings: note_bindings,
+                tags,
+                content: content.clone(),
+                created_at,
+                updated_at,
+            },
             state,
         )
         .await?;

@@ -25,7 +25,9 @@ pub fn http_client() -> Result<reqwest::Client> {
         .dns_resolver(CachedIpv4Resolver);
     #[cfg(target_os = "android")]
     let builder = builder.use_preconfigured_tls(android_tls_config());
-    builder.build().map_err(|e| SyncError::Storage(e.to_string()))
+    builder
+        .build()
+        .map_err(|e| SyncError::Storage(e.to_string()))
 }
 
 fn dns_cache() -> &'static Mutex<HashMap<String, Vec<SocketAddr>>> {
@@ -44,7 +46,9 @@ impl Resolve for CachedIpv4Resolver {
     }
 }
 
-async fn resolve_cached(host: String) -> std::result::Result<Addrs, Box<dyn std::error::Error + Send + Sync>> {
+async fn resolve_cached(
+    host: String,
+) -> std::result::Result<Addrs, Box<dyn std::error::Error + Send + Sync>> {
     match resolve_once(&host).await {
         Ok(addrs) if !addrs.is_empty() => {
             if let Ok(mut c) = dns_cache().lock() {
@@ -65,14 +69,18 @@ async fn resolve_cached(host: String) -> std::result::Result<Addrs, Box<dyn std:
     }
 }
 
-async fn resolve_once(host: &str) -> std::result::Result<Vec<SocketAddr>, Box<dyn std::error::Error + Send + Sync>> {
+async fn resolve_once(
+    host: &str,
+) -> std::result::Result<Vec<SocketAddr>, Box<dyn std::error::Error + Send + Sync>> {
     let host = host.to_string();
     tokio::task::spawn_blocking(move || lookup(&host))
         .await
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
 }
 
-fn lookup(host: &str) -> std::result::Result<Vec<SocketAddr>, Box<dyn std::error::Error + Send + Sync>> {
+fn lookup(
+    host: &str,
+) -> std::result::Result<Vec<SocketAddr>, Box<dyn std::error::Error + Send + Sync>> {
     match (host, 0u16).to_socket_addrs() {
         Ok(iter) => {
             let addrs: Vec<SocketAddr> = iter.collect();
@@ -111,7 +119,9 @@ fn lookup_ipv4_only(host: &str) -> Vec<SocketAddr> {
 }
 
 #[cfg(unix)]
-fn gai_af_inet(host: &str) -> std::result::Result<Vec<SocketAddr>, Box<dyn std::error::Error + Send + Sync>> {
+fn gai_af_inet(
+    host: &str,
+) -> std::result::Result<Vec<SocketAddr>, Box<dyn std::error::Error + Send + Sync>> {
     use std::ffi::CString;
     use std::net::{IpAddr, Ipv4Addr};
     use std::ptr;
@@ -167,7 +177,9 @@ fn android_tls_config() -> rustls::ClientConfig {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let mut cfg = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+    let mut cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
     cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
     cfg
 }
@@ -201,7 +213,10 @@ pub trait Storage: Send + Sync {
 
 /// 401/403 are never retried and surface as `Auth`.
 pub fn status_error(status: reqwest::StatusCode, what: &str, body: &str) -> SyncError {
-    let msg = format!("{what}: {status} {}", body.chars().take(300).collect::<String>());
+    let msg = format!(
+        "{what}: {status} {}",
+        body.chars().take(300).collect::<String>()
+    );
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         SyncError::Auth(msg)
     } else {
@@ -243,7 +258,11 @@ impl LocalDir {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
-            let key = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+            let key = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
             if is_noise_key(&key) {
                 continue;
             }
@@ -302,6 +321,8 @@ impl Storage for LocalDir {
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
-        Ok(std::fs::metadata(self.path_for(key)?).map(|m| m.is_file()).unwrap_or(false))
+        Ok(std::fs::metadata(self.path_for(key)?)
+            .map(|m| m.is_file())
+            .unwrap_or(false))
     }
 }

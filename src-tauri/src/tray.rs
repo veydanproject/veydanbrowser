@@ -349,13 +349,14 @@ mod imp {
                     .collect()
             };
 
-            let running_label = l.running.replace("{n}", &self.data.running.len().to_string());
+            let running_label = l
+                .running
+                .replace("{n}", &self.data.running.len().to_string());
 
-            fn nav(
-                label: &str,
-                route: &'static str,
-            ) -> MenuItem<VeydanTray> {
-                item(label.to_string(), move |t| dispatch(&t.app, &format!("nav:{route}")))
+            fn nav(label: &str, route: &'static str) -> MenuItem<VeydanTray> {
+                item(label.to_string(), move |t| {
+                    dispatch(&t.app, &format!("nav:{route}"))
+                })
             }
 
             vec![
@@ -382,7 +383,9 @@ mod imp {
                 nav(&l.section_notes, "/notes"),
                 MenuItem::Separator,
                 item(l.password_generator.clone(), |t| dispatch(&t.app, "pwgen")),
-                item(l.quick_capture.clone(), |t| dispatch(&t.app, "quick_capture")),
+                item(l.quick_capture.clone(), |t| {
+                    dispatch(&t.app, "quick_capture")
+                }),
                 MenuItem::Separator,
                 item(l.quit.clone(), |t| t.app.exit(0)),
             ]
@@ -403,7 +406,11 @@ mod imp {
             data.push(px[1]); // G
             data.push(px[2]); // B
         }
-        vec![Icon { width, height, data }]
+        vec![Icon {
+            width,
+            height,
+            data,
+        }]
     }
 
     fn current_handle() -> Option<Handle<VeydanTray>> {
@@ -445,8 +452,14 @@ mod imp {
                     eprintln!("tray: ksni spawn failed: {e}");
                     // Hide-on-close would stash the window with no way to restore it
                     let state = app.state::<AppState>();
-                    state.tray_settings.close_to_tray.store(false, std::sync::atomic::Ordering::Relaxed);
-                    state.tray_settings.minimize_to_tray.store(false, std::sync::atomic::Ordering::Relaxed);
+                    state
+                        .tray_settings
+                        .close_to_tray
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                    state
+                        .tray_settings
+                        .minimize_to_tray
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         });
@@ -479,7 +492,11 @@ mod imp {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
     use tauri::Wry;
 
-    fn build_menu(app: &AppHandle, labels: &TrayLabels, data: &MenuData) -> tauri::Result<Menu<Wry>> {
+    fn build_menu(
+        app: &AppHandle,
+        labels: &TrayLabels,
+        data: &MenuData,
+    ) -> tauri::Result<Menu<Wry>> {
         let n = data.running.len();
         let running_label = labels.running.replace("{n}", &n.to_string());
 
@@ -493,7 +510,8 @@ mod imp {
         } else {
             for (id, name) in &data.running {
                 running_sub = running_sub.item(
-                    &MenuItemBuilder::with_id(format!("stop:{id}"), format!("● {name}")).build(app)?,
+                    &MenuItemBuilder::with_id(format!("stop:{id}"), format!("● {name}"))
+                        .build(app)?,
                 );
             }
             running_sub = running_sub
@@ -552,7 +570,9 @@ mod imp {
         let labels = labels_of(app);
         let data = tauri::async_runtime::block_on(load_menu_data(app));
         let menu = build_menu(app, &labels, &data)?;
-        let tooltip = labels.tooltip.replace("{n}", &data.running.len().to_string());
+        let tooltip = labels
+            .tooltip
+            .replace("{n}", &data.running.len().to_string());
 
         let mut builder = TrayIconBuilder::with_id(TRAY_ID)
             .tooltip(&tooltip)
@@ -593,7 +613,9 @@ mod imp {
         let data = tauri::async_runtime::block_on(load_menu_data(app));
         if let Ok(menu) = build_menu(app, &labels, &data) {
             let _ = tray.set_menu(Some(menu));
-            let tooltip = labels.tooltip.replace("{n}", &data.running.len().to_string());
+            let tooltip = labels
+                .tooltip
+                .replace("{n}", &data.running.len().to_string());
             let _ = tray.set_tooltip(Some(&tooltip));
         }
     }

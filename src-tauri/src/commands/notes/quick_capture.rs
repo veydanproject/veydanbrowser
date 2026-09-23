@@ -23,13 +23,14 @@ pub fn show_quick_capture(app: &tauri::AppHandle) {
             let _ = w.emit("quick-capture://shown", ());
             return;
         }
-        let mut builder = WebviewWindowBuilder::new(&app2, WINDOW_LABEL, WebviewUrl::App("/notes/quick".into()))
-            .title("Quick capture")
-            .inner_size(480.0, 340.0)
-            .min_inner_size(360.0, 240.0)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .center();
+        let mut builder =
+            WebviewWindowBuilder::new(&app2, WINDOW_LABEL, WebviewUrl::App("/notes/quick".into()))
+                .title("Quick capture")
+                .inner_size(480.0, 340.0)
+                .min_inner_size(360.0, 240.0)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .center();
         #[cfg(target_os = "linux")]
         {
             builder = builder.decorations(false).transparent(true);
@@ -64,7 +65,9 @@ fn apply_shortcut(app: &tauri::AppHandle, accelerator: &str) -> Result<(), AppEr
     if accelerator.is_empty() {
         return Ok(());
     }
-    let shortcut: Shortcut = accelerator.parse().map_err(|e| AppError::other(format!("Invalid shortcut: {e}")))?;
+    let shortcut: Shortcut = accelerator
+        .parse()
+        .map_err(|e| AppError::other(format!("Invalid shortcut: {e}")))?;
     gs.on_shortcut(shortcut, |app, _sc, event| {
         if event.state == ShortcutState::Pressed {
             show_quick_capture(app);

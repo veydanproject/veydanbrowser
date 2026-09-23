@@ -57,7 +57,10 @@ fn relay(request: &[u8]) -> Vec<u8> {
                 .unwrap_or_default();
         }
     };
-    if stream.write_all(request).is_err() || stream.write_all(b"\n").is_err() || stream.flush().is_err() {
+    if stream.write_all(request).is_err()
+        || stream.write_all(b"\n").is_err()
+        || stream.flush().is_err()
+    {
         return serde_json::to_vec(&CaptureResponse::err("Failed to send request to Veydan"))
             .unwrap_or_default();
     }
@@ -65,7 +68,9 @@ fn relay(request: &[u8]) -> Vec<u8> {
     let mut reader = BufReader::new(stream);
     match reader.read_line(&mut line) {
         Ok(n) if n > 0 => line.trim_end().as_bytes().to_vec(),
-        _ => serde_json::to_vec(&CaptureResponse::err("No response from Veydan")).unwrap_or_default(),
+        _ => {
+            serde_json::to_vec(&CaptureResponse::err("No response from Veydan")).unwrap_or_default()
+        }
     }
 }
 

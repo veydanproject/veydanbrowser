@@ -49,7 +49,9 @@ async fn check_ssh(proxy: &Proxy) -> Result<ProxyCheckResult> {
     )
     .await?;
 
-    let upstream = crate::proxy::local::Upstream::Ssh { session: result.session };
+    let upstream = crate::proxy::local::Upstream::Ssh {
+        session: result.session,
+    };
     let (local_port, stop_tx) = crate::proxy::local::spawn(upstream).await?;
     let geo = fetch_geo(&format!("http://127.0.0.1:{local_port}")).await;
     let _ = stop_tx.send(());
@@ -78,7 +80,12 @@ async fn fetch_geo(proxy_url: &str) -> Result<Geo> {
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
 
-    let resp = client.get(GEO_URL).send().await?.json::<GeoResponse>().await?;
+    let resp = client
+        .get(GEO_URL)
+        .send()
+        .await?
+        .json::<GeoResponse>()
+        .await?;
     Ok(Geo {
         ip: resp.ip.unwrap_or_default(),
         country: resp.country_code,

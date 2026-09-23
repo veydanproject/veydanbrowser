@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-use crate::error::AppError;
 use super::files::*;
 use super::models::*;
 use super::tags::*;
+use crate::error::AppError;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use chrono::Utc;
 use tauri::Emitter;
 
 // ── FTS helpers ───────────────────────────────────────────────────────────────
@@ -30,16 +30,14 @@ pub(crate) async fn fts_upsert(
             .await
             .map_err(AppError::db)?;
     }
-    sqlx::query(
-        "INSERT INTO notes_fts(note_id, title, content, tags) VALUES (?, ?, ?, ?)",
-    )
-    .bind(note_id)
-    .bind(title)
-    .bind(content)
-    .bind(&tags.join(" "))
-    .execute(&mut *conn)
-    .await
-    .map_err(AppError::db)?;
+    sqlx::query("INSERT INTO notes_fts(note_id, title, content, tags) VALUES (?, ?, ?, ?)")
+        .bind(note_id)
+        .bind(title)
+        .bind(content)
+        .bind(&tags.join(" "))
+        .execute(&mut *conn)
+        .await
+        .map_err(AppError::db)?;
 
     let (rowid,): (i64,) = sqlx::query_as("SELECT last_insert_rowid()")
         .fetch_one(&mut *conn)
@@ -49,7 +47,10 @@ pub(crate) async fn fts_upsert(
     Ok(rowid)
 }
 
-pub(crate) async fn fts_delete(fts_rowid: Option<i64>, db: &sqlx::Pool<sqlx::Sqlite>) -> Result<(), AppError> {
+pub(crate) async fn fts_delete(
+    fts_rowid: Option<i64>,
+    db: &sqlx::Pool<sqlx::Sqlite>,
+) -> Result<(), AppError> {
     if let Some(rowid) = fts_rowid {
         sqlx::query("DELETE FROM notes_fts WHERE rowid = ?")
             .bind(rowid)
@@ -145,7 +146,8 @@ pub async fn sync_notes_index(
         .await
         .map_err(AppError::db)?;
 
-    let mut indexed: HashMap<String, NoteRow> = existing.into_iter().map(|r| (r.id.clone(), r)).collect();
+    let mut indexed: HashMap<String, NoteRow> =
+        existing.into_iter().map(|r| (r.id.clone(), r)).collect();
 
     let now = Utc::now().to_rfc3339();
 
@@ -153,9 +155,15 @@ pub async fn sync_notes_index(
     let entries = std::fs::read_dir(&docs_dir).map_err(AppError::io)?;
     for entry in entries.flatten() {
         let path = entry.path();
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else { continue };
-        if ext == "tmp" { continue; }
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        if ext == "tmp" {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
         let note_id = stem.to_string();
 
         let meta = std::fs::metadata(&path).ok();
@@ -168,7 +176,10 @@ pub async fn sync_notes_index(
             let file_changed = mtime.as_deref() != row.file_mtime.as_deref();
             if file_changed {
                 if let Ok((kv, _, _)) = read_note_file(&path) {
-                    let title = kv.get("title").cloned().unwrap_or_else(|| row.title.clone());
+                    let title = kv
+                        .get("title")
+                        .cloned()
+                        .unwrap_or_else(|| row.title.clone());
                     let updated_at = kv.get("updated_at").cloned().unwrap_or_else(|| now.clone());
                     let content_str = std::fs::read_to_string(&path).ok();
                     let content_hash = content_str.as_deref().map(compute_hash);
@@ -190,16 +201,15 @@ pub async fn sync_notes_index(
             }
         } else {
             // New file not in DB — read frontmatter and insert
-            let Ok((kv, tags, body)) = read_note_file(&path) else { continue };
+            let Ok((kv, tags, body)) = read_note_file(&path) else {
+                continue;
+            };
             let title = kv.get("title").cloned().unwrap_or_else(|| note_id.clone());
             let format = ext.to_string();
             let created_at = kv.get("created_at").cloned().unwrap_or_else(|| now.clone());
             let updated_at = kv.get("updated_at").cloned().unwrap_or_else(|| now.clone());
             let file_path = path.to_string_lossy().to_string();
-            let content_hash = compute_hash(&format!(
-                "---\n{:?}\n---\n{}",
-                kv, body
-            ));
+            let content_hash = compute_hash(&format!("---\n{:?}\n---\n{}", kv, body));
             let preview = make_preview(&body);
 
             // Read bindings from frontmatter; fall back to old scope/workspace_id/profile_id fields
@@ -210,8 +220,12 @@ pub async fn sync_notes_index(
                 let workspace_id = kv.get("workspace_id").filter(|v| *v != "null").cloned();
                 let profile_id = kv.get("profile_id").filter(|v| *v != "null").cloned();
                 let mut b: Vec<String> = Vec::new();
-                if let Some(ws) = workspace_id { b.push(format!("workspace:{}", ws)); }
-                if let Some(pr) = profile_id { b.push(format!("profile:{}", pr)); }
+                if let Some(ws) = workspace_id {
+                    b.push(format!("workspace:{}", ws));
+                }
+                if let Some(pr) = profile_id {
+                    b.push(format!("profile:{}", pr));
+                }
                 let _ = scope;
                 serde_json::to_string(&b).unwrap_or_else(|_| "[]".to_string())
             };
@@ -267,16 +281,14 @@ pub async fn sync_notes_index(
         super::links::reindex_links(&row.id, &body, db).await?;
 
         let mut conn = db.acquire().await.map_err(AppError::db)?;
-        sqlx::query(
-            "INSERT INTO notes_fts(note_id, title, content, tags) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&row.id)
-        .bind(&row.title)
-        .bind(&body)
-        .bind(&tags_str)
-        .execute(&mut *conn)
-        .await
-        .map_err(AppError::db)?;
+        sqlx::query("INSERT INTO notes_fts(note_id, title, content, tags) VALUES (?, ?, ?, ?)")
+            .bind(&row.id)
+            .bind(&row.title)
+            .bind(&body)
+            .bind(&tags_str)
+            .execute(&mut *conn)
+            .await
+            .map_err(AppError::db)?;
 
         let (rowid,): (i64,) = sqlx::query_as("SELECT last_insert_rowid()")
             .fetch_one(&mut *conn)
@@ -337,4 +349,3 @@ pub fn start_notes_watcher(
     });
     Some(watcher)
 }
-

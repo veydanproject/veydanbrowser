@@ -48,12 +48,24 @@ fn aad(vault_id: &str, kind: Kind, ident: &str) -> Vec<u8> {
     format!("veydan-sync/v1|{vault_id}|{}|{ident}", kind as u8).into_bytes()
 }
 
-pub fn seal(key: &[u8; 32], vault_id: &str, kind: Kind, ident: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
+pub fn seal(
+    key: &[u8; 32],
+    vault_id: &str,
+    kind: Kind,
+    ident: &str,
+    plaintext: &[u8],
+) -> Result<Vec<u8>> {
     let compressed = zstd::encode_all(plaintext, ZSTD_LEVEL)?;
     let cipher = XChaCha20Poly1305::new(key.into());
     let nonce = random_bytes(NONCE_LEN);
     let ct = cipher
-        .encrypt(XNonce::from_slice(&nonce), Payload { msg: &compressed, aad: &aad(vault_id, kind, ident) })
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: &compressed,
+                aad: &aad(vault_id, kind, ident),
+            },
+        )
         .map_err(|_| SyncError::Crypto("seal failed".into()))?;
     let mut out = Vec::with_capacity(4 + 1 + NONCE_LEN + ct.len());
     out.extend_from_slice(MAGIC);
@@ -63,19 +75,35 @@ pub fn seal(key: &[u8; 32], vault_id: &str, kind: Kind, ident: &str, plaintext: 
     Ok(out)
 }
 
-pub fn open(key: &[u8; 32], vault_id: &str, kind: Kind, ident: &str, data: &[u8]) -> Result<Vec<u8>> {
+pub fn open(
+    key: &[u8; 32],
+    vault_id: &str,
+    kind: Kind,
+    ident: &str,
+    data: &[u8],
+) -> Result<Vec<u8>> {
     if data.len() < 4 + 1 + NONCE_LEN || &data[..4] != MAGIC {
         return Err(SyncError::Format("not a sync envelope".into()));
     }
-    let file_kind = Kind::from_u8(data[4]).ok_or_else(|| SyncError::Format("unknown envelope kind".into()))?;
+    let file_kind =
+        Kind::from_u8(data[4]).ok_or_else(|| SyncError::Format("unknown envelope kind".into()))?;
     if file_kind != kind {
-        return Err(SyncError::Integrity(format!("expected {:?}, found {:?}", kind, file_kind)));
+        return Err(SyncError::Integrity(format!(
+            "expected {:?}, found {:?}",
+            kind, file_kind
+        )));
     }
     let nonce = &data[5..5 + NONCE_LEN];
     let ct = &data[5 + NONCE_LEN..];
     let cipher = XChaCha20Poly1305::new(key.into());
     let compressed = cipher
-        .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad: &aad(vault_id, kind, ident) })
+        .decrypt(
+            XNonce::from_slice(nonce),
+            Payload {
+                msg: ct,
+                aad: &aad(vault_id, kind, ident),
+            },
+        )
         .map_err(|_| SyncError::Integrity(format!("cannot open {ident}")))?;
     Ok(zstd::decode_all(&compressed[..])?)
 }

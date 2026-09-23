@@ -50,12 +50,54 @@ const COUNTRIES: &[(&str, &str)] = &[
 ];
 
 const ISSUERS: &[&str] = &[
-    "GitHub", "GitLab", "Bitbucket", "AWS", "GCP", "Azure", "Cloudflare", "DigitalOcean",
-    "Hetzner", "Vultr", "Linode", "Stripe", "PayPal", "Shopify", "Notion", "Slack",
-    "Discord", "Telegram", "Twitter", "Meta", "Google", "Microsoft", "Apple", "Dropbox",
-    "1Password", "Bitwarden", "Okta", "Auth0", "Twilio", "SendGrid", "Mailchimp", "HubSpot",
-    "Salesforce", "Zendesk", "Jira", "Confluence", "Figma", "Notion", "Linear", "Vercel",
-    "Netlify", "Heroku", "Railway", "Render", "Supabase", "PlanetScale", "MongoDB", "Redis",
+    "GitHub",
+    "GitLab",
+    "Bitbucket",
+    "AWS",
+    "GCP",
+    "Azure",
+    "Cloudflare",
+    "DigitalOcean",
+    "Hetzner",
+    "Vultr",
+    "Linode",
+    "Stripe",
+    "PayPal",
+    "Shopify",
+    "Notion",
+    "Slack",
+    "Discord",
+    "Telegram",
+    "Twitter",
+    "Meta",
+    "Google",
+    "Microsoft",
+    "Apple",
+    "Dropbox",
+    "1Password",
+    "Bitwarden",
+    "Okta",
+    "Auth0",
+    "Twilio",
+    "SendGrid",
+    "Mailchimp",
+    "HubSpot",
+    "Salesforce",
+    "Zendesk",
+    "Jira",
+    "Confluence",
+    "Figma",
+    "Notion",
+    "Linear",
+    "Vercel",
+    "Netlify",
+    "Heroku",
+    "Railway",
+    "Render",
+    "Supabase",
+    "PlanetScale",
+    "MongoDB",
+    "Redis",
 ];
 
 /// Seed extra workspaces + bulk proxies/profiles/totp/ssh/notes.
@@ -76,13 +118,37 @@ pub async fn seed_bulk(state: &AppState, locale: &str, now: &str) -> CmdResult<(
 async fn seed_extra_workspaces(state: &AppState, ru: bool, now: &str) -> CmdResult<()> {
     let extras: &[(&str, &str, &str, &str, &str)] = if ru {
         &[
-            ("demo-ws-freelance", "Фриланс", "Клиентские проекты", "#8b5cf6", "laptop"),
-            ("demo-ws-research", "Исследования", "Разведка и конкуренты", "#14b8a6", "search"),
+            (
+                "demo-ws-freelance",
+                "Фриланс",
+                "Клиентские проекты",
+                "#8b5cf6",
+                "laptop",
+            ),
+            (
+                "demo-ws-research",
+                "Исследования",
+                "Разведка и конкуренты",
+                "#14b8a6",
+                "search",
+            ),
         ]
     } else {
         &[
-            ("demo-ws-freelance", "Freelance", "Client projects", "#8b5cf6", "laptop"),
-            ("demo-ws-research", "Research", "Competitive intel", "#14b8a6", "search"),
+            (
+                "demo-ws-freelance",
+                "Freelance",
+                "Client projects",
+                "#8b5cf6",
+                "laptop",
+            ),
+            (
+                "demo-ws-research",
+                "Research",
+                "Competitive intel",
+                "#14b8a6",
+                "search",
+            ),
         ]
     };
 
@@ -140,7 +206,8 @@ async fn seed_bulk_proxies(state: &AppState, now: &str) -> CmdResult<()> {
         let name = format!("{cc} {ptype} #{i:02}");
         let host = format!("proxy-{}.example", cc.to_lowercase());
         let port = 10000 + i as i64;
-        let tags = serde_json::to_string(&vec![format!("workspace:{ws}")]).map_err(AppError::other)?;
+        let tags =
+            serde_json::to_string(&vec![format!("workspace:{ws}")]).map_err(AppError::other)?;
         let user = format!("demo-u{i}");
         let pass = format!("demo-pass-{i}");
 
@@ -172,14 +239,48 @@ async fn seed_bulk_profiles(state: &AppState, ru: bool, now: &str) -> CmdResult<
     std::fs::create_dir_all(&profiles_root).map_err(AppError::io)?;
 
     let labels_en = [
-        "Shop", "Ads", "Support", "QA", "Staging", "Docs", "Blog", "Forum", "Store", "Portal",
-        "Admin", "Partner", "Affiliate", "Review", "Monitor", "Backup", "Legacy", "Sandbox",
-        "Client", "Vendor",
+        "Shop",
+        "Ads",
+        "Support",
+        "QA",
+        "Staging",
+        "Docs",
+        "Blog",
+        "Forum",
+        "Store",
+        "Portal",
+        "Admin",
+        "Partner",
+        "Affiliate",
+        "Review",
+        "Monitor",
+        "Backup",
+        "Legacy",
+        "Sandbox",
+        "Client",
+        "Vendor",
     ];
     let labels_ru = [
-        "Магазин", "Реклама", "Поддержка", "QA", "Staging", "Доки", "Блог", "Форум", "Витрина",
-        "Портал", "Админ", "Партнёр", "Аффилиат", "Обзор", "Монитор", "Бэкап", "Legacy",
-        "Песочница", "Клиент", "Вендор",
+        "Магазин",
+        "Реклама",
+        "Поддержка",
+        "QA",
+        "Staging",
+        "Доки",
+        "Блог",
+        "Форум",
+        "Витрина",
+        "Портал",
+        "Админ",
+        "Партнёр",
+        "Аффилиат",
+        "Обзор",
+        "Монитор",
+        "Бэкап",
+        "Legacy",
+        "Песочница",
+        "Клиент",
+        "Вендор",
     ];
     let labels = if ru { &labels_ru[..] } else { &labels_en[..] };
 
@@ -257,7 +358,9 @@ fn demo_secret(n: u32) -> String {
     let mut x = n.wrapping_mul(2654435761);
     for _ in 0..16 {
         s.push(ALPH[(x % 32) as usize] as char);
-        x = x.wrapping_mul(2246822519).wrapping_add(n.wrapping_mul(7) + 1);
+        x = x
+            .wrapping_mul(2246822519)
+            .wrapping_add(n.wrapping_mul(7) + 1);
     }
     s
 }
@@ -300,10 +403,7 @@ async fn seed_bulk_ssh(state: &AppState, now: &str) -> CmdResult<()> {
     use crate::commands::ssh_keys::generate_key_material;
 
     // 2 handcrafted + 4 bulk keys = 6 (ed25519 only — fast)
-    let mut key_ids = vec![
-        "demo-key-deploy".to_string(),
-        "demo-key-laptop".to_string(),
-    ];
+    let mut key_ids = vec!["demo-key-deploy".to_string(), "demo-key-laptop".to_string()];
     for i in 1..=4 {
         let id = format!("demo-key-bulk-{i}");
         let name = format!("bulk-ed25519-{i}");
@@ -532,14 +632,12 @@ async fn seed_bulk_notes(
         )
         .await?;
 
-        sqlx::query(
-            "INSERT OR IGNORE INTO note_folder_links (note_id, folder_id) VALUES (?, ?)",
-        )
-        .bind(&note.id)
-        .bind(folder)
-        .execute(&state.db)
-        .await
-        .map_err(AppError::db)?;
+        sqlx::query("INSERT OR IGNORE INTO note_folder_links (note_id, folder_id) VALUES (?, ?)")
+            .bind(&note.id)
+            .bind(folder)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
 
         // Sprinkle pinned / archived
         if i % 37 == 0 {

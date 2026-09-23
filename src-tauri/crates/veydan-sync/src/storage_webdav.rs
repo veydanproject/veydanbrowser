@@ -15,7 +15,17 @@ use std::sync::Mutex;
 use url::Url;
 
 /// Characters that must be escaped inside a path segment.
-const SEGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'#').add(b'<').add(b'>').add(b'?').add(b'`').add(b'{').add(b'}').add(b'%');
+const SEGMENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'%');
 
 #[derive(Clone, Debug)]
 pub struct WebDavConfig {
@@ -43,12 +53,21 @@ impl WebDavStorage {
             let p = format!("{}/", base.path());
             base.set_path(&p);
         }
-        Ok(Self { cfg, client: http_client()?, base, known_dirs: Mutex::new(HashSet::new()) })
+        Ok(Self {
+            cfg,
+            client: http_client()?,
+            base,
+            known_dirs: Mutex::new(HashSet::new()),
+        })
     }
 
     fn url_for(&self, key: &str) -> Url {
         let mut url = self.base.clone();
-        let encoded: Vec<String> = key.split('/').filter(|s| !s.is_empty()).map(|s| utf8_percent_encode(s, SEGMENT).to_string()).collect();
+        let encoded: Vec<String> = key
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .map(|s| utf8_percent_encode(s, SEGMENT).to_string())
+            .collect();
         let path = format!("{}{}", self.base.path(), encoded.join("/"));
         url.set_path(&path);
         url
@@ -56,7 +75,11 @@ impl WebDavStorage {
 
     fn req(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
         let b = self.client.request(method, url);
-        if self.cfg.username.is_empty() { b } else { b.basic_auth(&self.cfg.username, Some(&self.cfg.password)) }
+        if self.cfg.username.is_empty() {
+            b
+        } else {
+            b.basic_auth(&self.cfg.username, Some(&self.cfg.password))
+        }
     }
 
     async fn fail(resp: reqwest::Response, what: &str) -> SyncError {
@@ -72,7 +95,11 @@ impl WebDavStorage {
         let url = self.url_for(key);
         let body = data.to_vec();
         let resp = send_retry(|| self.req(Method::PUT, url.clone()).body(body.clone())).await?;
-        if resp.status().is_success() { Ok(()) } else { Err(Self::fail(resp, "put").await) }
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(Self::fail(resp, "put").await)
+        }
     }
 
     /// MOVE `from` onto `to`. With `overwrite = false`, 412 means the destination
@@ -80,9 +107,12 @@ impl WebDavStorage {
     async fn move_to(&self, from: &str, to: &str, overwrite: bool) -> Result<Option<bool>> {
         let dest = self.url_for(to);
         let resp = send_retry(|| {
-            self.req(Method::from_bytes(b"MOVE").expect("valid method"), self.url_for(from))
-                .header("Destination", dest.as_str())
-                .header("Overwrite", if overwrite { "T" } else { "F" })
+            self.req(
+                Method::from_bytes(b"MOVE").expect("valid method"),
+                self.url_for(from),
+            )
+            .header("Destination", dest.as_str())
+            .header("Overwrite", if overwrite { "T" } else { "F" })
         })
         .await?;
         match resp.status() {
@@ -98,7 +128,13 @@ impl WebDavStorage {
     }
 
     async fn ensure_dir(&self, dir: &str) -> Result<()> {
-        if dir.is_empty() || self.known_dirs.lock().map(|k| k.contains(dir)).unwrap_or(false) {
+        if dir.is_empty()
+            || self
+                .known_dirs
+                .lock()
+                .map(|k| k.contains(dir))
+                .unwrap_or(false)
+        {
             return Ok(());
         }
         if let Some((parent, _)) = dir.rsplit_once('/') {
@@ -107,7 +143,13 @@ impl WebDavStorage {
         let mut url = self.url_for(dir);
         let p = format!("{}/", url.path());
         url.set_path(&p);
-        let resp = send_retry(|| self.req(Method::from_bytes(b"MKCOL").expect("valid method"), url.clone())).await?;
+        let resp = send_retry(|| {
+            self.req(
+                Method::from_bytes(b"MKCOL").expect("valid method"),
+                url.clone(),
+            )
+        })
+        .await?;
         // 405 = already exists; 301/302 some servers use for existing collections.
         match resp.status() {
             s if s.is_success() => {}
@@ -128,10 +170,13 @@ impl WebDavStorage {
             url.set_path(&p);
         }
         let resp = send_retry(|| {
-            self.req(Method::from_bytes(b"PROPFIND").expect("valid method"), url.clone())
-                .header("Depth", "1")
-                .header("Content-Type", "application/xml")
-                .body(PROPFIND_BODY)
+            self.req(
+                Method::from_bytes(b"PROPFIND").expect("valid method"),
+                url.clone(),
+            )
+            .header("Depth", "1")
+            .header("Content-Type", "application/xml")
+            .body(PROPFIND_BODY)
         })
         .await?;
         if resp.status() == StatusCode::NOT_FOUND {
@@ -154,7 +199,9 @@ impl WebDavStorage {
             if path_norm == self_norm {
                 continue;
             }
-            let Some(rel) = path_norm.strip_prefix(&base_norm) else { continue };
+            let Some(rel) = path_norm.strip_prefix(&base_norm) else {
+                continue;
+            };
             let rel = rel.trim_matches('/').to_string();
             if rel.is_empty() || is_noise_key(&rel) {
                 continue;
@@ -173,7 +220,10 @@ fn parse_multistatus(xml: &[u8]) -> Result<Vec<(String, bool)>> {
     let mut is_dir = false;
     let mut in_href = false;
     loop {
-        match reader.read_event().map_err(|e| SyncError::Format(e.to_string()))? {
+        match reader
+            .read_event()
+            .map_err(|e| SyncError::Format(e.to_string()))?
+        {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"response" => {
                     href.clear();
@@ -189,7 +239,11 @@ fn parse_multistatus(xml: &[u8]) -> Result<Vec<(String, bool)>> {
                 }
             }
             Event::Text(t) if in_href => {
-                href = t.xml_content().map_err(|e| SyncError::Format(e.to_string()))?.trim().to_string();
+                href = t
+                    .xml_content()
+                    .map_err(|e| SyncError::Format(e.to_string()))?
+                    .trim()
+                    .to_string();
             }
             Event::End(e) => match e.local_name().as_ref() {
                 b"href" => in_href = false,
@@ -205,12 +259,17 @@ fn parse_multistatus(xml: &[u8]) -> Result<Vec<(String, bool)>> {
 
 /// Path of an href that may be a full URL or an absolute path.
 fn href_path(href: &str) -> String {
-    Url::parse(href).map(|u| u.path().to_string()).unwrap_or_else(|_| href.to_string())
+    Url::parse(href)
+        .map(|u| u.path().to_string())
+        .unwrap_or_else(|_| href.to_string())
 }
 
 /// Compare WebDAV paths after percent-decoding so Cyrillic collections match.
 fn decode_path(p: &str) -> String {
-    percent_decode_str(p).decode_utf8_lossy().trim_end_matches('/').to_string()
+    percent_decode_str(p)
+        .decode_utf8_lossy()
+        .trim_end_matches('/')
+        .to_string()
 }
 
 #[async_trait]
@@ -224,7 +283,9 @@ impl Storage for WebDavStorage {
         let mut out = Vec::new();
         let mut stack = vec![start_dir];
         while let Some(dir) = stack.pop() {
-            let Some(children) = self.list_dir(&dir).await? else { continue };
+            let Some(children) = self.list_dir(&dir).await? else {
+                continue;
+            };
             for (rel, is_dir) in children {
                 if is_dir {
                     stack.push(rel);
@@ -256,7 +317,9 @@ impl Storage for WebDavStorage {
             Ok(Some(true)) => Ok(()),
             Ok(Some(false)) => {
                 let _ = self.delete(&tmp).await;
-                Err(SyncError::Storage(format!("webdav move refused to overwrite {key}")))
+                Err(SyncError::Storage(format!(
+                    "webdav move refused to overwrite {key}"
+                )))
             }
             Ok(None) => {
                 let _ = self.delete(&tmp).await;

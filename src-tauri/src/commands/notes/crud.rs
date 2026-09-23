@@ -1,19 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-use crate::error::{AppError, CmdResult};
-use crate::AppState;
-use std::collections::HashMap;
+use super::attachments::remove_note_attachments;
 use super::files::*;
+use super::filter::FilterContext;
+use super::history::*;
+use super::index::*;
+use super::links::{propagate_rename, reindex_links};
 use super::models::*;
 use super::tags::*;
-use super::index::*;
-use super::history::*;
-use super::attachments::remove_note_attachments;
-use super::filter::FilterContext;
-use super::links::{propagate_rename, reindex_links};
 use super::templates::{render_template, TemplateVars};
+use crate::error::{AppError, CmdResult};
+use crate::AppState;
 use chrono::Utc;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
@@ -23,12 +23,11 @@ pub async fn note_list(
     filter: NoteFilter,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<Vec<NoteListItem>> {
-    let rows = sqlx::query_as::<_, NoteRow>(
-        "SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC",
-    )
-    .fetch_all(&state.db)
-    .await
-    .map_err(AppError::db)?;
+    let rows =
+        sqlx::query_as::<_, NoteRow>("SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC")
+            .fetch_all(&state.db)
+            .await
+            .map_err(AppError::db)?;
 
     let ctx = FilterContext::load(&filter, &state).await?;
     Ok(list_items(rows, &filter, &ctx, &state.app_data_dir))
@@ -54,10 +53,7 @@ fn list_items(
 }
 
 #[tauri::command]
-pub async fn note_get(
-    id: String,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<Note> {
+pub async fn note_get(id: String, state: tauri::State<'_, AppState>) -> CmdResult<Note> {
     let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.db)
@@ -175,7 +171,15 @@ pub(crate) async fn insert_note(new: NewNote, state: &AppState) -> Result<Note, 
     set_note_tag_links(&new.id, &new.tags, &state.db).await?;
     reindex_links(&new.id, &new.content, &state.db).await?;
 
-    let fts_rowid = fts_upsert(&new.id, &new.title, &new.content, &new.tags, None, &state.db).await?;
+    let fts_rowid = fts_upsert(
+        &new.id,
+        &new.title,
+        &new.content,
+        &new.tags,
+        None,
+        &state.db,
+    )
+    .await?;
     sqlx::query("UPDATE notes SET fts_rowid=? WHERE id=?")
         .bind(fts_rowid)
         .bind(&new.id)
@@ -218,7 +222,11 @@ pub async fn note_create(
     if let Some(template_id) = input.template_id.filter(|t| !t.is_empty()) {
         let vars = TemplateVars::from_bindings(&input.title, &bindings, &state).await;
         let rendered = render_template(&template_id, &vars, &state).await?;
-        content = if content.is_empty() { rendered } else { format!("{rendered}\n{content}") };
+        content = if content.is_empty() {
+            rendered
+        } else {
+            format!("{rendered}\n{content}")
+        };
     }
     let new = NewNote {
         id: Uuid::new_v4().to_string(),
@@ -243,7 +251,11 @@ pub async fn note_update(
 }
 
 /// Apply title/pinned/content changes: snapshot, rewrite file, reindex.
-pub(crate) async fn update_note(id: &str, input: NoteUpdateInput, state: &AppState) -> Result<Note, AppError> {
+pub(crate) async fn update_note(
+    id: &str,
+    input: NoteUpdateInput,
+    state: &AppState,
+) -> Result<Note, AppError> {
     let id = id.to_string();
     let now = Utc::now().to_rfc3339();
 
@@ -305,7 +317,15 @@ pub(crate) async fn update_note(id: &str, input: NoteUpdateInput, state: &AppSta
         propagate_rename(&id, &old_title, &row.title, state).await?;
     }
 
-    let fts_rowid = fts_upsert(&id, &row.title, &content, &tag_names, row.fts_rowid, &state.db).await?;
+    let fts_rowid = fts_upsert(
+        &id,
+        &row.title,
+        &content,
+        &tag_names,
+        row.fts_rowid,
+        &state.db,
+    )
+    .await?;
 
     sqlx::query(
         "UPDATE notes SET title=?, pinned=?, updated_at=?, content_hash=?, preview=?, fts_rowid=? WHERE id=?",
@@ -449,7 +469,10 @@ pub async fn note_delete(
 
 /// Move several notes to the trash with a single manifest rebuild.
 #[tauri::command]
-pub async fn note_delete_many(ids: Vec<String>, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+pub async fn note_delete_many(
+    ids: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
     for id in &ids {
         soft_delete(id, &state).await?;
     }
@@ -472,10 +495,7 @@ pub async fn note_trash_empty(state: tauri::State<'_, AppState>) -> CmdResult<us
 }
 
 #[tauri::command]
-pub async fn note_archive(
-    id: String,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<()> {
+pub async fn note_archive(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
     sqlx::query("UPDATE notes SET archived=1, updated_at=? WHERE id=?")
         .bind(Utc::now().to_rfc3339())
         .bind(&id)
@@ -486,10 +506,7 @@ pub async fn note_archive(
 }
 
 #[tauri::command]
-pub async fn note_restore(
-    id: String,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<()> {
+pub async fn note_restore(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
     let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.db)
@@ -497,18 +514,21 @@ pub async fn note_restore(
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found(format!("Note {id}")))?;
 
-    sqlx::query("UPDATE notes SET archived=0, deleted=0, doc_status='active', updated_at=? WHERE id=?")
-        .bind(Utc::now().to_rfc3339())
-        .bind(&id)
-        .execute(&state.db)
-        .await
-        .map_err(AppError::db)?;
+    sqlx::query(
+        "UPDATE notes SET archived=0, deleted=0, doc_status='active', updated_at=? WHERE id=?",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(&id)
+    .execute(&state.db)
+    .await
+    .map_err(AppError::db)?;
 
     // Soft delete drops the FTS row; put it back when leaving the trash.
     if row.deleted != 0 {
         let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
         let (_, tags_list, body) = read_note_file(&file_path).unwrap_or_default();
-        let fts_rowid = fts_upsert(&id, &row.title, &body, &tags_list, row.fts_rowid, &state.db).await?;
+        let fts_rowid =
+            fts_upsert(&id, &row.title, &body, &tags_list, row.fts_rowid, &state.db).await?;
         sqlx::query("UPDATE notes SET fts_rowid=? WHERE id=?")
             .bind(fts_rowid)
             .bind(&id)
@@ -551,15 +571,8 @@ pub async fn note_set_tags(
         updated_row.updated_at = now.clone();
         write_note_file(&file_path, &updated_row, &tag_names, &body)?;
 
-        let fts_rowid = fts_upsert(
-            &id,
-            &row.title,
-            &body,
-            &tag_names,
-            row.fts_rowid,
-            &state.db,
-        )
-        .await?;
+        let fts_rowid =
+            fts_upsert(&id, &row.title, &body, &tag_names, row.fts_rowid, &state.db).await?;
 
         sqlx::query("UPDATE notes SET fts_rowid=? WHERE id=?")
             .bind(fts_rowid)
@@ -631,8 +644,10 @@ pub async fn note_search(
         return Ok(vec![]);
     }
 
-    let snippets_map: std::collections::HashMap<String, String> =
-        matched.iter().map(|(id, snip)| (id.clone(), snippet_html(snip))).collect();
+    let snippets_map: std::collections::HashMap<String, String> = matched
+        .iter()
+        .map(|(id, snip)| (id.clone(), snippet_html(snip)))
+        .collect();
     let ids: Vec<String> = matched.into_iter().map(|(id, _)| id).collect();
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
@@ -685,16 +700,14 @@ pub async fn note_reindex(state: tauri::State<'_, AppState>) -> CmdResult<()> {
         let tags_str = tags_list.join(" ");
 
         let mut conn = state.db.acquire().await.map_err(AppError::db)?;
-        sqlx::query(
-            "INSERT INTO notes_fts(note_id, title, content, tags) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&row.id)
-        .bind(&row.title)
-        .bind(&body)
-        .bind(&tags_str)
-        .execute(&mut *conn)
-        .await
-        .map_err(AppError::db)?;
+        sqlx::query("INSERT INTO notes_fts(note_id, title, content, tags) VALUES (?, ?, ?, ?)")
+            .bind(&row.id)
+            .bind(&row.title)
+            .bind(&body)
+            .bind(&tags_str)
+            .execute(&mut *conn)
+            .await
+            .map_err(AppError::db)?;
 
         let (rowid,): (i64,) = sqlx::query_as("SELECT last_insert_rowid()")
             .fetch_one(&mut *conn)
@@ -720,10 +733,7 @@ pub async fn note_open_folder(state: tauri::State<'_, AppState>) -> CmdResult<()
 }
 
 #[tauri::command]
-pub async fn note_open_external(
-    id: String,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<()> {
+pub async fn note_open_external(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
     let row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.db)
@@ -761,14 +771,10 @@ pub async fn note_draft_get(
 }
 
 #[tauri::command]
-pub async fn note_draft_discard(
-    id: String,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<()> {
+pub async fn note_draft_discard(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
     let draft_path = draft_file_path(&state.app_data_dir, &id);
     if draft_path.exists() {
         std::fs::remove_file(&draft_path).map_err(AppError::io)?;
     }
     Ok(())
 }
-

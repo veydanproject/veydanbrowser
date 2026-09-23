@@ -52,10 +52,11 @@ pub(crate) async fn open_notes_window(
             Some(id) => format!("/notes?open={id}"),
             None => "/notes".to_string(),
         };
-        let mut builder = WebviewWindowBuilder::new(&app2, NOTES_WINDOW_LABEL, WebviewUrl::App(url.into()))
-            .title(title)
-            .inner_size(960.0, 700.0)
-            .min_inner_size(640.0, 480.0);
+        let mut builder =
+            WebviewWindowBuilder::new(&app2, NOTES_WINDOW_LABEL, WebviewUrl::App(url.into()))
+                .title(title)
+                .inner_size(960.0, 700.0)
+                .min_inner_size(640.0, 480.0);
 
         #[cfg(target_os = "linux")]
         {

@@ -50,7 +50,10 @@ fn now_ms() -> i64 {
 
 /// Once a day.
 pub async fn due(db: &Pool<Sqlite>) -> bool {
-    let last: i64 = get_setting(db, LAST_RUN_KEY).await.and_then(|v| v.parse().ok()).unwrap_or(0);
+    let last: i64 = get_setting(db, LAST_RUN_KEY)
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     now_ms() - last >= INTERVAL_MS
 }
 
@@ -59,7 +62,13 @@ async fn blob_refs(engine: &Engine, op: &Op) -> CmdResult<Vec<String>> {
     if op.deleted {
         return Ok(Vec::new());
     }
-    let field = |k: &str| op.payload.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string);
+    let field = |k: &str| {
+        op.payload
+            .get(k)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
     #[cfg(mobile)]
     let _ = engine;
     Ok(match op.entity_type.as_str() {
@@ -67,7 +76,12 @@ async fn blob_refs(engine: &Engine, op: &Op) -> CmdResult<Vec<String>> {
         notes::ENTITY => {
             let mut refs: Vec<String> = field("blob").into_iter().collect();
             if let Some(parents) = op.payload.get("parents").and_then(|v| v.as_array()) {
-                refs.extend(parents.iter().filter_map(|p| p.as_str()).map(str::to_string));
+                refs.extend(
+                    parents
+                        .iter()
+                        .filter_map(|p| p.as_str())
+                        .map(str::to_string),
+                );
             }
             refs
         }
@@ -80,7 +94,10 @@ async fn blob_refs(engine: &Engine, op: &Op) -> CmdResult<Vec<String>> {
 
 /// Manifest ids every non-deleted op keeps alive, regardless of entity type.
 fn large_file_roots(ops: &[Op]) -> BTreeSet<String> {
-    ops.iter().filter(|op| !op.deleted).flat_map(|op| refs_from_payload(&op.payload)).collect()
+    ops.iter()
+        .filter(|op| !op.deleted)
+        .flat_map(|op| refs_from_payload(&op.payload))
+        .collect()
 }
 
 /// One GC pass. Fails (and changes nothing) when some device's log is not fully readable.
@@ -93,15 +110,24 @@ pub async fn run(engine: &Engine, db: &Pool<Sqlite>) -> CmdResult<Outcome> {
     let all = engine.list_blobs().await.map_err(AppError::other)?;
 
     let rows: Vec<(String, i64)> =
-        sqlx::query_as("SELECT blob, first_seen FROM sync_gc_candidates").fetch_all(db).await.map_err(AppError::db)?;
-    let (lf_candidates, candidates): (HashMap<String, i64>, HashMap<String, i64>) =
-        rows.into_iter().partition(|(k, _)| LargeFileStore::is_v2_key(k));
+        sqlx::query_as("SELECT blob, first_seen FROM sync_gc_candidates")
+            .fetch_all(db)
+            .await
+            .map_err(AppError::db)?;
+    let (lf_candidates, candidates): (HashMap<String, i64>, HashMap<String, i64>) = rows
+        .into_iter()
+        .partition(|(k, _)| LargeFileStore::is_v2_key(k));
     let mut candidates = candidates;
     let now = now_ms();
-    let mut outcome = Outcome { blobs_total: all.len(), ..Default::default() };
+    let mut outcome = Outcome {
+        blobs_total: all.len(),
+        ..Default::default()
+    };
 
     // v2 first: it is fail-closed and must not run after v1 already deleted objects.
-    let store = engine.large_files(Default::default()).map_err(AppError::other)?;
+    let store = engine
+        .large_files(Default::default())
+        .map_err(AppError::other)?;
     let lf = store
         .gc_with_complete_root_set(&large_file_roots(&ops), &lf_candidates, now, GRACE_MS)
         .await
@@ -157,6 +183,10 @@ async fn remember(db: &Pool<Sqlite>, blob: &str, first_seen: i64) -> CmdResult<(
 }
 
 async fn forget(db: &Pool<Sqlite>, blob: &str) -> CmdResult<()> {
-    sqlx::query("DELETE FROM sync_gc_candidates WHERE blob = ?").bind(blob).execute(db).await.map_err(AppError::db)?;
+    sqlx::query("DELETE FROM sync_gc_candidates WHERE blob = ?")
+        .bind(blob)
+        .execute(db)
+        .await
+        .map_err(AppError::db)?;
     Ok(())
 }

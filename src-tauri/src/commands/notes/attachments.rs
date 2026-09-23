@@ -4,11 +4,11 @@
 //! Note attachments: files stored next to the note as `attachments/{note_id}/{name}`
 //! and referenced from Markdown by that relative path.
 
-use crate::error::{AppError, CmdResult};
-use crate::AppState;
 use super::files::*;
 use super::models::*;
 use super::settings::load_attachment_policy;
+use crate::error::{AppError, CmdResult};
+use crate::AppState;
 use serde::Serialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -97,10 +97,20 @@ pub(crate) fn safe_file_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let cleaned: String = base
         .chars()
-        .map(|c| if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let trimmed = cleaned.trim().trim_matches('.');
-    if trimmed.is_empty() { "file".to_string() } else { trimmed.to_string() }
+    if trimmed.is_empty() {
+        "file".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Append `-1`, `-2`, … before the extension until the name is free.
@@ -148,7 +158,14 @@ pub(crate) fn store_attachment(
     file_name: &str,
     data: &[u8],
 ) -> Result<NoteAttachment, AppError> {
-    store_attachment_stream(note_file, note_id, file_name, Some(data.len() as u64), None, &mut &data[..])
+    store_attachment_stream(
+        note_file,
+        note_id,
+        file_name,
+        Some(data.len() as u64),
+        None,
+        &mut &data[..],
+    )
 }
 
 /// Stream `reader` into `attachments/{note_id}/{name}` through a `.part` file
@@ -165,19 +182,30 @@ pub(crate) fn store_attachment_stream(
     std::fs::create_dir_all(&dir).map_err(AppError::io)?;
     if let (Some(need), Some(free)) = (len_hint, available_space(&dir)) {
         if free < need.saturating_add(DISK_RESERVE) {
-            return Err(AppError::io(format!("not enough free space: need {need} bytes, {free} available")));
+            return Err(AppError::io(format!(
+                "not enough free space: need {need} bytes, {free} available"
+            )));
         }
     }
     let dest = unique_path(&dir, &safe_file_name(file_name));
     let part = PathBuf::from(format!("{}{PART_SUFFIX}", dest.display()));
     let copied = (|| -> Result<u64, AppError> {
-        let mut out = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&part).map_err(AppError::io)?);
+        let mut out = std::io::BufWriter::with_capacity(
+            1 << 20,
+            std::fs::File::create(&part).map_err(AppError::io)?,
+        );
         let limit = max.map(|m| m + 1).unwrap_or(u64::MAX);
         let n = std::io::copy(&mut reader.take(limit), &mut out).map_err(AppError::io)?;
         if max.is_some_and(|m| n > m) {
-            return Err(AppError::other(format!("attachment exceeds the {} byte limit", max.unwrap_or(0))));
+            return Err(AppError::other(format!(
+                "attachment exceeds the {} byte limit",
+                max.unwrap_or(0)
+            )));
         }
-        out.into_inner().map_err(|e| AppError::io(e.into_error()))?.sync_all().map_err(AppError::io)?;
+        out.into_inner()
+            .map_err(|e| AppError::io(e.into_error()))?
+            .sync_all()
+            .map_err(AppError::io)?;
         Ok(n)
     })();
     if let Err(e) = copied {
@@ -204,8 +232,16 @@ pub(crate) fn open_source(app: &tauri::AppHandle, src: &str) -> CmdResult<Attach
     let _ = app;
     let path = PathBuf::from(src);
     let len = std::fs::metadata(&path).map_err(AppError::io)?.len();
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
-    Ok(AttachmentSource { name, len: Some(len), open: Arc::new(move || std::fs::File::open(&path)) })
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+    Ok(AttachmentSource {
+        name,
+        len: Some(len),
+        open: Arc::new(move || std::fs::File::open(&path)),
+    })
 }
 
 /// Decode the percent-encoded ASCII header value used for file names.
@@ -244,7 +280,8 @@ fn encode_attachment_name(name: &str) -> String {
 fn encode_path_name(name: &str, keep_parens: bool) -> String {
     let mut out = String::new();
     for ch in name.chars() {
-        let plain = ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '!' | '~' | '*')
+        let plain = ch.is_ascii_alphanumeric()
+            || matches!(ch, '-' | '_' | '.' | '!' | '~' | '*')
             || (keep_parens && matches!(ch, '\'' | '(' | ')'));
         if plain {
             out.push(ch);
@@ -360,7 +397,14 @@ pub async fn note_attachment_add_from_path(
     let max = policy.max_file_bytes();
     tokio::task::spawn_blocking(move || {
         let mut reader = (source.open)().map_err(AppError::io)?;
-        store_attachment_stream(&note_file, &note_id, &source.name, source.len, max, &mut reader)
+        store_attachment_stream(
+            &note_file,
+            &note_id,
+            &source.name,
+            source.len,
+            max,
+            &mut reader,
+        )
     })
     .await
     .map_err(AppError::io)?
@@ -452,7 +496,11 @@ pub async fn note_attachment_save(
         #[cfg(target_os = "android")]
         if dest.starts_with("content://") {
             let mut out = content_uri::writer(&app, &dest)?;
-            std::io::copy(&mut std::fs::File::open(&path).map_err(AppError::io)?, &mut out).map_err(AppError::io)?;
+            std::io::copy(
+                &mut std::fs::File::open(&path).map_err(AppError::io)?,
+                &mut out,
+            )
+            .map_err(AppError::io)?;
             return Ok(());
         }
         #[cfg(not(target_os = "android"))]
@@ -483,19 +531,39 @@ pub async fn note_attachments_gc(
     for row in &rows {
         let note_file = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
         let dir = attachments_dir_for(&note_file, &row.id);
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        let body = read_note_file(&note_file).map(|(_, _, b)| b).unwrap_or_default();
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let body = read_note_file(&note_file)
+            .map(|(_, _, b)| b)
+            .unwrap_or_default();
         for entry in entries.flatten() {
             let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()) else { continue };
-            if body_references(&body, &row.id, &name) || is_staging_name(&name) { continue; }
+            let Some(name) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+            else {
+                continue;
+            };
+            if body_references(&body, &row.id, &name) || is_staging_name(&name) {
+                continue;
+            }
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             if delete {
                 let _ = std::fs::remove_file(&path);
             }
-            orphans.push(OrphanAttachment { note_id: row.id.clone(), name, size });
+            orphans.push(OrphanAttachment {
+                note_id: row.id.clone(),
+                name,
+                size,
+            });
         }
-        if delete && std::fs::read_dir(&dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
+        if delete
+            && std::fs::read_dir(&dir)
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false)
+        {
             let _ = std::fs::remove_dir(&dir);
         }
     }

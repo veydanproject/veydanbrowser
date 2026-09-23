@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 use super::content::{pack, DemoPack, SmartKind};
-use crate::commands::notes::{insert_note, NoteFilter, NewNote};
+use crate::commands::notes::{insert_note, NewNote, NoteFilter};
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use chrono::Utc;
@@ -54,7 +54,16 @@ async fn seed_workspaces(state: &AppState, pack: &DemoPack, now: &str) -> CmdRes
     .map_err(AppError::db)?;
 
     for (i, col) in pack.default_columns.iter().enumerate() {
-        insert_column(state, "default", col.name, col.tag_name, col.color, i as i64, now).await?;
+        insert_column(
+            state,
+            "default",
+            col.name,
+            col.tag_name,
+            col.color,
+            i as i64,
+            now,
+        )
+        .await?;
     }
 
     for ws in &pack.workspaces {
@@ -74,7 +83,16 @@ async fn seed_workspaces(state: &AppState, pack: &DemoPack, now: &str) -> CmdRes
         .map_err(AppError::db)?;
 
         for (i, col) in ws.columns.iter().enumerate() {
-            insert_column(state, ws.id, col.name, col.tag_name, col.color, i as i64, now).await?;
+            insert_column(
+                state,
+                ws.id,
+                col.name,
+                col.tag_name,
+                col.color,
+                i as i64,
+                now,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -213,7 +231,11 @@ async fn seed_ssh(state: &AppState, pack: &DemoPack, now: &str) -> CmdResult<()>
     use crate::commands::ssh_keys::generate_key_material;
 
     for k in &pack.ssh_keys {
-        let bits = if k.algorithm == "rsa" { Some(2048) } else { None };
+        let bits = if k.algorithm == "rsa" {
+            Some(2048)
+        } else {
+            None
+        };
         let material = tokio::task::spawn_blocking({
             let alg = k.algorithm.to_string();
             let comment = format!("demo@{}", k.name);
@@ -385,7 +407,13 @@ async fn seed_notes(state: &AppState, pack: &DemoPack, now: &str) -> CmdResult<(
             .map_err(AppError::db)?;
         }
 
-        created.push((note.id, note.content.unwrap_or_default(), n.pinned, n.archived, n.deleted));
+        created.push((
+            note.id,
+            note.content.unwrap_or_default(),
+            n.pinned,
+            n.archived,
+            n.deleted,
+        ));
     }
 
     // Reindex wiki links now that all titles exist

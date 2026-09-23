@@ -191,6 +191,7 @@
     <button type="button" class="demo-link danger" disabled={demoBusy || clearBusy} onclick={askClearData}>
       {clearBusy ? $t('settings_clear_clearing') : $t('settings_clear_data')}
     </button>
+    <a class="demo-link" href="/settings/dev">{$t('dev_sync_link')}</a>
   </div>
   {#if dataMsg}<p class="ok-msg">{dataMsg}</p>{/if}
   {#if dataError}<p class="err-msg">{dataError}</p>{/if}
@@ -245,6 +246,7 @@
   .demo-chip, .demo-link {
     border: none; background: transparent; color: var(--text-faint);
     font-size: 12px; line-height: 1.2; padding: 0.1rem 0.15rem; cursor: pointer;
+    text-decoration: none;
   }
   .demo-chip:hover, .demo-link:hover:not(:disabled) { color: var(--text); text-decoration: underline; }
   .demo-link.danger:hover:not(:disabled) { color: var(--danger-text); }

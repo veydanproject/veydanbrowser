@@ -60,7 +60,8 @@ const NO_LINKS: &[LinkSpec] = &[];
 pub const SETTING_ENTITY: &str = "setting";
 
 /// User preferences shared across devices; paths, credentials and sync state stay local.
-const SETTING_FILTER: &str = "key IN ('ui_locale', 'minimize_to_tray', 'close_to_tray', 'start_hidden',
+const SETTING_FILTER: &str =
+    "key IN ('ui_locale', 'minimize_to_tray', 'close_to_tray', 'start_hidden',
     'notes_lock_timeout_min', 'notes_capture_rules', 'quick_capture_shortcut')";
 
 pub const SPECS: &[TableSpec] = &[
@@ -68,7 +69,16 @@ pub const SPECS: &[TableSpec] = &[
         entity: "workspace",
         table: "workspaces",
         pk: "id",
-        columns: &["name", "description", "color", "icon", "notes", "is_default", "created_at", "updated_at"],
+        columns: &[
+            "name",
+            "description",
+            "color",
+            "icon",
+            "notes",
+            "is_default",
+            "created_at",
+            "updated_at",
+        ],
         links: NO_LINKS,
         filter: None,
         unique: None,
@@ -84,7 +94,14 @@ pub const SPECS: &[TableSpec] = &[
         entity: "workspace_column",
         table: "workspace_columns",
         pk: "id",
-        columns: &["workspace_id", "name", "tag_name", "color", "position", "created_at"],
+        columns: &[
+            "workspace_id",
+            "name",
+            "tag_name",
+            "color",
+            "position",
+            "created_at",
+        ],
         links: NO_LINKS,
         filter: None,
         unique: Some(&["workspace_id", "name"]),
@@ -96,8 +113,18 @@ pub const SPECS: &[TableSpec] = &[
         table: "proxies",
         pk: "id",
         columns: &[
-            "name", "proxy_type", "host", "port", "username", "password", "country", "city", "private_key",
-            "server_fingerprint", "tags", "created_at",
+            "name",
+            "proxy_type",
+            "host",
+            "port",
+            "username",
+            "password",
+            "country",
+            "city",
+            "private_key",
+            "server_fingerprint",
+            "tags",
+            "created_at",
         ],
         links: NO_LINKS,
         filter: None,
@@ -110,24 +137,56 @@ pub const SPECS: &[TableSpec] = &[
         table: "ssh_keys",
         pk: "id",
         columns: &[
-            "name", "algorithm", "bits", "comment", "private_key", "public_key", "passphrase", "fingerprint", "source",
-            "created_at", "updated_at",
+            "name",
+            "algorithm",
+            "bits",
+            "comment",
+            "private_key",
+            "public_key",
+            "passphrase",
+            "fingerprint",
+            "source",
+            "created_at",
+            "updated_at",
         ],
         links: NO_LINKS,
         filter: None,
         unique: None,
         insert: true,
-        delete: Delete::Plain(&["UPDATE ssh_connections SET ssh_key_id = NULL WHERE ssh_key_id = ?"]),
+        delete: Delete::Plain(&[
+            "UPDATE ssh_connections SET ssh_key_id = NULL WHERE ssh_key_id = ?",
+        ]),
     },
     TableSpec {
         entity: "profile",
         table: "profiles",
         pk: "id",
         columns: &[
-            "name", "browser_type", "proxy_id", "fingerprint_preset", "user_agent", "platform", "timezone", "locale",
-            "languages", "screen_width", "screen_height", "webrtc_mode", "geolocation_enabled", "latitude", "longitude",
-            "notes", "workspace_id", "kanban_status", "kanban_order", "tags", "webgl_vendor", "webgl_renderer",
-            "default_search_engine", "history_enabled", "created_at",
+            "name",
+            "browser_type",
+            "proxy_id",
+            "fingerprint_preset",
+            "user_agent",
+            "platform",
+            "timezone",
+            "locale",
+            "languages",
+            "screen_width",
+            "screen_height",
+            "webrtc_mode",
+            "geolocation_enabled",
+            "latitude",
+            "longitude",
+            "notes",
+            "workspace_id",
+            "kanban_status",
+            "kanban_order",
+            "tags",
+            "webgl_vendor",
+            "webgl_renderer",
+            "default_search_engine",
+            "history_enabled",
+            "created_at",
         ],
         // `updated_at` is bumped by launch/stop; syncing it would turn every launch into a row op.
         links: NO_LINKS,
@@ -141,9 +200,26 @@ pub const SPECS: &[TableSpec] = &[
         table: "ssh_connections",
         pk: "id",
         columns: &[
-            "name", "host", "port", "username", "auth_type", "password", "private_key", "key_passphrase", "requires_2fa",
-            "totp_entry_id", "proxy_id", "ssh_key_id", "connect_timeout_sec", "keepalive_sec", "terminal_theme",
-            "default_cols", "default_rows", "server_fingerprint", "created_at", "updated_at",
+            "name",
+            "host",
+            "port",
+            "username",
+            "auth_type",
+            "password",
+            "private_key",
+            "key_passphrase",
+            "requires_2fa",
+            "totp_entry_id",
+            "proxy_id",
+            "ssh_key_id",
+            "connect_timeout_sec",
+            "keepalive_sec",
+            "terminal_theme",
+            "default_cols",
+            "default_rows",
+            "server_fingerprint",
+            "created_at",
+            "updated_at",
         ],
         links: &[
             LinkSpec {
@@ -152,7 +228,12 @@ pub const SPECS: &[TableSpec] = &[
                 child_col: "workspace_id",
                 key: "workspace_ids",
             },
-            LinkSpec { table: "ssh_connection_profiles", parent_col: "connection_id", child_col: "profile_id", key: "profile_ids" },
+            LinkSpec {
+                table: "ssh_connection_profiles",
+                parent_col: "connection_id",
+                child_col: "profile_id",
+                key: "profile_ids",
+            },
         ],
         filter: None,
         unique: None,
@@ -163,7 +244,17 @@ pub const SPECS: &[TableSpec] = &[
         entity: "totp",
         table: "totp_entries",
         pk: "id",
-        columns: &["name", "issuer", "secret", "algorithm", "digits", "period", "tags", "created_at", "updated_at"],
+        columns: &[
+            "name",
+            "issuer",
+            "secret",
+            "algorithm",
+            "digits",
+            "period",
+            "tags",
+            "created_at",
+            "updated_at",
+        ],
         links: NO_LINKS,
         filter: None,
         unique: None,
@@ -210,7 +301,14 @@ pub const SPECS: &[TableSpec] = &[
         entity: "note_smart_view",
         table: "note_smart_views",
         pk: "id",
-        columns: &["name", "color", "conditions", "sort_order", "created_at", "updated_at"],
+        columns: &[
+            "name",
+            "color",
+            "conditions",
+            "sort_order",
+            "created_at",
+            "updated_at",
+        ],
         links: NO_LINKS,
         filter: None,
         unique: None,
@@ -223,7 +321,12 @@ pub const SPECS: &[TableSpec] = &[
         table: "notes",
         pk: "id",
         columns: &["pinned", "archived"],
-        links: &[LinkSpec { table: "note_folder_links", parent_col: "note_id", child_col: "folder_id", key: "folder_ids" }],
+        links: &[LinkSpec {
+            table: "note_folder_links",
+            parent_col: "note_id",
+            child_col: "folder_id",
+            key: "folder_ids",
+        }],
         filter: None,
         unique: None,
         insert: false,
@@ -256,12 +359,23 @@ pub enum RowScope {
 }
 
 fn is_note_row(entity: &str) -> bool {
-    matches!(entity, "note_tag" | "note_folder" | "note_smart_view" | "note_meta")
+    matches!(
+        entity,
+        "note_tag" | "note_folder" | "note_smart_view" | "note_meta"
+    )
 }
 
 /// Entities a mobile install stores. Proxies, SSH and browser settings carry
 /// secrets that only the desktop uses; they are neither pulled nor pushed there.
-const MOBILE_ENTITIES: &[&str] = &["workspace", "profile", "totp", "note_tag", "note_folder", "note_smart_view", "note_meta"];
+const MOBILE_ENTITIES: &[&str] = &[
+    "workspace",
+    "profile",
+    "totp",
+    "note_tag",
+    "note_folder",
+    "note_smart_view",
+    "note_meta",
+];
 
 fn supported(entity: &str) -> bool {
     cfg!(desktop) || MOBILE_ENTITIES.contains(&entity)
@@ -287,7 +401,11 @@ fn in_scope(entity: &str, scope: RowScope) -> bool {
 
 /// Ids are UUIDs, setting keys or the literal `default`; nothing else is accepted.
 fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
 }
 
 // ── Reading rows ─────────────────────────────────────────────────────────────
@@ -295,7 +413,12 @@ fn valid_id(id: &str) -> bool {
 /// `SELECT pk, json_object('c', c, ..) FROM table`: SQLite keeps the column types.
 fn select_sql(spec: &TableSpec) -> String {
     let pairs: Vec<String> = spec.columns.iter().map(|c| format!("'{c}', {c}")).collect();
-    let mut sql = format!("SELECT {}, json_object({}) FROM {}", spec.pk, pairs.join(", "), spec.table);
+    let mut sql = format!(
+        "SELECT {}, json_object({}) FROM {}",
+        spec.pk,
+        pairs.join(", "),
+        spec.table
+    );
     if let Some(f) = spec.filter {
         sql.push_str(" WHERE ");
         sql.push_str(f);
@@ -304,12 +427,22 @@ fn select_sql(spec: &TableSpec) -> String {
 }
 
 /// Child ids per parent for a link table, one query.
-async fn link_map(db: &Pool<Sqlite>, link: &LinkSpec, parent: Option<&str>) -> CmdResult<HashMap<String, Vec<String>>> {
-    let mut sql = format!("SELECT {}, {} FROM {}", link.parent_col, link.child_col, link.table);
+async fn link_map(
+    db: &Pool<Sqlite>,
+    link: &LinkSpec,
+    parent: Option<&str>,
+) -> CmdResult<HashMap<String, Vec<String>>> {
+    let mut sql = format!(
+        "SELECT {}, {} FROM {}",
+        link.parent_col, link.child_col, link.table
+    );
     if parent.is_some() {
         sql.push_str(&format!(" WHERE {} = ?", link.parent_col));
     }
-    sql.push_str(&format!(" ORDER BY {}, {}", link.parent_col, link.child_col));
+    sql.push_str(&format!(
+        " ORDER BY {}, {}",
+        link.parent_col, link.child_col
+    ));
     let mut q = sqlx::query_as::<_, (String, String)>(AssertSqlSafe(sql));
     if let Some(p) = parent {
         q = q.bind(p.to_string());
@@ -323,11 +456,19 @@ async fn link_map(db: &Pool<Sqlite>, link: &LinkSpec, parent: Option<&str>) -> C
 }
 
 fn parse_object(json: &str) -> Map<String, Value> {
-    serde_json::from_str::<Value>(json).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default()
+    serde_json::from_str::<Value>(json)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
 }
 
 /// Rows matching `select` with their link arrays folded in, as `(id, payload)`.
-async fn read_payloads(db: &Pool<Sqlite>, spec: &TableSpec, select: String, id: Option<&str>) -> CmdResult<Vec<(String, Value)>> {
+async fn read_payloads(
+    db: &Pool<Sqlite>,
+    spec: &TableSpec,
+    select: String,
+    id: Option<&str>,
+) -> CmdResult<Vec<(String, Value)>> {
     let mut q = sqlx::query_as::<_, (String, String)>(AssertSqlSafe(select));
     if let Some(id) = id {
         q = q.bind(id.to_string());
@@ -343,7 +484,10 @@ async fn read_payloads(db: &Pool<Sqlite>, spec: &TableSpec, select: String, id: 
             let mut payload = parse_object(&json);
             for (link, map) in &links {
                 let ids = map.get(&row_id).cloned().unwrap_or_default();
-                payload.insert(link.key.into(), serde_json::to_value(ids).unwrap_or_default());
+                payload.insert(
+                    link.key.into(),
+                    serde_json::to_value(ids).unwrap_or_default(),
+                );
             }
             (row_id, Value::Object(payload))
         })
@@ -356,8 +500,20 @@ async fn read_rows(db: &Pool<Sqlite>, spec: &TableSpec) -> CmdResult<Vec<(String
 }
 
 async fn read_row(db: &Pool<Sqlite>, spec: &TableSpec, id: &str) -> CmdResult<Option<Value>> {
-    let sql = format!("{} {} {} = ?", select_sql(spec), if spec.filter.is_some() { "AND" } else { "WHERE" }, spec.pk);
-    Ok(read_payloads(db, spec, sql, Some(id)).await?.pop().map(|(_, v)| v))
+    let sql = format!(
+        "{} {} {} = ?",
+        select_sql(spec),
+        if spec.filter.is_some() {
+            "AND"
+        } else {
+            "WHERE"
+        },
+        spec.pk
+    );
+    Ok(read_payloads(db, spec, sql, Some(id))
+        .await?
+        .pop()
+        .map(|(_, v)| v))
 }
 
 /// serde_json sorts object keys, so equal rows hash equal.
@@ -373,25 +529,46 @@ pub struct LocalChanges {
 }
 
 fn make_op(spec: &TableSpec, id: &str, hlc: Hlc, payload: Value, deleted: bool) -> Op {
-    Op { entity_type: spec.entity.into(), entity_id: id.into(), hlc, deleted, payload }
+    Op {
+        entity_type: spec.entity.into(),
+        entity_id: id.into(),
+        hlc,
+        deleted,
+        payload,
+    }
 }
 
 /// Rows whose synced columns differ from what the vault has, plus tombstones
 /// for rows that disappeared.
-pub async fn collect_local_changes(state: &AppState, clock: &mut HlcClock, scope: RowScope) -> CmdResult<LocalChanges> {
+pub async fn collect_local_changes(
+    state: &AppState,
+    clock: &mut HlcClock,
+    scope: RowScope,
+) -> CmdResult<LocalChanges> {
     let db = &state.db;
-    let mut out = LocalChanges { ops: Vec::new(), states: Vec::new() };
+    let mut out = LocalChanges {
+        ops: Vec::new(),
+        states: Vec::new(),
+    };
 
-    for spec in SPECS.iter().filter(|s| in_scope(s.entity, scope) && pushable(s.entity)) {
+    for spec in SPECS
+        .iter()
+        .filter(|s| in_scope(s.entity, scope) && pushable(s.entity))
+    {
         let mut states = load_row_states(db, spec.entity).await?;
         for (id, payload) in read_rows(db, spec).await? {
             let hash = payload_hash(&payload);
             let prev = states.remove(&id);
-            if prev.as_ref().map(|s| s.synced_hash == hash && !s.deleted).unwrap_or(false) {
+            if prev
+                .as_ref()
+                .map(|s| s.synced_hash == hash && !s.deleted)
+                .unwrap_or(false)
+            {
                 continue;
             }
             let hlc = clock.now();
-            out.ops.push(make_op(spec, &id, hlc.clone(), payload, false));
+            out.ops
+                .push(make_op(spec, &id, hlc.clone(), payload, false));
             out.states.push(RowSyncState {
                 entity: spec.entity.into(),
                 id,
@@ -406,7 +583,13 @@ pub async fn collect_local_changes(state: &AppState, clock: &mut HlcClock, scope
         // Whatever is left in `states` has no row any more.
         for (_, mut st) in states.into_iter().filter(|(_, s)| !s.deleted) {
             let hlc = clock.now();
-            out.ops.push(make_op(spec, &st.id, hlc.clone(), Value::Object(Map::new()), true));
+            out.ops.push(make_op(
+                spec,
+                &st.id,
+                hlc.clone(),
+                Value::Object(Map::new()),
+                true,
+            ));
             st.deleted = true;
             st.head_hlc = Some(hlc);
             out.states.push(st);
@@ -425,7 +608,10 @@ pub struct ApplyOutcome {
     pub retry: Option<String>,
 }
 
-fn bind_json<'q>(q: Query<'q, Sqlite, SqliteArguments>, v: &Value) -> Query<'q, Sqlite, SqliteArguments> {
+fn bind_json<'q>(
+    q: Query<'q, Sqlite, SqliteArguments>,
+    v: &Value,
+) -> Query<'q, Sqlite, SqliteArguments> {
     match v {
         Value::Null => q.bind(None::<String>),
         Value::Bool(b) => q.bind(*b as i64),
@@ -449,30 +635,45 @@ async fn exec(db: &Pool<Sqlite>, sql: String, values: &[Value]) -> CmdResult<u64
 
 /// Columns the remote row carries and we sync; anything else keeps its local value.
 fn known_columns<'a>(spec: &'a TableSpec, payload: &Map<String, Value>) -> Vec<(&'a str, Value)> {
-    spec.columns.iter().filter_map(|c| payload.get(*c).map(|v| (*c, v.clone()))).collect()
+    spec.columns
+        .iter()
+        .filter_map(|c| payload.get(*c).map(|v| (*c, v.clone())))
+        .collect()
 }
 
 /// NOT NULL columns without defaults that are device-local.
-fn insert_defaults(spec: &TableSpec, state: &AppState, id: &str) -> CmdResult<Vec<(&'static str, Value)>> {
+fn insert_defaults(
+    spec: &TableSpec,
+    state: &AppState,
+    id: &str,
+) -> CmdResult<Vec<(&'static str, Value)>> {
     if spec.entity != "profile" {
         return Ok(Vec::new());
     }
     let dir = state.app_data_dir.join("profiles").join(id);
     std::fs::create_dir_all(&dir).map_err(AppError::io)?;
     Ok(vec![
-        ("profile_path", Value::String(dir.to_string_lossy().into_owned())),
+        (
+            "profile_path",
+            Value::String(dir.to_string_lossy().into_owned()),
+        ),
         ("status", Value::String("stopped".into())),
         ("updated_at", Value::String(chrono::Utc::now().to_rfc3339())),
     ])
 }
 
 enum Upsert {
-    Done { id: String, absorbed: Option<String> },
+    Done {
+        id: String,
+        absorbed: Option<String>,
+    },
     Skip,
 }
 
 fn unique_vals<'a>(keys: &[&str], payload: &'a Map<String, Value>) -> Option<Vec<&'a str>> {
-    keys.iter().map(|k| payload.get(*k).and_then(Value::as_str)).collect()
+    keys.iter()
+        .map(|k| payload.get(*k).and_then(Value::as_str))
+        .collect()
 }
 
 async fn find_unique_other(
@@ -482,22 +683,33 @@ async fn find_unique_other(
     vals: &[&str],
     id: &str,
 ) -> CmdResult<Option<String>> {
-    let where_sql = keys.iter().map(|k| format!("{k} = ?")).collect::<Vec<_>>().join(" AND ");
-    let sql = format!("SELECT {} FROM {} WHERE {} AND {} != ?", spec.pk, spec.table, where_sql, spec.pk);
+    let where_sql = keys
+        .iter()
+        .map(|k| format!("{k} = ?"))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let sql = format!(
+        "SELECT {} FROM {} WHERE {} AND {} != ?",
+        spec.pk, spec.table, where_sql, spec.pk
+    );
     let mut q = sqlx::query_as::<_, (String,)>(AssertSqlSafe(sql));
     for v in vals {
         q = q.bind(*v);
     }
     q = q.bind(id);
-    Ok(q.fetch_optional(db).await.map_err(AppError::db)?.map(|(x,)| x))
+    Ok(q.fetch_optional(db)
+        .await
+        .map_err(AppError::db)?
+        .map(|(x,)| x))
 }
 
 async fn column_tag_name(db: &Pool<Sqlite>, id: &str) -> CmdResult<Option<String>> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT tag_name FROM workspace_columns WHERE id = ?")
-        .bind(id)
-        .fetch_optional(db)
-        .await
-        .map_err(AppError::db)?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT tag_name FROM workspace_columns WHERE id = ?")
+            .bind(id)
+            .fetch_optional(db)
+            .await
+            .map_err(AppError::db)?;
     Ok(row.map(|(t,)| t))
 }
 
@@ -523,19 +735,31 @@ async fn retarget_profile_tags(db: &Pool<Sqlite>, from: &str, to: &str) -> CmdRe
             continue;
         }
         let json = serde_json::to_string(&v).unwrap_or_else(|_| "[]".into());
-        exec(db, "UPDATE profiles SET tags = ? WHERE id = ?".into(), &[Value::String(json), Value::String(pid)]).await?;
+        exec(
+            db,
+            "UPDATE profiles SET tags = ? WHERE id = ?".into(),
+            &[Value::String(json), Value::String(pid)],
+        )
+        .await?;
     }
     Ok(())
 }
 
-fn rewrite_json_tags(payload: &mut Map<String, Value>, key: &str, aliases: &HashMap<String, String>) {
+fn rewrite_json_tags(
+    payload: &mut Map<String, Value>,
+    key: &str,
+    aliases: &HashMap<String, String>,
+) {
     if aliases.is_empty() {
         return;
     }
     let Some(v) = payload.get(key) else { return };
     let mut tags: Vec<String> = match v {
         Value::String(s) => serde_json::from_str(s).unwrap_or_default(),
-        Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect(),
         _ => return,
     };
     let mut changed = false;
@@ -548,7 +772,10 @@ fn rewrite_json_tags(payload: &mut Map<String, Value>, key: &str, aliases: &Hash
     if !changed {
         return;
     }
-    payload.insert(key.into(), Value::String(serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into())));
+    payload.insert(
+        key.into(),
+        Value::String(serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into())),
+    );
 }
 
 /// Write the row. `Skip` when the table forbids inserts and the row is absent.
@@ -568,7 +795,10 @@ async fn upsert(
             if let Some(other_id) = find_unique_other(db, spec, keys, &vals, id).await? {
                 let remote_wins = id < other_id.as_str();
                 if spec.entity == "workspace_column" {
-                    let remote_tag = payload.get("tag_name").and_then(Value::as_str).unwrap_or("");
+                    let remote_tag = payload
+                        .get("tag_name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
                     let local_tag = column_tag_name(db, &other_id).await?.unwrap_or_default();
                     if remote_wins && !remote_tag.is_empty() && remote_tag != local_tag {
                         retarget_profile_tags(db, &local_tag, remote_tag).await?;
@@ -584,16 +814,25 @@ async fn upsert(
                 if spec.entity == "workspace_column" && !remote_wins {
                     skip.insert("tag_name");
                 }
-                let rest: Vec<(&str, Value)> = cols.into_iter().filter(|(c, _)| !skip.contains(c)).collect();
+                let rest: Vec<(&str, Value)> = cols
+                    .into_iter()
+                    .filter(|(c, _)| !skip.contains(c))
+                    .collect();
                 update_row(db, spec, &other_id, &rest).await?;
-                return Ok(Upsert::Done { id: other_id, absorbed: Some(id.into()) });
+                return Ok(Upsert::Done {
+                    id: other_id,
+                    absorbed: Some(id.into()),
+                });
             }
         }
     }
 
     if !spec.insert {
         return if update_row(db, spec, id, &cols).await? {
-            Ok(Upsert::Done { id: id.into(), absorbed: None })
+            Ok(Upsert::Done {
+                id: id.into(),
+                absorbed: None,
+            })
         } else {
             Ok(Upsert::Skip)
         };
@@ -607,8 +846,15 @@ async fn upsert(
         values.push(v.clone());
     }
     let placeholders = vec!["?"; names.len()].join(", ");
-    let set: Vec<String> = cols.iter().map(|(c, _)| format!("{c} = excluded.{c}")).collect();
-    let on_conflict = if set.is_empty() { "DO NOTHING".to_string() } else { format!("DO UPDATE SET {}", set.join(", ")) };
+    let set: Vec<String> = cols
+        .iter()
+        .map(|(c, _)| format!("{c} = excluded.{c}"))
+        .collect();
+    let on_conflict = if set.is_empty() {
+        "DO NOTHING".to_string()
+    } else {
+        format!("DO UPDATE SET {}", set.join(", "))
+    };
     let sql = format!(
         "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT({}) {}",
         spec.table,
@@ -618,18 +864,34 @@ async fn upsert(
         on_conflict
     );
     exec(db, sql, &values).await?;
-    Ok(Upsert::Done { id: id.into(), absorbed: None })
+    Ok(Upsert::Done {
+        id: id.into(),
+        absorbed: None,
+    })
 }
 
-async fn update_row(db: &Pool<Sqlite>, spec: &TableSpec, id: &str, cols: &[(&str, Value)]) -> CmdResult<bool> {
+async fn update_row(
+    db: &Pool<Sqlite>,
+    spec: &TableSpec,
+    id: &str,
+    cols: &[(&str, Value)],
+) -> CmdResult<bool> {
     if cols.is_empty() {
         let sql = format!("SELECT 1 FROM {} WHERE {} = ?", spec.table, spec.pk);
-        let exists: Option<(i64,)> =
-            sqlx::query_as(AssertSqlSafe(sql)).bind(id).fetch_optional(db).await.map_err(AppError::db)?;
+        let exists: Option<(i64,)> = sqlx::query_as(AssertSqlSafe(sql))
+            .bind(id)
+            .fetch_optional(db)
+            .await
+            .map_err(AppError::db)?;
         return Ok(exists.is_some());
     }
     let set: Vec<String> = cols.iter().map(|(c, _)| format!("{c} = ?")).collect();
-    let sql = format!("UPDATE {} SET {} WHERE {} = ?", spec.table, set.join(", "), spec.pk);
+    let sql = format!(
+        "UPDATE {} SET {} WHERE {} = ?",
+        spec.table,
+        set.join(", "),
+        spec.pk
+    );
     let mut values: Vec<Value> = cols.iter().map(|(_, v)| v.clone()).collect();
     values.push(Value::String(id.into()));
     Ok(exec(db, sql, &values).await? > 0)
@@ -642,13 +904,25 @@ pub fn is_fk_error(e: &AppError) -> bool {
 
 async fn row_exists(db: &Pool<Sqlite>, table: &str, id: &str) -> CmdResult<bool> {
     let sql = format!("SELECT 1 FROM {table} WHERE id = ? LIMIT 1");
-    let row: Option<(i64,)> =
-        sqlx::query_as(AssertSqlSafe(sql)).bind(id).fetch_optional(db).await.map_err(AppError::db)?;
+    let row: Option<(i64,)> = sqlx::query_as(AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::db)?;
     Ok(row.is_some())
 }
 
-async fn drop_missing_ref(db: &Pool<Sqlite>, payload: &mut Map<String, Value>, key: &str, table: &str) -> CmdResult<()> {
-    let Some(id) = payload.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+async fn drop_missing_ref(
+    db: &Pool<Sqlite>,
+    payload: &mut Map<String, Value>,
+    key: &str,
+    table: &str,
+) -> CmdResult<()> {
+    let Some(id) = payload
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    else {
         return Ok(());
     };
     if !row_exists(db, table, id).await? {
@@ -658,7 +932,11 @@ async fn drop_missing_ref(db: &Pool<Sqlite>, payload: &mut Map<String, Value>, k
 }
 
 /// Clear or reject FK fields whose parent is not on this device yet.
-async fn sanitize_payload(db: &Pool<Sqlite>, spec: &TableSpec, payload: &mut Map<String, Value>) -> CmdResult<bool> {
+async fn sanitize_payload(
+    db: &Pool<Sqlite>,
+    spec: &TableSpec,
+    payload: &mut Map<String, Value>,
+) -> CmdResult<bool> {
     match spec.entity {
         "profile" => drop_missing_ref(db, payload, "workspace_id", "workspaces").await?,
         "ssh_connection" => {
@@ -667,7 +945,11 @@ async fn sanitize_payload(db: &Pool<Sqlite>, spec: &TableSpec, payload: &mut Map
         }
         "note_folder" => drop_missing_ref(db, payload, "parent_id", "note_folders").await?,
         "workspace_column" => {
-            let Some(wid) = payload.get("workspace_id").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+            let Some(wid) = payload
+                .get("workspace_id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            else {
                 return Ok(false);
             };
             if !row_exists(db, "workspaces", wid).await? {
@@ -687,10 +969,18 @@ fn link_child_table(link: &LinkSpec) -> Option<&'static str> {
 }
 
 fn apply_order(op: &Op) -> (u8, usize, u8, Hlc) {
-    let idx = SPECS.iter().position(|s| s.entity == op.entity_type).unwrap_or(usize::MAX);
+    let idx = SPECS
+        .iter()
+        .position(|s| s.entity == op.entity_type)
+        .unwrap_or(usize::MAX);
     let n = SPECS.len();
     if op.deleted {
-        (1, n.saturating_sub(idx.saturating_add(1)), 0, op.hlc.clone())
+        (
+            1,
+            n.saturating_sub(idx.saturating_add(1)),
+            0,
+            op.hlc.clone(),
+        )
     } else {
         let depth = match op.payload.get("parent_id") {
             Some(Value::String(s)) if op.entity_type == "note_folder" && !s.is_empty() => 1,
@@ -700,12 +990,22 @@ fn apply_order(op: &Op) -> (u8, usize, u8, Hlc) {
     }
 }
 
-async fn apply_links(db: &Pool<Sqlite>, spec: &TableSpec, id: &str, payload: &Map<String, Value>) -> CmdResult<()> {
+async fn apply_links(
+    db: &Pool<Sqlite>,
+    spec: &TableSpec,
+    id: &str,
+    payload: &Map<String, Value>,
+) -> CmdResult<()> {
     for link in spec.links {
-        let Some(ids) = payload.get(link.key).and_then(Value::as_array) else { continue };
+        let Some(ids) = payload.get(link.key).and_then(Value::as_array) else {
+            continue;
+        };
         let del = format!("DELETE FROM {} WHERE {} = ?", link.table, link.parent_col);
         exec(db, del, &[Value::String(id.into())]).await?;
-        let ins = format!("INSERT OR IGNORE INTO {} ({}, {}) VALUES (?, ?)", link.table, link.parent_col, link.child_col);
+        let ins = format!(
+            "INSERT OR IGNORE INTO {} ({}, {}) VALUES (?, ?)",
+            link.table, link.parent_col, link.child_col
+        );
         let child_table = link_child_table(link);
         for child in ids.iter().filter_map(Value::as_str).filter(|c| valid_id(c)) {
             if let Some(table) = child_table {
@@ -713,7 +1013,12 @@ async fn apply_links(db: &Pool<Sqlite>, spec: &TableSpec, id: &str, payload: &Ma
                     continue;
                 }
             }
-            exec(db, ins.clone(), &[Value::String(id.into()), Value::String(child.into())]).await?;
+            exec(
+                db,
+                ins.clone(),
+                &[Value::String(id.into()), Value::String(child.into())],
+            )
+            .await?;
         }
     }
     Ok(())
@@ -736,7 +1041,12 @@ async fn delete_row(app: &AppHandle, spec: &TableSpec, id: &str) -> CmdResult<bo
         // Mobile holds only the profile catalog row; nothing else to clean up.
         #[cfg(mobile)]
         Delete::Profile => {
-            exec(db, format!("DELETE FROM {} WHERE {} = ?", spec.table, spec.pk), &[Value::String(id.into())]).await?;
+            exec(
+                db,
+                format!("DELETE FROM {} WHERE {} = ?", spec.table, spec.pk),
+                &[Value::String(id.into())],
+            )
+            .await?;
             Ok(true)
         }
         Delete::Plain(extra) => {
@@ -745,9 +1055,19 @@ async fn delete_row(app: &AppHandle, spec: &TableSpec, id: &str) -> CmdResult<bo
                 exec(db, sql.to_string(), &id_arg).await?;
             }
             for link in spec.links {
-                exec(db, format!("DELETE FROM {} WHERE {} = ?", link.table, link.parent_col), &id_arg).await?;
+                exec(
+                    db,
+                    format!("DELETE FROM {} WHERE {} = ?", link.table, link.parent_col),
+                    &id_arg,
+                )
+                .await?;
             }
-            exec(db, format!("DELETE FROM {} WHERE {} = ?", spec.table, spec.pk), &id_arg).await?;
+            exec(
+                db,
+                format!("DELETE FROM {} WHERE {} = ?", spec.table, spec.pk),
+                &id_arg,
+            )
+            .await?;
             Ok(true)
         }
     }
@@ -761,7 +1081,11 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
 
     let mut pending: Vec<&Op> = ops
         .iter()
-        .filter(|op| in_scope(&op.entity_type, scope) && spec_for(&op.entity_type).is_some() && valid_id(&op.entity_id))
+        .filter(|op| {
+            in_scope(&op.entity_type, scope)
+                && spec_for(&op.entity_type).is_some()
+                && valid_id(&op.entity_id)
+        })
         .collect();
     pending.sort_by_key(|op| apply_order(op));
 
@@ -770,10 +1094,20 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
         let spec = spec_for(&op.entity_type).expect("filtered");
         let id = op.entity_id.as_str();
         let prev = load_row_state(db, spec.entity, id).await?;
-        if prev.as_ref().and_then(|s| s.head_hlc.as_ref()).map(|h| *h >= op.hlc).unwrap_or(false) {
+        if prev
+            .as_ref()
+            .and_then(|s| s.head_hlc.as_ref())
+            .map(|h| *h >= op.hlc)
+            .unwrap_or(false)
+        {
             continue;
         }
-        let mut st = RowSyncState { entity: spec.entity.into(), id: id.into(), head_hlc: Some(op.hlc.clone()), ..Default::default() };
+        let mut st = RowSyncState {
+            entity: spec.entity.into(),
+            id: id.into(),
+            head_hlc: Some(op.hlc.clone()),
+            ..Default::default()
+        };
 
         if op.deleted {
             if matches!(spec.delete, Delete::Ignore) {
@@ -815,7 +1149,10 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
         };
         match applied {
             Upsert::Skip => continue,
-            Upsert::Done { id: applied_id, absorbed } => {
+            Upsert::Done {
+                id: applied_id,
+                absorbed,
+            } => {
                 apply_links(db, spec, &applied_id, &payload).await?;
                 st.id = applied_id.clone();
                 // Hash what the table now holds, so the next collect sees no change.
@@ -856,6 +1193,9 @@ pub async fn finish_apply(app: &AppHandle, outcome: &ApplyOutcome) {
         crate::commands::notes::reapply_quick_capture_shortcut(app).await;
     }
     if !outcome.changed.is_empty() {
-        let _ = app.emit(EVENT_CHANGED, outcome.changed.iter().cloned().collect::<Vec<_>>());
+        let _ = app.emit(
+            EVENT_CHANGED,
+            outcome.changed.iter().cloned().collect::<Vec<_>>(),
+        );
     }
 }

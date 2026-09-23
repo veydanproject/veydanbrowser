@@ -17,7 +17,11 @@ use sha2::Sha256;
 use url::Url;
 
 /// RFC 3986 unreserved set as S3 expects: everything except A-Z a-z 0-9 - _ . ~
-const S3_ENCODE: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
+const S3_ENCODE: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
 
 #[derive(Clone, Debug)]
 pub struct S3Config {
@@ -51,13 +55,21 @@ fn hmac(key: &[u8], data: &[u8]) -> Vec<u8> {
 
 impl S3Storage {
     pub fn new(cfg: S3Config) -> Result<Self> {
-        let mut base = Url::parse(cfg.endpoint.trim_end_matches('/')).map_err(|e| SyncError::Storage(e.to_string()))?;
+        let mut base = Url::parse(cfg.endpoint.trim_end_matches('/'))
+            .map_err(|e| SyncError::Storage(e.to_string()))?;
         if !cfg.path_style {
-            let host = base.host_str().ok_or_else(|| SyncError::Storage("endpoint has no host".into()))?;
+            let host = base
+                .host_str()
+                .ok_or_else(|| SyncError::Storage("endpoint has no host".into()))?;
             let vhost = format!("{}.{}", cfg.bucket, host);
-            base.set_host(Some(&vhost)).map_err(|e| SyncError::Storage(e.to_string()))?;
+            base.set_host(Some(&vhost))
+                .map_err(|e| SyncError::Storage(e.to_string()))?;
         }
-        Ok(Self { cfg, client: http_client()?, base })
+        Ok(Self {
+            cfg,
+            client: http_client()?,
+            base,
+        })
     }
 
     /// Prefix + key. An empty key is the prefix alone, so list can strip `prefix/` once.
@@ -78,7 +90,11 @@ impl S3Storage {
         let encoded: Vec<String> = key.split('/').filter(|s| !s.is_empty()).map(enc).collect();
         let tail = encoded.join("/");
         if self.cfg.path_style {
-            if tail.is_empty() { format!("/{}", self.cfg.bucket) } else { format!("/{}/{}", self.cfg.bucket, tail) }
+            if tail.is_empty() {
+                format!("/{}", self.cfg.bucket)
+            } else {
+                format!("/{}/{}", self.cfg.bucket, tail)
+            }
         } else if tail.is_empty() {
             "/".to_string()
         } else {
@@ -94,7 +110,13 @@ impl S3Storage {
         }
     }
 
-    async fn request(&self, method: Method, path: &str, query: &[(String, String)], body: Vec<u8>) -> Result<reqwest::Response> {
+    async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(String, String)],
+        body: Vec<u8>,
+    ) -> Result<reqwest::Response> {
         self.request_with(method, path, query, body, &[]).await
     }
 
@@ -109,7 +131,10 @@ impl S3Storage {
     ) -> Result<reqwest::Response> {
         let build = || self.signed(method.clone(), path, query, body.clone(), extra);
         let resp = send_retry(build).await?;
-        if !matches!(resp.status(), StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE) {
+        if !matches!(
+            resp.status(),
+            StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+        ) {
             return Ok(resp);
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -133,17 +158,30 @@ impl S3Storage {
 
         let mut q: Vec<(String, String)> = query.iter().map(|(k, v)| (enc(k), enc(v))).collect();
         q.sort();
-        let canonical_query = q.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&");
+        let canonical_query = q
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("&");
 
-        let canonical_headers = format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
+        let canonical_headers =
+            format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
         let signed_headers = "host;x-amz-content-sha256;x-amz-date";
-        let canonical_request =
-            format!("{}\n{path}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}", method.as_str());
+        let canonical_request = format!(
+            "{}\n{path}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}",
+            method.as_str()
+        );
 
         let scope = format!("{date}/{}/s3/aws4_request", self.cfg.region);
-        let string_to_sign = format!("AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}", sha256_hex(canonical_request.as_bytes()));
+        let string_to_sign = format!(
+            "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
+            sha256_hex(canonical_request.as_bytes())
+        );
 
-        let k_date = hmac(format!("AWS4{}", self.cfg.secret_key).as_bytes(), date.as_bytes());
+        let k_date = hmac(
+            format!("AWS4{}", self.cfg.secret_key).as_bytes(),
+            date.as_bytes(),
+        );
         let k_region = hmac(&k_date, self.cfg.region.as_bytes());
         let k_service = hmac(&k_region, b"s3");
         let k_signing = hmac(&k_service, b"aws4_request");
@@ -156,7 +194,11 @@ impl S3Storage {
 
         let mut url = self.base.clone();
         url.set_path(path);
-        url.set_query(if canonical_query.is_empty() { None } else { Some(&canonical_query) });
+        url.set_query(if canonical_query.is_empty() {
+            None
+        } else {
+            Some(&canonical_query)
+        });
 
         let mut req = self
             .client
@@ -185,10 +227,18 @@ fn parse_list(xml: &[u8]) -> Result<(Vec<String>, Option<String>)> {
     let mut truncated = false;
     let mut current = String::new();
     loop {
-        match reader.read_event().map_err(|e| SyncError::Format(e.to_string()))? {
-            Event::Start(e) => current = String::from_utf8_lossy(e.local_name().as_ref()).to_string(),
+        match reader
+            .read_event()
+            .map_err(|e| SyncError::Format(e.to_string()))?
+        {
+            Event::Start(e) => {
+                current = String::from_utf8_lossy(e.local_name().as_ref()).to_string()
+            }
             Event::Text(t) => {
-                let text = t.xml_content().map_err(|e| SyncError::Format(e.to_string()))?.to_string();
+                let text = t
+                    .xml_content()
+                    .map_err(|e| SyncError::Format(e.to_string()))?
+                    .to_string();
                 match current.as_str() {
                     "Key" => keys.push(text),
                     "NextContinuationToken" => token = Some(text),
@@ -212,18 +262,29 @@ impl Storage for S3Storage {
         let mut out = Vec::new();
         let mut token: Option<String> = None;
         loop {
-            let mut query = vec![("list-type".to_string(), "2".to_string()), ("prefix".to_string(), full_prefix.clone())];
+            let mut query = vec![
+                ("list-type".to_string(), "2".to_string()),
+                ("prefix".to_string(), full_prefix.clone()),
+            ];
             if let Some(t) = &token {
                 query.push(("continuation-token".to_string(), t.clone()));
             }
-            let resp = self.request(Method::GET, &self.object_path(""), &query, Vec::new()).await?;
+            let resp = self
+                .request(Method::GET, &self.object_path(""), &query, Vec::new())
+                .await?;
             if !resp.status().is_success() {
                 return Err(Self::fail(resp, "list").await);
             }
             let body = resp.bytes().await?;
             let (keys, next) = parse_list(&body)?;
             for k in keys {
-                let rel = if strip.is_empty() { k } else { k.strip_prefix(&format!("{strip}/")).unwrap_or(&k).to_string() };
+                let rel = if strip.is_empty() {
+                    k
+                } else {
+                    k.strip_prefix(&format!("{strip}/"))
+                        .unwrap_or(&k)
+                        .to_string()
+                };
                 if !is_noise_key(&rel) {
                     out.push(rel);
                 }
@@ -237,7 +298,14 @@ impl Storage for S3Storage {
     }
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let resp = self.request(Method::GET, &self.object_path(&self.full_key(key)), &[], Vec::new()).await?;
+        let resp = self
+            .request(
+                Method::GET,
+                &self.object_path(&self.full_key(key)),
+                &[],
+                Vec::new(),
+            )
+            .await?;
         match resp.status() {
             StatusCode::NOT_FOUND => Ok(None),
             s if s.is_success() => Ok(Some(resp.bytes().await?.to_vec())),
@@ -246,12 +314,30 @@ impl Storage for S3Storage {
     }
 
     async fn put(&self, key: &str, data: &[u8]) -> Result<()> {
-        let resp = self.request(Method::PUT, &self.object_path(&self.full_key(key)), &[], data.to_vec()).await?;
-        if resp.status().is_success() { Ok(()) } else { Err(Self::fail(resp, "put").await) }
+        let resp = self
+            .request(
+                Method::PUT,
+                &self.object_path(&self.full_key(key)),
+                &[],
+                data.to_vec(),
+            )
+            .await?;
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(Self::fail(resp, "put").await)
+        }
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
-        let resp = self.request(Method::DELETE, &self.object_path(&self.full_key(key)), &[], Vec::new()).await?;
+        let resp = self
+            .request(
+                Method::DELETE,
+                &self.object_path(&self.full_key(key)),
+                &[],
+                Vec::new(),
+            )
+            .await?;
         match resp.status() {
             StatusCode::NOT_FOUND => Ok(()),
             s if s.is_success() => Ok(()),
@@ -260,7 +346,14 @@ impl Storage for S3Storage {
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
-        let resp = self.request(Method::HEAD, &self.object_path(&self.full_key(key)), &[], Vec::new()).await?;
+        let resp = self
+            .request(
+                Method::HEAD,
+                &self.object_path(&self.full_key(key)),
+                &[],
+                Vec::new(),
+            )
+            .await?;
         match resp.status() {
             StatusCode::NOT_FOUND => Ok(false),
             s if s.is_success() => Ok(true),
@@ -271,7 +364,15 @@ impl Storage for S3Storage {
     /// Conditional PUT; servers without `If-None-Match` fall back to HEAD + PUT.
     async fn put_if_absent(&self, key: &str, data: &[u8]) -> Result<bool> {
         let path = self.object_path(&self.full_key(key));
-        let resp = self.request_with(Method::PUT, &path, &[], data.to_vec(), &[("If-None-Match", "*")]).await?;
+        let resp = self
+            .request_with(
+                Method::PUT,
+                &path,
+                &[],
+                data.to_vec(),
+                &[("If-None-Match", "*")],
+            )
+            .await?;
         match resp.status() {
             s if s.is_success() => Ok(true),
             StatusCode::PRECONDITION_FAILED => Ok(false),

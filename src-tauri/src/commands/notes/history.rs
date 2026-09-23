@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-use crate::error::{AppError, CmdResult};
-use crate::AppState;
-use std::collections::HashMap;
 use super::files::*;
+use super::index::*;
 use super::merge::{merge3, MergeResult};
 use super::models::*;
 use super::tags::*;
-use super::index::*;
-use serde::{Deserialize, Serialize};
+use crate::error::{AppError, CmdResult};
+use crate::AppState;
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub(crate) fn compress_content(content: &str) -> Result<Vec<u8>, AppError> {
@@ -110,13 +110,12 @@ pub(crate) async fn history_snapshot_by(
         None => None,
     };
 
-    let (next_revision,): (i64,) = sqlx::query_as(
-        "SELECT COALESCE(MAX(revision), 0) + 1 FROM note_history WHERE note_id = ?",
-    )
-    .bind(note_id)
-    .fetch_one(db)
-    .await
-    .map_err(AppError::db)?;
+    let (next_revision,): (i64,) =
+        sqlx::query_as("SELECT COALESCE(MAX(revision), 0) + 1 FROM note_history WHERE note_id = ?")
+            .bind(note_id)
+            .fetch_one(db)
+            .await
+            .map_err(AppError::db)?;
 
     sqlx::query(
         "INSERT INTO note_history
@@ -143,7 +142,10 @@ pub(crate) async fn history_snapshot_by(
 }
 
 /// Keep last 100 entries; delete entries older than 90 days beyond the first 50.
-pub(crate) async fn history_cleanup(note_id: &str, db: &sqlx::Pool<sqlx::Sqlite>) -> Result<(), AppError> {
+pub(crate) async fn history_cleanup(
+    note_id: &str,
+    db: &sqlx::Pool<sqlx::Sqlite>,
+) -> Result<(), AppError> {
     let cutoff = (Utc::now() - chrono::Duration::days(90)).to_rfc3339();
     // Nested SELECT so SQLite allows UPDATE/DELETE against the same table.
     sqlx::query(
@@ -230,12 +232,11 @@ pub(crate) async fn history_content_by_id(
     history_id: &str,
     db: &sqlx::Pool<sqlx::Sqlite>,
 ) -> Result<String, AppError> {
-    let row: Option<(Vec<u8>,)> =
-        sqlx::query_as("SELECT content FROM note_history WHERE id = ?")
-            .bind(history_id)
-            .fetch_optional(db)
-            .await
-            .map_err(AppError::db)?;
+    let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT content FROM note_history WHERE id = ?")
+        .bind(history_id)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::db)?;
 
     let (blob,) = row.ok_or_else(|| AppError::not_found(format!("History {history_id}")))?;
     decompress_content(&blob)
@@ -290,21 +291,34 @@ pub async fn note_history_list(
 
     let entries = rows
         .into_iter()
-        .map(|(id, note_id, parent_id, revision, version_type, title, content_hash, author, device, created_at)| {
-            NoteHistoryEntry {
+        .map(
+            |(
                 id,
                 note_id,
                 parent_id,
                 revision,
                 version_type,
                 title,
-                content: None,
                 content_hash,
                 author,
                 device,
                 created_at,
-            }
-        })
+            )| {
+                NoteHistoryEntry {
+                    id,
+                    note_id,
+                    parent_id,
+                    revision,
+                    version_type,
+                    title,
+                    content: None,
+                    content_hash,
+                    author,
+                    device,
+                    created_at,
+                }
+            },
+        )
         .collect();
 
     Ok(entries)
@@ -325,8 +339,19 @@ pub async fn note_history_get(
         .await
         .map_err(AppError::db)?;
 
-    let (id, note_id, parent_id, revision, version_type, title, blob, content_hash, author, device, created_at) =
-        row.ok_or_else(|| AppError::not_found(format!("History {history_id}")))?;
+    let (
+        id,
+        note_id,
+        parent_id,
+        revision,
+        version_type,
+        title,
+        blob,
+        content_hash,
+        author,
+        device,
+        created_at,
+    ) = row.ok_or_else(|| AppError::not_found(format!("History {history_id}")))?;
 
     let content = decompress_content(&blob)?;
 
@@ -390,12 +415,11 @@ pub async fn note_history_restore(
     let history_content = history_content_by_id(&history_id, &state.db).await?;
 
     // Get history title
-    let (hist_title,): (String,) =
-        sqlx::query_as("SELECT title FROM note_history WHERE id = ?")
-            .bind(&history_id)
-            .fetch_one(&state.db)
-            .await
-            .map_err(AppError::db)?;
+    let (hist_title,): (String,) = sqlx::query_as("SELECT title FROM note_history WHERE id = ?")
+        .bind(&history_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(AppError::db)?;
 
     // Get current note
     let mut row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
@@ -413,7 +437,9 @@ pub async fn note_history_restore(
     };
 
     // Snapshot current state before restoring (type = "restore", parent = last history id)
-    let parent_id = history_last_meta(&note_id, &state.db).await?.map(|(pid, _, _)| pid);
+    let parent_id = history_last_meta(&note_id, &state.db)
+        .await?
+        .map(|(pid, _, _)| pid);
     let _ = history_snapshot(
         &note_id,
         &row.title,
@@ -421,7 +447,8 @@ pub async fn note_history_restore(
         "restore",
         parent_id,
         &state.db,
-    ).await;
+    )
+    .await;
 
     // Apply restored content
     let now = Utc::now().to_rfc3339();
@@ -524,7 +551,9 @@ pub async fn note_history_merge(
 
     // Ancestor = parent of history entry (or empty string if none)
     let ancestor = if let Some(pid) = parent_id {
-        history_content_by_id(&pid, &state.db).await.unwrap_or_default()
+        history_content_by_id(&pid, &state.db)
+            .await
+            .unwrap_or_default()
     } else {
         String::new()
     };

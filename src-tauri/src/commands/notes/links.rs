@@ -57,7 +57,9 @@ pub(crate) async fn reindex_links(note_id: &str, content: &str, db: &Db) -> Resu
         .await
         .map_err(AppError::db)?;
     for target in extract_targets(content) {
-        let Some(to_id) = resolve_target(&target, db).await else { continue };
+        let Some(to_id) = resolve_target(&target, db).await else {
+            continue;
+        };
         if to_id == note_id {
             continue;
         }
@@ -103,7 +105,12 @@ pub(crate) fn rewrite_title_links(body: &str, old_title: &str, new_title: &str) 
 }
 
 /// After a title change: update files of all notes linking to `note_id`.
-pub(crate) async fn propagate_rename(note_id: &str, old_title: &str, new_title: &str, state: &AppState) -> Result<(), AppError> {
+pub(crate) async fn propagate_rename(
+    note_id: &str,
+    old_title: &str,
+    new_title: &str,
+    state: &AppState,
+) -> Result<(), AppError> {
     if old_title.trim().eq_ignore_ascii_case(new_title.trim()) {
         return Ok(());
     }
@@ -117,7 +124,9 @@ pub(crate) async fn propagate_rename(note_id: &str, old_title: &str, new_title: 
 
     for row in sources {
         let path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
-        let Ok((_, tags, body)) = read_note_file(&path) else { continue };
+        let Ok((_, tags, body)) = read_note_file(&path) else {
+            continue;
+        };
         let rewritten = rewrite_title_links(&body, old_title, new_title);
         if rewritten == body {
             continue;
@@ -131,7 +140,15 @@ pub(crate) async fn propagate_rename(note_id: &str, old_title: &str, new_title: 
             .execute(&state.db)
             .await
             .map_err(AppError::db)?;
-        let fts_rowid = super::index::fts_upsert(&row.id, &row.title, &rewritten, &tags, row.fts_rowid, &state.db).await?;
+        let fts_rowid = super::index::fts_upsert(
+            &row.id,
+            &row.title,
+            &rewritten,
+            &tags,
+            row.fts_rowid,
+            &state.db,
+        )
+        .await?;
         sqlx::query("UPDATE notes SET fts_rowid = ? WHERE id = ?")
             .bind(fts_rowid)
             .bind(&row.id)
@@ -142,7 +159,10 @@ pub(crate) async fn propagate_rename(note_id: &str, old_title: &str, new_title: 
     Ok(())
 }
 
-async fn rows_to_items(rows: Vec<NoteRow>, state: &AppState) -> Result<Vec<NoteListItem>, AppError> {
+async fn rows_to_items(
+    rows: Vec<NoteRow>,
+    state: &AppState,
+) -> Result<Vec<NoteListItem>, AppError> {
     let tags = fetch_all_note_tags_map(&state.db).await?;
     let folders = fetch_all_note_folder_ids_map(&state.db).await?;
     Ok(rows
@@ -190,13 +210,19 @@ pub async fn note_links(id: String, state: tauri::State<'_, AppState>) -> CmdRes
 
 /// Id of the note a `@@target@@` points to, if it exists.
 #[tauri::command]
-pub async fn note_resolve_link(target: String, state: tauri::State<'_, AppState>) -> CmdResult<Option<String>> {
+pub async fn note_resolve_link(
+    target: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Option<String>> {
     Ok(resolve_target(target.trim(), &state.db).await)
 }
 
 /// Notes that link to this note.
 #[tauri::command]
-pub async fn note_backlinks(id: String, state: tauri::State<'_, AppState>) -> CmdResult<Vec<NoteListItem>> {
+pub async fn note_backlinks(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<NoteListItem>> {
     let rows = sqlx::query_as::<_, NoteRow>(
         "SELECT n.* FROM notes n JOIN note_links l ON l.from_id = n.id
          WHERE l.to_id = ? AND n.deleted = 0 ORDER BY n.updated_at DESC",
@@ -210,12 +236,16 @@ pub async fn note_backlinks(id: String, state: tauri::State<'_, AppState>) -> Cm
 
 /// Notes sharing a domain / profile / workspace binding, most specific first.
 #[tauri::command]
-pub async fn note_related(id: String, state: tauri::State<'_, AppState>) -> CmdResult<Vec<NoteListItem>> {
-    let Some(bindings_json) = sqlx::query_scalar::<_, String>("SELECT bindings FROM notes WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(AppError::db)?
+pub async fn note_related(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<NoteListItem>> {
+    let Some(bindings_json) =
+        sqlx::query_scalar::<_, String>("SELECT bindings FROM notes WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::db)?
     else {
         return Ok(vec![]);
     };
@@ -265,6 +295,9 @@ mod tests {
     #[test]
     fn rewrites_only_matching_links() {
         let body = "@@Old@@ @@old|alias@@ @@Other@@ @@";
-        assert_eq!(rewrite_title_links(body, "Old", "New"), "@@New@@ @@New|alias@@ @@Other@@ @@");
+        assert_eq!(
+            rewrite_title_links(body, "Old", "New"),
+            "@@New@@ @@New|alias@@ @@Other@@ @@"
+        );
     }
 }

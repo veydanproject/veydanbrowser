@@ -55,22 +55,43 @@ pub fn seal_chunk(keys: &Keys, vault_id: &str, id: &str, plain: &[u8]) -> Result
 }
 
 /// Decrypt and verify size and content id; a moved or altered object fails here.
-pub fn open_chunk(keys: &Keys, vault_id: &str, id: &str, expected_size: u64, data: &[u8]) -> Result<Vec<u8>> {
+pub fn open_chunk(
+    keys: &Keys,
+    vault_id: &str,
+    id: &str,
+    expected_size: u64,
+    data: &[u8],
+) -> Result<Vec<u8>> {
     let plain = envelope::open(&keys.lf_chunk, vault_id, Kind::LfChunk, id, data)?;
     if plain.len() as u64 != expected_size {
-        return Err(SyncError::Integrity(format!("chunk {id}: size {} != {expected_size}", plain.len())));
+        return Err(SyncError::Integrity(format!(
+            "chunk {id}: size {} != {expected_size}",
+            plain.len()
+        )));
     }
     if chunk_id(keys, &plain) != id {
-        return Err(SyncError::Integrity(format!("chunk {id}: content id mismatch")));
+        return Err(SyncError::Integrity(format!(
+            "chunk {id}: content id mismatch"
+        )));
     }
     Ok(plain)
 }
 
 /// Canonical bytes, their id and the ciphertext ready to store.
-pub fn seal_manifest(keys: &Keys, vault_id: &str, manifest: &ManifestV2) -> Result<(String, Vec<u8>)> {
+pub fn seal_manifest(
+    keys: &Keys,
+    vault_id: &str,
+    manifest: &ManifestV2,
+) -> Result<(String, Vec<u8>)> {
     let canonical = manifest.canonical_bytes()?;
     let id = manifest_id(keys, &canonical);
-    let sealed = envelope::seal(&keys.lf_manifest, vault_id, Kind::LfManifest, &id, &canonical)?;
+    let sealed = envelope::seal(
+        &keys.lf_manifest,
+        vault_id,
+        Kind::LfManifest,
+        &id,
+        &canonical,
+    )?;
     Ok((id, sealed))
 }
 
@@ -83,7 +104,9 @@ pub fn open_manifest(keys: &Keys, vault_id: &str, id: &str, data: &[u8]) -> Resu
     let manifest = ManifestV2::parse(&canonical)?;
     let ids: Vec<String> = manifest.chunks.iter().map(|c| c.id.clone()).collect();
     if file_id(keys, &ids) != manifest.file_id {
-        return Err(SyncError::Integrity(format!("manifest {id}: file id mismatch")));
+        return Err(SyncError::Integrity(format!(
+            "manifest {id}: file id mismatch"
+        )));
     }
     Ok(manifest)
 }

@@ -10,7 +10,8 @@
 //! 2FA with TOTP auto-answer) are reused from `commands::ssh`.
 
 use crate::commands::ssh::{
-    confirm_host_key, do_authenticate, establish_transport, ssh_connection_get, SshInputCommand, TerminalHandler,
+    confirm_host_key, do_authenticate, establish_transport, ssh_connection_get, SshInputCommand,
+    TerminalHandler,
 };
 use crate::error::{AppError, CmdResult};
 use crate::models::{format_octal, format_permissions, FileEntry};
@@ -221,19 +222,17 @@ async fn do_connect(
 ) -> anyhow::Result<Arc<SftpSessionState>> {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(std::time::Duration::from_secs(
-            conn.keepalive_sec.max(5) as u64,
+            conn.keepalive_sec.max(5) as u64
         )),
         ..Default::default()
     });
 
     let timeout = std::time::Duration::from_secs(conn.connect_timeout_sec.max(1) as u64);
 
-    let (jump, mut handle, received_fp) = tokio::time::timeout(
-        timeout,
-        establish_transport(conn, proxy, config, &state.db),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("Connection timeout ({}s)", timeout.as_secs()))??;
+    let (jump, mut handle, received_fp) =
+        tokio::time::timeout(timeout, establish_transport(conn, proxy, config, &state.db))
+            .await
+            .map_err(|_| anyhow::anyhow!("Connection timeout ({}s)", timeout.as_secs()))??;
 
     // Keyboard-interactive prompts are relayed to the frontend under a
     // synthetic session id; answers arrive through `sftp_respond_prompt`.
@@ -248,7 +247,14 @@ async fn do_connect(
         .insert(conn.id.clone(), tx);
     let prompt_session_id = format!("sftp:{}", conn.id);
 
-    confirm_host_key(app, &prompt_session_id, conn, received_fp.as_deref(), &mut rx).await?;
+    confirm_host_key(
+        app,
+        &prompt_session_id,
+        conn,
+        received_fp.as_deref(),
+        &mut rx,
+    )
+    .await?;
     do_authenticate(
         &mut handle,
         app,
@@ -447,7 +453,10 @@ pub async fn sftp_create_file(
         // EXCL rejects an existing file; CREATE|WRITE makes an empty one
         let f = sess
             .sftp
-            .open_with_flags(&path, OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::EXCLUDE)
+            .open_with_flags(
+                &path,
+                OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::EXCLUDE,
+            )
             .await?;
         f.sync_all().await.ok();
         Ok(())
@@ -528,7 +537,11 @@ pub async fn sftp_chmod(
         atime: None,
         mtime: None,
     };
-    let r = sess.sftp.set_metadata(&path, attrs).await.map_err(Into::into);
+    let r = sess
+        .sftp
+        .set_metadata(&path, attrs)
+        .await
+        .map_err(Into::into);
     guard(&app, &state, &sess, r).await
 }
 

@@ -48,7 +48,9 @@ impl Vmk {
     }
 
     pub fn from_base64(s: &str) -> Result<Vmk> {
-        let raw = B64.decode(s).map_err(|e| SyncError::Format(e.to_string()))?;
+        let raw = B64
+            .decode(s)
+            .map_err(|e| SyncError::Format(e.to_string()))?;
         let arr: [u8; 32] = raw
             .try_into()
             .map_err(|_| SyncError::Format("master key must be 32 bytes".into()))?;
@@ -101,10 +103,15 @@ fn derive_kek(passphrase: &str, kdf: &KdfParams) -> Result<[u8; 32]> {
     if kdf.algo != "argon2id" {
         return Err(SyncError::Format(format!("unsupported kdf {}", kdf.algo)));
     }
-    if kdf.m_cost_kib > ARGON_MAX_M_COST_KIB || kdf.t_cost > ARGON_MAX_T_COST || kdf.p_cost > ARGON_MAX_P_COST {
+    if kdf.m_cost_kib > ARGON_MAX_M_COST_KIB
+        || kdf.t_cost > ARGON_MAX_T_COST
+        || kdf.p_cost > ARGON_MAX_P_COST
+    {
         return Err(SyncError::Format("kdf parameters out of range".into()));
     }
-    let salt = B64.decode(&kdf.salt).map_err(|e| SyncError::Format(e.to_string()))?;
+    let salt = B64
+        .decode(&kdf.salt)
+        .map_err(|e| SyncError::Format(e.to_string()))?;
     let params = Params::new(kdf.m_cost_kib, kdf.t_cost, kdf.p_cost, Some(32))
         .map_err(|e| SyncError::Crypto(e.to_string()))?;
     let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
@@ -121,23 +128,44 @@ fn wrap_vmk(vmk: &Vmk, kek: &[u8; 32], vault_id: &str) -> Result<WrappedKey> {
     let nonce = XNonce::from_slice(&nonce_bytes);
     let aad = format!("{MANIFEST_AAD}|{vault_id}");
     let ct = cipher
-        .encrypt(nonce, Payload { msg: &vmk.0, aad: aad.as_bytes() })
+        .encrypt(
+            nonce,
+            Payload {
+                msg: &vmk.0,
+                aad: aad.as_bytes(),
+            },
+        )
         .map_err(|_| SyncError::Crypto("wrap failed".into()))?;
-    Ok(WrappedKey { nonce: B64.encode(nonce_bytes), ct: B64.encode(ct) })
+    Ok(WrappedKey {
+        nonce: B64.encode(nonce_bytes),
+        ct: B64.encode(ct),
+    })
 }
 
 fn unwrap_vmk(wrapped: &WrappedKey, kek: &[u8; 32], vault_id: &str) -> Result<Vmk> {
     let cipher = XChaCha20Poly1305::new(kek.into());
-    let nonce_bytes = B64.decode(&wrapped.nonce).map_err(|e| SyncError::Format(e.to_string()))?;
-    let ct = B64.decode(&wrapped.ct).map_err(|e| SyncError::Format(e.to_string()))?;
+    let nonce_bytes = B64
+        .decode(&wrapped.nonce)
+        .map_err(|e| SyncError::Format(e.to_string()))?;
+    let ct = B64
+        .decode(&wrapped.ct)
+        .map_err(|e| SyncError::Format(e.to_string()))?;
     if nonce_bytes.len() != 24 {
         return Err(SyncError::Format("bad nonce length".into()));
     }
     let aad = format!("{MANIFEST_AAD}|{vault_id}");
     let pt = cipher
-        .decrypt(XNonce::from_slice(&nonce_bytes), Payload { msg: &ct, aad: aad.as_bytes() })
+        .decrypt(
+            XNonce::from_slice(&nonce_bytes),
+            Payload {
+                msg: &ct,
+                aad: aad.as_bytes(),
+            },
+        )
         .map_err(|_| SyncError::WrongPassphrase)?;
-    let arr: [u8; 32] = pt.try_into().map_err(|_| SyncError::Format("bad key length".into()))?;
+    let arr: [u8; 32] = pt
+        .try_into()
+        .map_err(|_| SyncError::Format("bad key length".into()))?;
     Ok(Vmk(arr))
 }
 
@@ -155,12 +183,23 @@ impl Manifest {
         let vmk = Vmk(random_bytes(32).try_into().expect("32 bytes"));
         let kek = derive_kek(passphrase, &kdf)?;
         let wrapped_vmk = wrap_vmk(&vmk, &kek, &vault_id)?;
-        Ok((Manifest { version: MANIFEST_VERSION, vault_id, kdf, wrapped_vmk }, vmk))
+        Ok((
+            Manifest {
+                version: MANIFEST_VERSION,
+                vault_id,
+                kdf,
+                wrapped_vmk,
+            },
+            vmk,
+        ))
     }
 
     pub fn unlock(&self, passphrase: &str) -> Result<Vmk> {
         if self.version != MANIFEST_VERSION {
-            return Err(SyncError::Format(format!("unsupported manifest version {}", self.version)));
+            return Err(SyncError::Format(format!(
+                "unsupported manifest version {}",
+                self.version
+            )));
         }
         let kek = derive_kek(passphrase, &self.kdf)?;
         unwrap_vmk(&self.wrapped_vmk, &kek, &self.vault_id)
@@ -188,7 +227,8 @@ impl Keys {
         let hk = Hkdf::<Sha256>::new(Some(vault_id.as_bytes()), &vmk.0);
         let expand = |info: &[u8]| {
             let mut out = [0u8; 32];
-            hk.expand(info, &mut out).expect("32 bytes is a valid HKDF length");
+            hk.expand(info, &mut out)
+                .expect("32 bytes is a valid HKDF length");
             out
         };
         Keys {

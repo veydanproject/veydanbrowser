@@ -5,11 +5,11 @@
 
 use crate::envelope::{self, Kind};
 use crate::keys::{Keys, Manifest, Vmk, MANIFEST_KEY};
-use crate::log::{
-    blob_key, chunk_ident, chunk_key, device_from_key, fold_latest, seq_from_key, snapshot_ident, snapshot_key,
-    Chunk, LocalState, Op, PeerHead, Snapshot,
-};
 use crate::large_files::{LargeFileConfig, LargeFileStore};
+use crate::log::{
+    blob_key, chunk_ident, chunk_key, device_from_key, fold_latest, seq_from_key, snapshot_ident,
+    snapshot_key, Chunk, LocalState, Op, PeerHead, Snapshot,
+};
 use crate::storage::{is_noise_key, Storage};
 use crate::{sha256_hex, Result, SyncError};
 use hmac::{Hmac, KeyInit, Mac};
@@ -24,11 +24,23 @@ pub enum Probe {
     Foreign,
 }
 
+/// One peer seen under `devices/` during a pull.
+#[derive(Debug, Clone, Default)]
+pub struct PullPeer {
+    pub device_id: String,
+    pub head_seq: u64,
+    /// Storage reads attempted for this peer.
+    pub files: u32,
+    pub ops: usize,
+    pub error: Option<String>,
+}
+
 /// Ops from peers plus per-peer failures that did not stop the others.
 #[derive(Debug, Default)]
 pub struct PullResult {
     pub ops: Vec<Op>,
     pub errors: Vec<(String, String)>,
+    pub peers: Vec<PullPeer>,
 }
 
 pub struct Engine {
@@ -49,7 +61,11 @@ fn name_ident(device_id: &str) -> String {
 /// Snapshot (if the chain has a gap) plus every chunk past `head`.
 fn planned_gets(peer: &str, head: &PeerHead, all: &[String]) -> Vec<String> {
     let log_prefix = format!("devices/{peer}/log/");
-    let mut seqs: Vec<u64> = all.iter().filter(|k| k.starts_with(&log_prefix)).filter_map(|k| seq_from_key(k)).collect();
+    let mut seqs: Vec<u64> = all
+        .iter()
+        .filter(|k| k.starts_with(&log_prefix))
+        .filter_map(|k| seq_from_key(k))
+        .collect();
     seqs.sort_unstable();
     let mut keys = Vec::new();
     if seqs.iter().copied().find(|s| *s > head.seq) != Some(head.seq + 1) {
@@ -76,7 +92,11 @@ impl Engine {
     }
 
     /// New vault in an empty storage.
-    pub async fn create(storage: Box<dyn Storage>, passphrase: &str, device_id: &str) -> Result<(Engine, Vmk)> {
+    pub async fn create(
+        storage: Box<dyn Storage>,
+        passphrase: &str,
+        device_id: &str,
+    ) -> Result<(Engine, Vmk)> {
         match Self::probe(storage.as_ref()).await? {
             Probe::Empty => {}
             Probe::Vault(_) => return Err(SyncError::VaultExists),
@@ -89,7 +109,11 @@ impl Engine {
     }
 
     /// Join an existing vault with its passphrase.
-    pub async fn open(storage: Box<dyn Storage>, passphrase: &str, device_id: &str) -> Result<(Engine, Vmk)> {
+    pub async fn open(
+        storage: Box<dyn Storage>,
+        passphrase: &str,
+        device_id: &str,
+    ) -> Result<(Engine, Vmk)> {
         let manifest = match Self::probe(storage.as_ref()).await? {
             Probe::Vault(m) => m,
             Probe::Empty => return Err(SyncError::NoVault),
@@ -101,7 +125,12 @@ impl Engine {
     }
 
     /// Reopen with a stored master key; `vault_id` is what the device joined.
-    pub fn with_key(storage: Box<dyn Storage>, vmk: &Vmk, vault_id: &str, device_id: &str) -> Engine {
+    pub fn with_key(
+        storage: Box<dyn Storage>,
+        vmk: &Vmk,
+        vault_id: &str,
+        device_id: &str,
+    ) -> Engine {
         Engine {
             storage,
             vault_id: vault_id.to_string(),
@@ -121,7 +150,11 @@ impl Engine {
     }
 
     pub async fn change_passphrase(&self, vmk: &Vmk, old: &str, new: &str) -> Result<()> {
-        let bytes = self.storage.get(MANIFEST_KEY).await?.ok_or(SyncError::NoVault)?;
+        let bytes = self
+            .storage
+            .get(MANIFEST_KEY)
+            .await?
+            .ok_or(SyncError::NoVault)?;
         let mut manifest = Manifest::from_json(&bytes)?;
         if manifest.vault_id != self.vault_id {
             return Err(SyncError::VaultMismatch);
@@ -159,20 +192,38 @@ impl Engine {
     }
 
     pub async fn read_device_name(&self, device_id: &str) -> Result<Option<String>> {
-        let Some(bytes) = self.storage.get(&name_key(device_id)).await? else { return Ok(None) };
-        let pt = envelope::open(&self.keys.blob, &self.vault_id, Kind::Blob, &name_ident(device_id), &bytes)?;
-        String::from_utf8(pt).map(Some).map_err(|e| SyncError::Format(e.to_string()))
+        let Some(bytes) = self.storage.get(&name_key(device_id)).await? else {
+            return Ok(None);
+        };
+        let pt = envelope::open(
+            &self.keys.blob,
+            &self.vault_id,
+            Kind::Blob,
+            &name_ident(device_id),
+            &bytes,
+        )?;
+        String::from_utf8(pt)
+            .map(Some)
+            .map_err(|e| SyncError::Format(e.to_string()))
     }
 
     /// Device ids under `devices/`, with the published name when the file is readable.
     pub async fn list_device_cards(&self) -> Result<Vec<(String, String)>> {
         let all = self.storage.list("devices/").await?;
-        let mut ids: Vec<String> = all.iter().filter_map(|k| device_from_key(k)).map(str::to_string).collect();
+        let mut ids: Vec<String> = all
+            .iter()
+            .filter_map(|k| device_from_key(k))
+            .map(str::to_string)
+            .collect();
         ids.sort();
         ids.dedup();
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
-            let name = self.read_device_name(&id).await.unwrap_or(None).unwrap_or_default();
+            let name = self
+                .read_device_name(&id)
+                .await
+                .unwrap_or(None)
+                .unwrap_or_default();
             out.push((id, name));
         }
         Ok(out)
@@ -193,7 +244,11 @@ impl Engine {
             return Ok(());
         }
         let seq = state.own_seq + 1;
-        let chunk = Chunk { prev_hash: state.own_head_hash.clone(), seq, ops };
+        let chunk = Chunk {
+            prev_hash: state.own_head_hash.clone(),
+            seq,
+            ops,
+        };
         let bytes = envelope::seal(
             &self.keys.log,
             &self.vault_id,
@@ -205,9 +260,17 @@ impl Engine {
         let head_hash = if self.storage.put_if_absent(&key, &bytes).await? {
             sha256_hex(&bytes)
         } else {
-            let existing = self.storage.get(&key).await?.ok_or(SyncError::OwnLogCollision(seq))?;
-            let theirs = self.open_chunk(&self.device_id, seq, &existing).map_err(|_| SyncError::OwnLogCollision(seq))?;
-            if theirs.prev_hash != chunk.prev_hash || serde_json::to_vec(&theirs.ops)? != serde_json::to_vec(&chunk.ops)? {
+            let existing = self
+                .storage
+                .get(&key)
+                .await?
+                .ok_or(SyncError::OwnLogCollision(seq))?;
+            let theirs = self
+                .open_chunk(&self.device_id, seq, &existing)
+                .map_err(|_| SyncError::OwnLogCollision(seq))?;
+            if theirs.prev_hash != chunk.prev_hash
+                || serde_json::to_vec(&theirs.ops)? != serde_json::to_vec(&chunk.ops)?
+            {
                 return Err(SyncError::OwnLogCollision(seq));
             }
             sha256_hex(&existing)
@@ -227,14 +290,20 @@ impl Engine {
         }
         let prefix = format!("devices/{}/log/", self.device_id);
         let keys = self.storage.list(&prefix).await?;
-        let mut seqs: Vec<u64> = keys.iter().filter_map(|k| seq_from_key(k)).filter(|s| *s > seq).collect();
+        let mut seqs: Vec<u64> = keys
+            .iter()
+            .filter_map(|k| seq_from_key(k))
+            .filter(|s| *s > seq)
+            .collect();
         seqs.sort_unstable();
         seqs.dedup();
         for s in seqs {
             if s != seq + 1 {
                 break;
             }
-            let Some(bytes) = self.storage.get(&chunk_key(&self.device_id, s)).await? else { break };
+            let Some(bytes) = self.storage.get(&chunk_key(&self.device_id, s)).await? else {
+                break;
+            };
             let chunk = match self.open_chunk(&self.device_id, s, &bytes) {
                 Ok(c) => c,
                 Err(_) => break,
@@ -262,12 +331,21 @@ impl Engine {
     }
 
     pub async fn own_chunk_count(&self) -> Result<usize> {
-        Ok(self.storage.list(&format!("devices/{}/log/", self.device_id)).await?.len())
+        Ok(self
+            .storage
+            .list(&format!("devices/{}/log/", self.device_id))
+            .await?
+            .len())
     }
 
     /// Fold own log into a snapshot and drop the chunks it covers.
     /// Tombstones older than `tombstone_ttl_ms` (by HLC wall time) are dropped.
-    pub async fn compact(&self, state: &LocalState, now_ms: u64, tombstone_ttl_ms: u64) -> Result<()> {
+    pub async fn compact(
+        &self,
+        state: &LocalState,
+        now_ms: u64,
+        tombstone_ttl_ms: u64,
+    ) -> Result<()> {
         if state.own_seq == 0 {
             return Ok(());
         }
@@ -275,21 +353,31 @@ impl Engine {
         if let Some(snap) = self.read_snapshot(&self.device_id).await? {
             ops.extend(snap.ops);
         }
-        let keys = self.storage.list(&format!("devices/{}/log/", self.device_id)).await?;
+        let keys = self
+            .storage
+            .list(&format!("devices/{}/log/", self.device_id))
+            .await?;
         let mut seqs: Vec<u64> = keys.iter().filter_map(|k| seq_from_key(k)).collect();
         seqs.sort_unstable();
         for seq in &seqs {
             if *seq > state.own_seq {
                 continue;
             }
-            let Some(bytes) = self.storage.get(&chunk_key(&self.device_id, *seq)).await? else { continue };
+            let Some(bytes) = self.storage.get(&chunk_key(&self.device_id, *seq)).await? else {
+                continue;
+            };
             let chunk = self.open_chunk(&self.device_id, *seq, &bytes)?;
             ops.extend(chunk.ops);
         }
         let mut latest = fold_latest(ops);
-        latest.retain(|op| !(op.deleted && op.hlc.wall_ms.saturating_add(tombstone_ttl_ms) < now_ms));
+        latest
+            .retain(|op| !(op.deleted && op.hlc.wall_ms.saturating_add(tombstone_ttl_ms) < now_ms));
 
-        let snap = Snapshot { up_to_seq: state.own_seq, head_hash: state.own_head_hash.clone(), ops: latest };
+        let snap = Snapshot {
+            up_to_seq: state.own_seq,
+            head_hash: state.own_head_hash.clone(),
+            ops: latest,
+        };
         let bytes = envelope::seal(
             &self.keys.log,
             &self.vault_id,
@@ -297,10 +385,14 @@ impl Engine {
             &snapshot_ident(&self.device_id),
             &serde_json::to_vec(&snap)?,
         )?;
-        self.storage.put(&snapshot_key(&self.device_id), &bytes).await?;
+        self.storage
+            .put(&snapshot_key(&self.device_id), &bytes)
+            .await?;
         for seq in seqs {
             if seq <= state.own_seq {
-                self.storage.delete(&chunk_key(&self.device_id, seq)).await?;
+                self.storage
+                    .delete(&chunk_key(&self.device_id, seq))
+                    .await?;
             }
         }
         Ok(())
@@ -311,7 +403,11 @@ impl Engine {
     /// Read every peer's log past the remembered head. Verifies the hash chain;
     /// a peer whose chain breaks is reported in `errors` and its head is left as is.
     /// `on_file(current, total, key)` is called before each GET.
-    pub async fn pull(&self, state: &mut LocalState, mut on_file: impl FnMut(u32, u32, &str)) -> Result<PullResult> {
+    pub async fn pull(
+        &self,
+        state: &mut LocalState,
+        mut on_file: impl FnMut(u32, u32, &str),
+    ) -> Result<PullResult> {
         on_file(0, 0, "devices/");
         let mut result = PullResult::default();
         let all = self.storage.list("devices/").await?;
@@ -327,18 +423,52 @@ impl Engine {
             let head = state.peers.get(peer).cloned().unwrap_or_default();
             planned.push((peer.clone(), planned_gets(peer, &head, &all)));
         }
-        let total = planned.iter().map(|(_, keys)| keys.len() as u32).sum::<u32>();
+        let total = planned
+            .iter()
+            .map(|(_, keys)| keys.len() as u32)
+            .sum::<u32>();
         let mut current = 0u32;
         on_file(0, total, "devices/");
 
         for (peer, keys) in planned {
+            let head_seq = state.peers.get(&peer).map(|h| h.seq).unwrap_or(0);
+            let read_from = current;
             let mut head = state.peers.get(&peer).cloned().unwrap_or_default();
-            match self.pull_peer(&peer, &mut head, &all, &keys, &mut current, total, &mut on_file).await {
+            match self
+                .pull_peer(
+                    &peer,
+                    &mut head,
+                    &all,
+                    &keys,
+                    &mut current,
+                    total,
+                    &mut on_file,
+                )
+                .await
+            {
                 Ok(ops) => {
+                    let n = ops.len();
+                    result.peers.push(PullPeer {
+                        device_id: peer.clone(),
+                        head_seq,
+                        files: current - read_from,
+                        ops: n,
+                        error: None,
+                    });
                     result.ops.extend(ops);
                     state.peers.insert(peer, head);
                 }
-                Err(e) => result.errors.push((peer, e.to_string())),
+                Err(e) => {
+                    let message = e.to_string();
+                    result.peers.push(PullPeer {
+                        device_id: peer.clone(),
+                        head_seq,
+                        files: current - read_from,
+                        ops: 0,
+                        error: Some(message.clone()),
+                    });
+                    result.errors.push((peer, message));
+                }
             }
         }
         result.ops.sort_by(|a, b| a.hlc.cmp(&b.hlc));
@@ -356,7 +486,11 @@ impl Engine {
         on_file: &mut impl FnMut(u32, u32, &str),
     ) -> Result<Vec<Op>> {
         let log_prefix = format!("devices/{peer}/log/");
-        let mut seqs: Vec<u64> = all_keys.iter().filter(|k| k.starts_with(&log_prefix)).filter_map(|k| seq_from_key(k)).collect();
+        let mut seqs: Vec<u64> = all_keys
+            .iter()
+            .filter(|k| k.starts_with(&log_prefix))
+            .filter_map(|k| seq_from_key(k))
+            .collect();
         seqs.sort_unstable();
         let mut ops = Vec::new();
         let start = *current;
@@ -370,12 +504,20 @@ impl Engine {
             *current += 1;
             if let Some(snap) = self.read_snapshot(peer).await? {
                 // Snapshot predating our head carries nothing new; chunks decide.
-                if snap.up_to_seq == head.seq && !head.hash.is_empty() && snap.head_hash != head.hash {
-                    return Err(SyncError::Integrity("snapshot head does not match known head".into()));
+                if snap.up_to_seq == head.seq
+                    && !head.hash.is_empty()
+                    && snap.head_hash != head.hash
+                {
+                    return Err(SyncError::Integrity(
+                        "snapshot head does not match known head".into(),
+                    ));
                 }
                 if snap.up_to_seq > head.seq {
                     ops.extend(snap.ops);
-                    *head = PeerHead { seq: snap.up_to_seq, hash: snap.head_hash };
+                    *head = PeerHead {
+                        seq: snap.up_to_seq,
+                        hash: snap.head_hash,
+                    };
                 }
             }
         }
@@ -386,20 +528,30 @@ impl Engine {
             on_file(*current, total, &key);
             *current += 1;
             // Listed but not readable yet: the cloud client is still delivering it.
-            let Some(bytes) = self.storage.get(&key).await? else { break };
+            let Some(bytes) = self.storage.get(&key).await? else {
+                break;
+            };
             let chunk = match self.open_chunk(peer, next, &bytes) {
                 Ok(c) => c,
                 Err(SyncError::Format(_)) => break,
                 Err(e) => return Err(e),
             };
             if chunk.seq != next {
-                return Err(SyncError::Integrity(format!("chunk {next} carries seq {}", chunk.seq)));
+                return Err(SyncError::Integrity(format!(
+                    "chunk {next} carries seq {}",
+                    chunk.seq
+                )));
             }
             if chunk.prev_hash != head.hash {
-                return Err(SyncError::Integrity(format!("chain break at {peer}/{next}")));
+                return Err(SyncError::Integrity(format!(
+                    "chain break at {peer}/{next}"
+                )));
             }
             ops.extend(chunk.ops);
-            *head = PeerHead { seq: next, hash: sha256_hex(&bytes) };
+            *head = PeerHead {
+                seq: next,
+                hash: sha256_hex(&bytes),
+            };
             next += 1;
         }
         *current = (*current).max(start + planned.len() as u32);
@@ -409,13 +561,28 @@ impl Engine {
     /// Authenticated but undecodable content is a real fault, not a partial
     /// download, so it surfaces as `Integrity` instead of a silent `Format` skip.
     fn open_chunk(&self, device: &str, seq: u64, bytes: &[u8]) -> Result<Chunk> {
-        let pt = envelope::open(&self.keys.log, &self.vault_id, Kind::Chunk, &chunk_ident(device, seq), bytes)?;
-        serde_json::from_slice(&pt).map_err(|e| SyncError::Integrity(format!("chunk {device}/{seq}: {e}")))
+        let pt = envelope::open(
+            &self.keys.log,
+            &self.vault_id,
+            Kind::Chunk,
+            &chunk_ident(device, seq),
+            bytes,
+        )?;
+        serde_json::from_slice(&pt)
+            .map_err(|e| SyncError::Integrity(format!("chunk {device}/{seq}: {e}")))
     }
 
     async fn read_snapshot(&self, device: &str) -> Result<Option<Snapshot>> {
-        let Some(bytes) = self.storage.get(&snapshot_key(device)).await? else { return Ok(None) };
-        let pt = envelope::open(&self.keys.log, &self.vault_id, Kind::Snapshot, &snapshot_ident(device), &bytes)?;
+        let Some(bytes) = self.storage.get(&snapshot_key(device)).await? else {
+            return Ok(None);
+        };
+        let pt = envelope::open(
+            &self.keys.log,
+            &self.vault_id,
+            Kind::Snapshot,
+            &snapshot_ident(device),
+            &bytes,
+        )?;
         Ok(Some(serde_json::from_slice(&pt)?))
     }
 
@@ -423,7 +590,11 @@ impl Engine {
     /// Fails when a listed chunk cannot be read yet, since its references are unknown.
     pub async fn all_latest_ops(&self) -> Result<Vec<Op>> {
         let all = self.storage.list("devices/").await?;
-        let devices: BTreeSet<String> = all.iter().filter_map(|k| device_from_key(k)).map(str::to_string).collect();
+        let devices: BTreeSet<String> = all
+            .iter()
+            .filter_map(|k| device_from_key(k))
+            .map(str::to_string)
+            .collect();
         let mut ops: Vec<Op> = Vec::new();
         for device in devices {
             if let Some(snap) = self.read_snapshot(&device).await? {
@@ -431,12 +602,12 @@ impl Engine {
             }
             let log_prefix = format!("devices/{device}/log/");
             for key in all.iter().filter(|k| k.starts_with(&log_prefix)) {
-                let Some(seq) = seq_from_key(key) else { continue };
-                let bytes = self
-                    .storage
-                    .get(key)
-                    .await?
-                    .ok_or_else(|| SyncError::Storage(format!("chunk {key} listed but not readable")))?;
+                let Some(seq) = seq_from_key(key) else {
+                    continue;
+                };
+                let bytes = self.storage.get(key).await?.ok_or_else(|| {
+                    SyncError::Storage(format!("chunk {key} listed but not readable"))
+                })?;
                 ops.extend(self.open_chunk(&device, seq, &bytes)?.ops);
             }
         }
@@ -448,7 +619,12 @@ impl Engine {
     /// Names of every blob in the storage.
     pub async fn list_blobs(&self) -> Result<BTreeSet<String>> {
         let keys = self.storage.list("blobs/").await?;
-        Ok(keys.iter().filter_map(|k| k.strip_prefix("blobs/")).filter(|n| !n.is_empty()).map(str::to_string).collect())
+        Ok(keys
+            .iter()
+            .filter_map(|k| k.strip_prefix("blobs/"))
+            .filter(|n| !n.is_empty())
+            .map(str::to_string)
+            .collect())
     }
 
     pub async fn delete_blob(&self, name: &str) -> Result<()> {
@@ -457,7 +633,8 @@ impl Engine {
 
     /// Content-addressed name: keyed HMAC so the storage cannot correlate plaintext hashes.
     pub fn blob_name(&self, data: &[u8]) -> String {
-        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&self.keys.id).expect("any key length is valid");
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&self.keys.id)
+            .expect("any key length is valid");
         mac.update(data);
         hex::encode(&mac.finalize().into_bytes()[..])
     }
@@ -470,8 +647,16 @@ impl Engine {
     }
 
     pub async fn get_blob(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        let Some(bytes) = self.storage.get(&blob_key(name)).await? else { return Ok(None) };
-        Ok(Some(envelope::open(&self.keys.blob, &self.vault_id, Kind::Blob, name, &bytes)?))
+        let Some(bytes) = self.storage.get(&blob_key(name)).await? else {
+            return Ok(None);
+        };
+        Ok(Some(envelope::open(
+            &self.keys.blob,
+            &self.vault_id,
+            Kind::Blob,
+            name,
+            &bytes,
+        )?))
     }
 
     /// Presence check without downloading the body.

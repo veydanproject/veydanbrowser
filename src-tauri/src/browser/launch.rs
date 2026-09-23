@@ -16,7 +16,10 @@ pub struct RunningChangedPayload {
 
 pub fn emit_running_changed(app_handle: &tauri::AppHandle, ids: Vec<String>) {
     app_handle
-        .emit("profiles://running-changed", RunningChangedPayload { running_ids: ids })
+        .emit(
+            "profiles://running-changed",
+            RunningChangedPayload { running_ids: ids },
+        )
         .ok();
 }
 
@@ -57,6 +60,7 @@ impl BrowserState {
 
 pub async fn launch(
     profile_id: String,
+    launched_locale: String,
     profile_path: PathBuf,
     browser_binary: PathBuf,
     timezone: Option<String>,
@@ -108,11 +112,18 @@ pub async fn launch(
         if procs.contains_key(&profile_id) {
             // Concurrent launch race: kill the duplicate process and bail
             child.kill().await.ok();
-            return Err(anyhow::anyhow!("Profile already running (concurrent launch)"));
+            return Err(anyhow::anyhow!(
+                "Profile already running (concurrent launch)"
+            ));
         }
         procs.insert(
             profile_id.clone(),
-            BrowserProcess { pid, stop_tx, local_proxy_stop, monitor: None },
+            BrowserProcess {
+                pid,
+                stop_tx,
+                local_proxy_stop,
+                monitor: None,
+            },
         );
     } // lock released before tokio::spawn
 
@@ -120,7 +131,6 @@ pub async fn launch(
     let profile_id_clone = profile_id.clone();
     let db_clone = db.clone();
     let app_handle_clone = app_handle.clone();
-    #[cfg(target_os = "windows")]
     let firefox_profile_dir_clone = firefox_profile_dir.clone();
 
     let monitor = tokio::spawn(async move {
@@ -172,6 +182,16 @@ pub async fn launch(
         #[cfg(not(target_os = "windows"))]
         let _ = process_exited;
 
+        // Browser writes the chosen UI language into prefs.js on exit.
+        import_browser_locale(
+            &firefox_profile_dir_clone,
+            &launched_locale,
+            &profile_id_clone,
+            &db_clone,
+            &app_handle_clone,
+        )
+        .await;
+
         // Stop local proxy (if any) when browser exits
         if let Some(proc) = state_clone.processes.lock().await.remove(&profile_id_clone) {
             if let Some(ps) = proc.local_proxy_stop {
@@ -198,6 +218,43 @@ pub async fn launch(
     }
 
     Ok(pid)
+}
+
+/// If the browser UI language changed during the session, store it on the profile.
+async fn import_browser_locale(
+    firefox_profile_dir: &std::path::Path,
+    launched_locale: &str,
+    profile_id: &str,
+    db: &sqlx::Pool<sqlx::Sqlite>,
+    app_handle: &tauri::AppHandle,
+) {
+    let Ok(prefs) = std::fs::read_to_string(firefox_profile_dir.join("prefs.js")) else {
+        return;
+    };
+    let Some(requested) = super::userjs::read_pref_string(&prefs, "intl.locale.requested") else {
+        return;
+    };
+    let Some((locale, languages)) = super::userjs::match_locale(&requested) else {
+        return;
+    };
+    if locale.eq_ignore_ascii_case(launched_locale) {
+        return;
+    }
+    if sqlx::query(
+        "UPDATE profiles SET locale = ?, languages = ?, updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(locale)
+    .bind(languages)
+    .bind(profile_id)
+    .execute(db)
+    .await
+    .is_err()
+    {
+        return;
+    }
+    app_handle
+        .emit(crate::sync::EVENT_CHANGED, vec!["profile".to_string()])
+        .ok();
 }
 
 /// Best-effort kill of the real Camoufox/Firefox browser on Windows once the

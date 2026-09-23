@@ -33,7 +33,9 @@ pub(super) fn writer(app: &tauri::AppHandle, uri: &str) -> CmdResult<std::fs::Fi
     let url = tauri::Url::parse(uri).map_err(AppError::other)?;
     let mut opts = OpenOptions::new();
     opts.write(true).truncate(true);
-    app.fs().open(FilePath::Url(url), opts).map_err(AppError::io)
+    app.fs()
+        .open(FilePath::Url(url), opts)
+        .map_err(AppError::io)
 }
 
 /// Display name and size via `ContentResolver.query` on the Android main thread.
@@ -48,12 +50,28 @@ fn query_info(uri: &str) -> CmdResult<(String, Option<u64>)> {
         .map_err(AppError::io)
 }
 
-fn query(env: &mut JNIEnv, activity: &JObject, uri: &str) -> jni::errors::Result<(String, Option<u64>)> {
+fn query(
+    env: &mut JNIEnv,
+    activity: &JObject,
+    uri: &str,
+) -> jni::errors::Result<(String, Option<u64>)> {
     let juri = env.new_string(uri)?;
     let uri_obj = env
-        .call_static_method("android/net/Uri", "parse", "(Ljava/lang/String;)Landroid/net/Uri;", &[JValue::Object(&juri)])?
+        .call_static_method(
+            "android/net/Uri",
+            "parse",
+            "(Ljava/lang/String;)Landroid/net/Uri;",
+            &[JValue::Object(&juri)],
+        )?
         .l()?;
-    let resolver = env.call_method(activity, "getContentResolver", "()Landroid/content/ContentResolver;", &[])?.l()?;
+    let resolver = env
+        .call_method(
+            activity,
+            "getContentResolver",
+            "()Landroid/content/ContentResolver;",
+            &[],
+        )?
+        .l()?;
     let string_class = env.find_class("java/lang/String")?;
     let projection = env.new_object_array(2, &string_class, JObject::null())?;
     env.set_object_array_element(&projection, 0, env.new_string(DISPLAY_NAME)?)?;
@@ -83,19 +101,45 @@ fn query(env: &mut JNIEnv, activity: &JObject, uri: &str) -> jni::errors::Result
     Ok((name, size))
 }
 
-fn column_index(env: &mut JNIEnv, cursor: &JObject, column: &str) -> jni::errors::Result<Option<i32>> {
+fn column_index(
+    env: &mut JNIEnv,
+    cursor: &JObject,
+    column: &str,
+) -> jni::errors::Result<Option<i32>> {
     let jcol = env.new_string(column)?;
-    let idx = env.call_method(cursor, "getColumnIndex", "(Ljava/lang/String;)I", &[JValue::Object(&jcol)])?.i()?;
+    let idx = env
+        .call_method(
+            cursor,
+            "getColumnIndex",
+            "(Ljava/lang/String;)I",
+            &[JValue::Object(&jcol)],
+        )?
+        .i()?;
     if idx < 0 {
         return Ok(None);
     }
-    let is_null = env.call_method(cursor, "isNull", "(I)Z", &[JValue::Int(idx)])?.z()?;
+    let is_null = env
+        .call_method(cursor, "isNull", "(I)Z", &[JValue::Int(idx)])?
+        .z()?;
     Ok((!is_null).then_some(idx))
 }
 
-fn column_string(env: &mut JNIEnv, cursor: &JObject, column: &str) -> jni::errors::Result<Option<String>> {
-    let Some(idx) = column_index(env, cursor, column)? else { return Ok(None) };
-    let value = env.call_method(cursor, "getString", "(I)Ljava/lang/String;", &[JValue::Int(idx)])?.l()?;
+fn column_string(
+    env: &mut JNIEnv,
+    cursor: &JObject,
+    column: &str,
+) -> jni::errors::Result<Option<String>> {
+    let Some(idx) = column_index(env, cursor, column)? else {
+        return Ok(None);
+    };
+    let value = env
+        .call_method(
+            cursor,
+            "getString",
+            "(I)Ljava/lang/String;",
+            &[JValue::Int(idx)],
+        )?
+        .l()?;
     if value.is_null() {
         return Ok(None);
     }
@@ -103,8 +147,16 @@ fn column_string(env: &mut JNIEnv, cursor: &JObject, column: &str) -> jni::error
     Ok((!s.is_empty()).then_some(s))
 }
 
-fn column_long(env: &mut JNIEnv, cursor: &JObject, column: &str) -> jni::errors::Result<Option<u64>> {
-    let Some(idx) = column_index(env, cursor, column)? else { return Ok(None) };
-    let value = env.call_method(cursor, "getLong", "(I)J", &[JValue::Int(idx)])?.j()?;
+fn column_long(
+    env: &mut JNIEnv,
+    cursor: &JObject,
+    column: &str,
+) -> jni::errors::Result<Option<u64>> {
+    let Some(idx) = column_index(env, cursor, column)? else {
+        return Ok(None);
+    };
+    let value = env
+        .call_method(cursor, "getLong", "(I)J", &[JValue::Int(idx)])?
+        .j()?;
     Ok(u64::try_from(value).ok())
 }

@@ -107,6 +107,14 @@
       columns = cols;
       notesValue = ws.notes ?? '';
       profiles = profilesStore.byWorkspace(workspaceId);
+      const selectedId = selectedProfile?.id;
+      const rawId = rawDataProfile?.id;
+      if (selectedId) {
+        selectedProfile = profiles.find((p) => p.id === selectedId) ?? selectedProfile;
+      }
+      if (rawId) {
+        rawDataProfile = profiles.find((p) => p.id === rawId) ?? rawDataProfile;
+      }
       proxies = proxiesStore.byWorkspace(workspaceId);
     } catch {}
   }

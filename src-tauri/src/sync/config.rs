@@ -6,7 +6,9 @@
 use crate::error::{AppError, CmdResult};
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Sqlite};
-use veydan_sync::{LargeFileConfig, LocalDir, S3Config, S3Storage, Storage, WebDavConfig, WebDavStorage};
+use veydan_sync::{
+    LargeFileConfig, LocalDir, S3Config, S3Storage, Storage, WebDavConfig, WebDavStorage,
+};
 
 pub const DEFAULT_INTERVAL_SEC: u64 = 60;
 const MIN_INTERVAL_SEC: u64 = 1;
@@ -27,7 +29,11 @@ pub struct LargeFileSettings {
 impl Default for LargeFileSettings {
     fn default() -> Self {
         let d = LargeFileConfig::default();
-        Self { chunk_mib: (d.chunk_size / MIB) as u32, parallelism: d.parallelism as u32, resume: d.resume }
+        Self {
+            chunk_mib: (d.chunk_size / MIB) as u32,
+            parallelism: d.parallelism as u32,
+            resume: d.resume,
+        }
     }
 }
 
@@ -112,7 +118,10 @@ impl Default for SyncConfig {
 
 /// Hostname, or the device id when the OS gives nothing usable.
 fn default_device_name() -> String {
-    gethostname::gethostname().to_string_lossy().trim().to_string()
+    gethostname::gethostname()
+        .to_string_lossy()
+        .trim()
+        .to_string()
 }
 
 /// Identity of the vault this device joined. Absent until create/join.
@@ -185,10 +194,14 @@ pub async fn load_config(db: &Pool<Sqlite>) -> SyncConfig {
             .await
             .and_then(|v| v.parse().ok())
             .unwrap_or(d.interval_sec),
-        profile_files: cfg!(desktop) && get_setting(db, "sync_profile_files").await.as_deref() != Some("0"),
+        profile_files: cfg!(desktop)
+            && get_setting(db, "sync_profile_files").await.as_deref() != Some("0"),
         device_name: device_name(db).await,
         large_files: LargeFileSettings {
-            chunk_mib: get_setting(db, "sync_lf_chunk_mib").await.and_then(|v| v.parse().ok()).unwrap_or(d.large_files.chunk_mib),
+            chunk_mib: get_setting(db, "sync_lf_chunk_mib")
+                .await
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.large_files.chunk_mib),
             parallelism: get_setting(db, "sync_lf_parallelism")
                 .await
                 .and_then(|v| v.parse().ok())
@@ -200,7 +213,10 @@ pub async fn load_config(db: &Pool<Sqlite>) -> SyncConfig {
 
 /// Name shown to other devices; falls back to the hostname, then the device id.
 pub async fn device_name(db: &Pool<Sqlite>) -> String {
-    if let Some(n) = get_setting(db, "sync_device_name").await.filter(|s| !s.trim().is_empty()) {
+    if let Some(n) = get_setting(db, "sync_device_name")
+        .await
+        .filter(|s| !s.trim().is_empty())
+    {
         return n;
     }
     let host = default_device_name();
@@ -223,7 +239,12 @@ pub async fn save_config(db: &Pool<Sqlite>, cfg: &SyncConfig) -> CmdResult<()> {
     if let Some(v) = cfg.s3.secret_key.as_deref() {
         set_setting(db, "sync_s3_secret_key", v).await?;
     }
-    set_setting(db, "sync_s3_path_style", if cfg.s3.path_style { "1" } else { "0" }).await?;
+    set_setting(
+        db,
+        "sync_s3_path_style",
+        if cfg.s3.path_style { "1" } else { "0" },
+    )
+    .await?;
     set_setting(db, "sync_webdav_url", &cfg.webdav.url).await?;
     set_setting(db, "sync_webdav_username", &cfg.webdav.username).await?;
     if let Some(v) = cfg.webdav.password.as_deref() {
@@ -231,17 +252,40 @@ pub async fn save_config(db: &Pool<Sqlite>, cfg: &SyncConfig) -> CmdResult<()> {
     }
     let interval = cfg.interval_sec.clamp(MIN_INTERVAL_SEC, MAX_INTERVAL_SEC);
     set_setting(db, "sync_interval_sec", &interval.to_string()).await?;
-    set_setting(db, "sync_profile_files", if cfg.profile_files { "1" } else { "0" }).await?;
+    set_setting(
+        db,
+        "sync_profile_files",
+        if cfg.profile_files { "1" } else { "0" },
+    )
+    .await?;
     set_setting(db, "sync_device_name", cfg.device_name.trim()).await?;
-    set_setting(db, "sync_lf_chunk_mib", &cfg.large_files.chunk_mib.to_string()).await?;
-    set_setting(db, "sync_lf_parallelism", &cfg.large_files.parallelism.to_string()).await?;
-    set_setting(db, "sync_lf_resume", if cfg.large_files.resume { "1" } else { "0" }).await?;
+    set_setting(
+        db,
+        "sync_lf_chunk_mib",
+        &cfg.large_files.chunk_mib.to_string(),
+    )
+    .await?;
+    set_setting(
+        db,
+        "sync_lf_parallelism",
+        &cfg.large_files.parallelism.to_string(),
+    )
+    .await?;
+    set_setting(
+        db,
+        "sync_lf_resume",
+        if cfg.large_files.resume { "1" } else { "0" },
+    )
+    .await?;
     Ok(())
 }
 
 /// Stable per-install device id, created on first use.
 pub async fn device_id(db: &Pool<Sqlite>) -> CmdResult<String> {
-    if let Some(id) = get_setting(db, "sync_device_id").await.filter(|s| !s.is_empty()) {
+    if let Some(id) = get_setting(db, "sync_device_id")
+        .await
+        .filter(|s| !s.is_empty())
+    {
         return Ok(id);
     }
     let id = veydan_sync::random_hex(8);
@@ -250,8 +294,12 @@ pub async fn device_id(db: &Pool<Sqlite>) -> CmdResult<String> {
 }
 
 pub async fn load_binding(db: &Pool<Sqlite>) -> Option<VaultBinding> {
-    let vault_id = get_setting(db, "sync_vault_id").await.filter(|s| !s.is_empty())?;
-    let vmk_b64 = get_setting(db, "sync_vault_key").await.filter(|s| !s.is_empty())?;
+    let vault_id = get_setting(db, "sync_vault_id")
+        .await
+        .filter(|s| !s.is_empty())?;
+    let vmk_b64 = get_setting(db, "sync_vault_key")
+        .await
+        .filter(|s| !s.is_empty())?;
     Some(VaultBinding { vault_id, vmk_b64 })
 }
 
@@ -329,12 +377,20 @@ pub fn build_storage(cfg: &SyncConfig) -> CmdResult<Box<dyn Storage>> {
         "s3" => {
             let s = &cfg.s3;
             let secret_key = s.secret_key.clone().unwrap_or_default();
-            if s.endpoint.is_empty() || s.bucket.is_empty() || s.access_key.is_empty() || secret_key.is_empty() {
+            if s.endpoint.is_empty()
+                || s.bucket.is_empty()
+                || s.access_key.is_empty()
+                || secret_key.is_empty()
+            {
                 return Err(AppError::other("S3 endpoint, bucket and keys are required"));
             }
             let storage = S3Storage::new(S3Config {
                 endpoint: s.endpoint.clone(),
-                region: if s.region.is_empty() { "us-east-1".into() } else { s.region.clone() },
+                region: if s.region.is_empty() {
+                    "us-east-1".into()
+                } else {
+                    s.region.clone()
+                },
                 bucket: s.bucket.clone(),
                 prefix: s.prefix.clone(),
                 access_key: s.access_key.clone(),

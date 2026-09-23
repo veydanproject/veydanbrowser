@@ -227,7 +227,16 @@ async fn ensure_remote_dir(sess: &SftpSessionState, path: &str) -> anyhow::Resul
     match sess.sftp.create_dir(path).await {
         Ok(()) => Ok(()),
         // Lost a race / already there — fine as long as it's a dir now
-        Err(_) if sess.sftp.metadata(path).await.map(|m| m.is_dir()).unwrap_or(false) => Ok(()),
+        Err(_)
+            if sess
+                .sftp
+                .metadata(path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false) =>
+        {
+            Ok(())
+        }
         Err(e) => Err(e.into()),
     }
 }
@@ -437,12 +446,24 @@ async fn build_plan(
     for item in items {
         match kind {
             TransferKind::Upload => {
-                plan_upload(sess, &item.src_path, &item.dst_path, item.overwrite, &mut jobs)
-                    .await?
+                plan_upload(
+                    sess,
+                    &item.src_path,
+                    &item.dst_path,
+                    item.overwrite,
+                    &mut jobs,
+                )
+                .await?
             }
             TransferKind::Download => {
-                plan_download(sess, &item.src_path, &item.dst_path, item.overwrite, &mut jobs)
-                    .await?
+                plan_download(
+                    sess,
+                    &item.src_path,
+                    &item.dst_path,
+                    item.overwrite,
+                    &mut jobs,
+                )
+                .await?
             }
         }
     }

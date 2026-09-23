@@ -5,8 +5,8 @@ use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use base64::Engine as _;
 use chrono::Utc;
-use russh::{client, ChannelMsg};
 use russh::keys::{decode_secret_key, HashAlg, PrivateKeyWithHashAlg};
+use russh::{client, ChannelMsg};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
@@ -194,7 +194,10 @@ pub struct SshSessionInfo {
 
 pub enum SshInputCommand {
     Data(Vec<u8>),
-    Resize { cols: u32, rows: u32 },
+    Resize {
+        cols: u32,
+        rows: u32,
+    },
     Disconnect,
     /// Response to a keyboard-interactive prompt relayed by the frontend
     PromptResponse(String),
@@ -315,7 +318,10 @@ pub(crate) async fn confirm_host_key(
             session_id: session_id.to_string(),
             name: "Host key verification".into(),
             instructions: format!("{}:{} {fp}", conn.host, conn.port),
-            prompts: vec![KeyboardPromptItem { prompt: "Trust this host? (yes/no)".into(), echo: true }],
+            prompts: vec![KeyboardPromptItem {
+                prompt: "Trust this host? (yes/no)".into(),
+                echo: true,
+            }],
             host_key: Some(fp.to_string()),
         },
     );
@@ -375,7 +381,17 @@ pub(crate) async fn do_authenticate(
     match auth_type {
         "password" => {
             if requires_2fa {
-                do_keyboard_interactive(handle, app, session_id, username, password, totp_entry_id, db, rx).await
+                do_keyboard_interactive(
+                    handle,
+                    app,
+                    session_id,
+                    username,
+                    password,
+                    totp_entry_id,
+                    db,
+                    rx,
+                )
+                .await
             } else {
                 let pw = password.unwrap_or("");
                 let result = handle.authenticate_password(username, pw).await?;
@@ -404,20 +420,43 @@ pub(crate) async fn do_authenticate(
             let algo = key.algorithm();
             let algo_str = format!("{algo}");
             let fingerprint = key.fingerprint(HashAlg::Sha256);
-            let hash_alg = if algo.is_rsa() { Some(HashAlg::Sha256) } else { None };
+            let hash_alg = if algo.is_rsa() {
+                Some(HashAlg::Sha256)
+            } else {
+                None
+            };
             let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
             let auth_algo = key_with_alg.algorithm();
 
-            let result = handle.authenticate_publickey(username, key_with_alg).await?;
+            let result = handle
+                .authenticate_publickey(username, key_with_alg)
+                .await?;
             match result {
                 russh::client::AuthResult::Success => Ok(()),
-                russh::client::AuthResult::Failure { partial_success: true, ref remaining_methods }
-                    if remaining_methods.iter().any(|m| matches!(m, russh::MethodKind::KeyboardInteractive)) =>
+                russh::client::AuthResult::Failure {
+                    partial_success: true,
+                    ref remaining_methods,
+                } if remaining_methods
+                    .iter()
+                    .any(|m| matches!(m, russh::MethodKind::KeyboardInteractive)) =>
                 {
-                    do_keyboard_interactive(handle, app, session_id, username, password, totp_entry_id, db, rx).await
+                    do_keyboard_interactive(
+                        handle,
+                        app,
+                        session_id,
+                        username,
+                        password,
+                        totp_entry_id,
+                        db,
+                        rx,
+                    )
+                    .await
                 }
-                russh::client::AuthResult::Failure { remaining_methods, .. } => {
-                    let methods: Vec<String> = remaining_methods.iter().map(|m| format!("{m:?}")).collect();
+                russh::client::AuthResult::Failure {
+                    remaining_methods, ..
+                } => {
+                    let methods: Vec<String> =
+                        remaining_methods.iter().map(|m| format!("{m:?}")).collect();
                     anyhow::bail!(
                         "Public key authentication failed.\n\
                          Key: {algo_str} / {auth_algo}, Fingerprint: {fingerprint}\n\
@@ -457,7 +496,11 @@ async fn do_keyboard_interactive(
             russh::client::KeyboardInteractiveAuthResponse::Failure { .. } => {
                 anyhow::bail!("Keyboard-interactive authentication failed")
             }
-            russh::client::KeyboardInteractiveAuthResponse::InfoRequest { name, instructions, prompts } => {
+            russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => {
                 let mut answers: Vec<String> = Vec::with_capacity(prompts.len());
 
                 for (i, prompt) in prompts.iter().enumerate() {
@@ -498,10 +541,13 @@ async fn do_keyboard_interactive(
                                 name: name.clone(),
                                 instructions: instructions.clone(),
                                 // Only send remaining prompts starting from i
-                                prompts: prompts[i..].iter().map(|p| KeyboardPromptItem {
-                                    prompt: p.prompt.clone(),
-                                    echo: p.echo,
-                                }).collect(),
+                                prompts: prompts[i..]
+                                    .iter()
+                                    .map(|p| KeyboardPromptItem {
+                                        prompt: p.prompt.clone(),
+                                        echo: p.echo,
+                                    })
+                                    .collect(),
                                 host_key: None,
                             },
                         );
@@ -521,14 +567,12 @@ async fn do_keyboard_interactive(
 
 /// Generate a TOTP code for the given entry_id from the database.
 async fn generate_totp_code(db: &sqlx::SqlitePool, entry_id: &str) -> anyhow::Result<String> {
-    use crate::commands::totp::{TotpEntry, build_totp};
-    let entry = sqlx::query_as::<_, TotpEntry>(
-        "SELECT * FROM totp_entries WHERE id = ?",
-    )
-    .bind(entry_id)
-    .fetch_optional(db)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("TOTP entry {entry_id} not found"))?;
+    use crate::commands::totp::{build_totp, TotpEntry};
+    let entry = sqlx::query_as::<_, TotpEntry>("SELECT * FROM totp_entries WHERE id = ?")
+        .bind(entry_id)
+        .fetch_optional(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("TOTP entry {entry_id} not found"))?;
 
     let totp = build_totp(&entry).map_err(|e| anyhow::anyhow!("{e:?}"))?;
     let now = std::time::SystemTime::now()
@@ -556,7 +600,9 @@ async fn load_links(
         placeholders
     );
     let mut q = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(ws_query));
-    for id in &ids { q = q.bind(id); }
+    for id in &ids {
+        q = q.bind(id);
+    }
     let ws_rows = q.fetch_all(pool).await?;
 
     // profile links
@@ -565,15 +611,19 @@ async fn load_links(
         placeholders
     );
     let mut q = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(pr_query));
-    for id in &ids { q = q.bind(id); }
+    for id in &ids {
+        q = q.bind(id);
+    }
     let pr_rows = q.fetch_all(pool).await?;
 
     for conn in connections.iter_mut() {
-        conn.workspace_ids = ws_rows.iter()
+        conn.workspace_ids = ws_rows
+            .iter()
             .filter(|(cid, _)| cid == &conn.id)
             .map(|(_, wid)| wid.clone())
             .collect();
-        conn.profile_ids = pr_rows.iter()
+        conn.profile_ids = pr_rows
+            .iter()
             .filter(|(cid, _)| cid == &conn.id)
             .map(|(_, pid)| pid.clone())
             .collect();
@@ -660,7 +710,10 @@ pub async fn ssh_connection_list(
     let filter_param = profile_id.as_deref().or(workspace_id.as_deref());
     // Escape LIKE wildcards so user input matches literally (paired with ESCAPE '\')
     let search_param = search.as_deref().map(|s| {
-        let escaped = s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        let escaped = s
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
         format!("%{escaped}%")
     });
 
@@ -672,7 +725,9 @@ pub async fn ssh_connection_list(
         .map_err(AppError::db)?;
 
     let mut conns: Vec<SshConnection> = rows.into_iter().map(SshConnection::from).collect();
-    load_links(&state.db, &mut conns).await.map_err(AppError::other)?;
+    load_links(&state.db, &mut conns)
+        .await
+        .map_err(AppError::other)?;
     Ok(conns)
 }
 
@@ -681,18 +736,18 @@ pub async fn ssh_connection_get(
     state: State<'_, AppState>,
     id: String,
 ) -> CmdResult<SshConnection> {
-    let row = sqlx::query_as::<_, SshConnectionRow>(
-        "SELECT * FROM ssh_connections WHERE id = ?",
-    )
-    .bind(&id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(AppError::db)?
-    .ok_or_else(|| AppError::not_found(format!("SSH connection {id}")))?;
+    let row = sqlx::query_as::<_, SshConnectionRow>("SELECT * FROM ssh_connections WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found(format!("SSH connection {id}")))?;
 
     let mut conn = SshConnection::from(row);
     let mut vec = vec![conn];
-    load_links(&state.db, &mut vec).await.map_err(AppError::other)?;
+    load_links(&state.db, &mut vec)
+        .await
+        .map_err(AppError::other)?;
     conn = vec.remove(0);
     Ok(conn)
 }
@@ -751,10 +806,14 @@ pub async fn ssh_connection_create(
     .map_err(AppError::db)?;
 
     if let Some(ref wids) = input.workspace_ids {
-        sync_workspace_links(&state.db, &id, wids).await.map_err(AppError::other)?;
+        sync_workspace_links(&state.db, &id, wids)
+            .await
+            .map_err(AppError::other)?;
     }
     if let Some(ref pids) = input.profile_ids {
-        sync_profile_links(&state.db, &id, pids).await.map_err(AppError::other)?;
+        sync_profile_links(&state.db, &id, pids)
+            .await
+            .map_err(AppError::other)?;
     }
 
     ssh_connection_get(state, id).await
@@ -831,20 +890,21 @@ pub async fn ssh_connection_update(
     .map_err(AppError::db)?;
 
     if let Some(ref wids) = input.workspace_ids {
-        sync_workspace_links(&state.db, &id, wids).await.map_err(AppError::other)?;
+        sync_workspace_links(&state.db, &id, wids)
+            .await
+            .map_err(AppError::other)?;
     }
     if let Some(ref pids) = input.profile_ids {
-        sync_profile_links(&state.db, &id, pids).await.map_err(AppError::other)?;
+        sync_profile_links(&state.db, &id, pids)
+            .await
+            .map_err(AppError::other)?;
     }
 
     ssh_connection_get(state, id).await
 }
 
 #[tauri::command]
-pub async fn ssh_connection_delete(
-    state: State<'_, AppState>,
-    id: String,
-) -> CmdResult<()> {
+pub async fn ssh_connection_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     sqlx::query("DELETE FROM ssh_connections WHERE id = ?")
         .bind(&id)
         .execute(&state.db)
@@ -862,15 +922,13 @@ pub async fn ssh_connection_trust_fingerprint(
     id: String,
     fingerprint: String,
 ) -> CmdResult<()> {
-    sqlx::query(
-        "UPDATE ssh_connections SET server_fingerprint = ?, updated_at = ? WHERE id = ?",
-    )
-    .bind(&fingerprint)
-    .bind(Utc::now().to_rfc3339())
-    .bind(&id)
-    .execute(&state.db)
-    .await
-    .map_err(AppError::db)?;
+    sqlx::query("UPDATE ssh_connections SET server_fingerprint = ?, updated_at = ? WHERE id = ?")
+        .bind(&fingerprint)
+        .bind(Utc::now().to_rfc3339())
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
     Ok(())
 }
 
@@ -903,17 +961,22 @@ pub async fn resolve_key_material(
     conn.key_passphrase = passphrase;
     // Normalize so do_authenticate applies the stored passphrase regardless of
     // what auth_type the connection row says.
-    conn.auth_type = if has_passphrase { "key_password".into() } else { "key".into() };
+    conn.auth_type = if has_passphrase {
+        "key_password".into()
+    } else {
+        "key".into()
+    };
     Ok(())
 }
 
 // ── Session Commands ───────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn ssh_session_list(
-    state: State<'_, AppState>,
-) -> CmdResult<Vec<SshSessionInfo>> {
-    let sessions = state.ssh_sessions.read().map_err(|e| AppError::other(e.to_string()))?;
+pub async fn ssh_session_list(state: State<'_, AppState>) -> CmdResult<Vec<SshSessionInfo>> {
+    let sessions = state
+        .ssh_sessions
+        .read()
+        .map_err(|e| AppError::other(e.to_string()))?;
     Ok(sessions.values().map(|s| s.info.clone()).collect())
 }
 
@@ -941,24 +1004,34 @@ pub async fn ssh_connect(
     };
 
     {
-        let mut sessions = state.ssh_sessions.write().map_err(|e| AppError::other(e.to_string()))?;
+        let mut sessions = state
+            .ssh_sessions
+            .write()
+            .map_err(|e| AppError::other(e.to_string()))?;
         sessions.insert(
             session_id.clone(),
-            SshSessionState { info: info.clone(), writer: tx },
+            SshSessionState {
+                info: info.clone(),
+                writer: tx,
+            },
         );
     }
 
-    emit_status(&app, &session_id, &connection_id, SshStatus::Connecting, None);
+    emit_status(
+        &app,
+        &session_id,
+        &connection_id,
+        SshStatus::Connecting,
+        None,
+    );
 
     // Load proxy if set
     let proxy = if let Some(ref proxy_id) = conn.proxy_id {
-        sqlx::query_as::<_, crate::models::Proxy>(
-            "SELECT * FROM proxies WHERE id = ?",
-        )
-        .bind(proxy_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(AppError::db)?
+        sqlx::query_as::<_, crate::models::Proxy>("SELECT * FROM proxies WHERE id = ?")
+            .bind(proxy_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::db)?
     } else {
         None
     };
@@ -968,15 +1041,7 @@ pub async fn ssh_connect(
     let session_id_ret = session_id.clone();
 
     tokio::spawn(async move {
-        let result = run_session(
-            &app,
-            &session_id,
-            &conn,
-            proxy,
-            db,
-            rx,
-        )
-        .await;
+        let result = run_session(&app, &session_id, &conn, proxy, db, rx).await;
 
         let (status, error) = match result {
             Ok(()) => (SshStatus::Disconnected, None),
@@ -1010,7 +1075,8 @@ async fn http_connect_tunnel(
 ) -> anyhow::Result<tokio::net::TcpStream> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let mut stream = tokio::net::TcpStream::connect(format!("{}:{}", proxy_host, proxy_port)).await?;
+    let mut stream =
+        tokio::net::TcpStream::connect(format!("{}:{}", proxy_host, proxy_port)).await?;
 
     let mut request = format!(
         "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\n",
@@ -1019,8 +1085,8 @@ async fn http_connect_tunnel(
 
     if let (Some(user), Some(pass)) = (username, password) {
         if !user.is_empty() {
-            let credentials = base64::engine::general_purpose::STANDARD
-                .encode(format!("{}:{}", user, pass));
+            let credentials =
+                base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", user, pass));
             request.push_str(&format!("Proxy-Authorization: Basic {}\r\n", credentials));
         }
     }
@@ -1082,7 +1148,10 @@ pub(crate) async fn establish_transport(
         received_fingerprint: Arc::clone(&received),
     };
 
-    let result: anyhow::Result<(Option<crate::proxy::ssh::SharedSession>, client::Handle<TerminalHandler>)> = async {
+    let result: anyhow::Result<(
+        Option<crate::proxy::ssh::SharedSession>,
+        client::Handle<TerminalHandler>,
+    )> = async {
         Ok(match proxy {
             Some(ref p) if p.proxy_type == "socks5" => {
                 let stream = crate::proxy::local::socks5_connect(
@@ -1094,15 +1163,16 @@ pub(crate) async fn establish_transport(
                     p.password.as_deref(),
                 )
                 .await?;
-                (None, client::connect_stream(config, stream, make_handler()).await?)
+                (
+                    None,
+                    client::connect_stream(config, stream, make_handler()).await?,
+                )
             }
             Some(ref p) if p.proxy_type == "ssh" => {
                 let jump_auth = if let Some(ref key) = p.private_key {
                     crate::proxy::ssh::SshAuth::PrivateKey(key.clone())
                 } else {
-                    crate::proxy::ssh::SshAuth::Password(
-                        p.password.clone().unwrap_or_default(),
-                    )
+                    crate::proxy::ssh::SshAuth::Password(p.password.clone().unwrap_or_default())
                 };
                 let jump_result = crate::proxy::ssh::SshSession::connect(
                     &p.host,
@@ -1117,7 +1187,10 @@ pub(crate) async fn establish_transport(
                 let stream = channel.into_stream();
                 // Keep the jump session Arc alive — dropping it would close the tunnel
                 let session_arc = jump_result.session.clone();
-                (Some(session_arc), client::connect_stream(config, stream, make_handler()).await?)
+                (
+                    Some(session_arc),
+                    client::connect_stream(config, stream, make_handler()).await?,
+                )
             }
             Some(ref p) if p.proxy_type == "http" || p.proxy_type == "https" => {
                 // HTTP CONNECT tunnel
@@ -1130,11 +1203,15 @@ pub(crate) async fn establish_transport(
                     p.password.as_deref(),
                 )
                 .await?;
-                (None, client::connect_stream(config, stream, make_handler()).await?)
+                (
+                    None,
+                    client::connect_stream(config, stream, make_handler()).await?,
+                )
             }
-            _ => {
-                (None, client::connect(config, (host, port), make_handler()).await?)
-            }
+            _ => (
+                None,
+                client::connect(config, (host, port), make_handler()).await?,
+            ),
         })
     }
     .await;
@@ -1181,7 +1258,10 @@ pub(crate) async fn persist_connect_success(
             .execute(db)
             .await
             {
-                eprintln!("[ssh] failed to pin host-key fingerprint for {}: {e}", conn.id);
+                eprintln!(
+                    "[ssh] failed to pin host-key fingerprint for {}: {e}",
+                    conn.id
+                );
             }
         }
     }
@@ -1191,7 +1271,10 @@ pub(crate) async fn persist_connect_success(
         .execute(db)
         .await
     {
-        eprintln!("[ssh] failed to update last_connected_at for {}: {e}", conn.id);
+        eprintln!(
+            "[ssh] failed to update last_connected_at for {}: {e}",
+            conn.id
+        );
     }
 }
 
@@ -1285,12 +1368,12 @@ async fn run_session(
 }
 
 #[tauri::command]
-pub async fn ssh_disconnect(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> CmdResult<()> {
+pub async fn ssh_disconnect(state: State<'_, AppState>, session_id: String) -> CmdResult<()> {
     let sender = {
-        let sessions = state.ssh_sessions.read().map_err(|e| AppError::other(e.to_string()))?;
+        let sessions = state
+            .ssh_sessions
+            .read()
+            .map_err(|e| AppError::other(e.to_string()))?;
         sessions.get(&session_id).map(|s| s.writer.clone())
     };
     if let Some(tx) = sender {
@@ -1306,7 +1389,10 @@ pub async fn ssh_send_data(
     data: Vec<u8>,
 ) -> CmdResult<()> {
     let sender = {
-        let sessions = state.ssh_sessions.read().map_err(|e| AppError::other(e.to_string()))?;
+        let sessions = state
+            .ssh_sessions
+            .read()
+            .map_err(|e| AppError::other(e.to_string()))?;
         sessions.get(&session_id).map(|s| s.writer.clone())
     };
     if let Some(tx) = sender {
@@ -1323,7 +1409,10 @@ pub async fn ssh_resize(
     rows: u32,
 ) -> CmdResult<()> {
     let sender = {
-        let sessions = state.ssh_sessions.read().map_err(|e| AppError::other(e.to_string()))?;
+        let sessions = state
+            .ssh_sessions
+            .read()
+            .map_err(|e| AppError::other(e.to_string()))?;
         sessions.get(&session_id).map(|s| s.writer.clone())
     };
     if let Some(tx) = sender {
@@ -1333,11 +1422,11 @@ pub async fn ssh_resize(
 }
 
 #[tauri::command]
-pub async fn ssh_session_remove(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> CmdResult<()> {
-    let mut sessions = state.ssh_sessions.write().map_err(|e| AppError::other(e.to_string()))?;
+pub async fn ssh_session_remove(state: State<'_, AppState>, session_id: String) -> CmdResult<()> {
+    let mut sessions = state
+        .ssh_sessions
+        .write()
+        .map_err(|e| AppError::other(e.to_string()))?;
     sessions.remove(&session_id);
     Ok(())
 }
@@ -1349,7 +1438,10 @@ pub async fn ssh_respond_prompt(
     response: String,
 ) -> CmdResult<()> {
     let sender = {
-        let sessions = state.ssh_sessions.read().map_err(|e| AppError::other(e.to_string()))?;
+        let sessions = state
+            .ssh_sessions
+            .read()
+            .map_err(|e| AppError::other(e.to_string()))?;
         sessions.get(&session_id).map(|s| s.writer.clone())
     };
     if let Some(tx) = sender {

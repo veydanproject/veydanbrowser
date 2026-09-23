@@ -62,17 +62,27 @@ pub struct LargeFileConfig {
 
 impl Default for LargeFileConfig {
     fn default() -> Self {
-        Self { chunk_size: 8 * 1024 * 1024, parallelism: 3, resume: true }
+        Self {
+            chunk_size: 8 * 1024 * 1024,
+            parallelism: 3,
+            resume: true,
+        }
     }
 }
 
 impl LargeFileConfig {
     pub fn validate(&self) -> Result<()> {
         if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&self.chunk_size) {
-            return Err(SyncError::Format(format!("chunk size {} out of range", self.chunk_size)));
+            return Err(SyncError::Format(format!(
+                "chunk size {} out of range",
+                self.chunk_size
+            )));
         }
         if !(1..=MAX_PARALLELISM).contains(&self.parallelism) {
-            return Err(SyncError::Format(format!("parallelism {} out of range", self.parallelism)));
+            return Err(SyncError::Format(format!(
+                "parallelism {} out of range",
+                self.parallelism
+            )));
         }
         Ok(())
     }
@@ -112,7 +122,11 @@ impl CancelFlag {
     }
 
     pub(crate) fn check(&self) -> Result<()> {
-        if self.is_cancelled() { Err(SyncError::Cancelled) } else { Ok(()) }
+        if self.is_cancelled() {
+            Err(SyncError::Cancelled)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -131,7 +145,12 @@ pub trait LargeFileSink: Send + Sync {
     /// Bytes already staged for `manifest_id` by an earlier attempt; 0 when none.
     async fn staged_len(&self, manifest_id: &str) -> Result<u64>;
     /// Writer continuing at `offset` (0 restarts). `total` lets the sink check free space.
-    async fn open_staging(&self, manifest_id: &str, offset: u64, total: u64) -> Result<Box<dyn AsyncWrite + Send + Unpin>>;
+    async fn open_staging(
+        &self,
+        manifest_id: &str,
+        offset: u64,
+        total: u64,
+    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>>;
     /// Atomically publish the completed file.
     async fn commit(&self) -> Result<()>;
     /// Drop staging data.
@@ -156,9 +175,19 @@ pub struct LargeFileStore<'a> {
 }
 
 impl<'a> LargeFileStore<'a> {
-    pub fn new(storage: &'a dyn Storage, vault_id: &'a str, keys: &'a Keys, config: LargeFileConfig) -> Result<Self> {
+    pub fn new(
+        storage: &'a dyn Storage,
+        vault_id: &'a str,
+        keys: &'a Keys,
+        config: LargeFileConfig,
+    ) -> Result<Self> {
         config.validate()?;
-        Ok(Self { storage, vault_id, keys, config })
+        Ok(Self {
+            storage,
+            vault_id,
+            keys,
+            config,
+        })
     }
 
     pub fn config(&self) -> &LargeFileConfig {
@@ -166,7 +195,12 @@ impl<'a> LargeFileStore<'a> {
     }
 
     /// Chunk, encrypt and store `source`; existing chunks are not sent again.
-    pub async fn upload(&self, source: &dyn LargeFileSource, progress: ProgressFn<'_>, cancel: &CancelFlag) -> Result<LargeFileRef> {
+    pub async fn upload(
+        &self,
+        source: &dyn LargeFileSource,
+        progress: ProgressFn<'_>,
+        cancel: &CancelFlag,
+    ) -> Result<LargeFileRef> {
         transfer::upload(self, source, progress, cancel).await
     }
 
@@ -193,7 +227,12 @@ impl<'a> LargeFileStore<'a> {
     }
 
     /// Re-hash `source` and compare with the stored manifest.
-    pub async fn verify(&self, reference: &LargeFileRef, source: &dyn LargeFileSource, cancel: &CancelFlag) -> Result<()> {
+    pub async fn verify(
+        &self,
+        reference: &LargeFileRef,
+        source: &dyn LargeFileSource,
+        cancel: &CancelFlag,
+    ) -> Result<()> {
         transfer::verify(self, reference, source, cancel).await
     }
 
@@ -216,17 +255,21 @@ impl<'a> LargeFileStore<'a> {
 
     async fn read_manifest(&self, reference: &LargeFileRef) -> Result<manifest::ManifestV2> {
         if reference.version != FORMAT_VERSION {
-            return Err(SyncError::Format(format!("unsupported large file version {}", reference.version)));
+            return Err(SyncError::Format(format!(
+                "unsupported large file version {}",
+                reference.version
+            )));
         }
         let key = crypto::manifest_key(&reference.manifest_id);
-        let bytes = self
-            .storage
-            .get(&key)
-            .await?
-            .ok_or_else(|| SyncError::Storage(format!("manifest {} not found", reference.manifest_id)))?;
+        let bytes = self.storage.get(&key).await?.ok_or_else(|| {
+            SyncError::Storage(format!("manifest {} not found", reference.manifest_id))
+        })?;
         let m = crypto::open_manifest(self.keys, self.vault_id, &reference.manifest_id, &bytes)?;
         if m.size != reference.size || m.file_id != reference.file_id {
-            return Err(SyncError::Integrity(format!("manifest {} does not match reference", reference.manifest_id)));
+            return Err(SyncError::Integrity(format!(
+                "manifest {} does not match reference",
+                reference.manifest_id
+            )));
         }
         Ok(m)
     }

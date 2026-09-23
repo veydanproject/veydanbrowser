@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
+use super::models::*;
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
-use std::collections::HashMap;
-use super::models::*;
 use chrono::Utc;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 // ── Tag helpers ───────────────────────────────────────────────────────────────
@@ -62,12 +62,11 @@ pub(crate) async fn fetch_note_folder_ids(
 pub(crate) async fn fetch_all_note_folder_ids_map(
     db: &sqlx::Pool<sqlx::Sqlite>,
 ) -> Result<HashMap<String, Vec<String>>, AppError> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT note_id, folder_id FROM note_folder_links",
-    )
-    .fetch_all(db)
-    .await
-    .map_err(AppError::db)?;
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT note_id, folder_id FROM note_folder_links")
+            .fetch_all(db)
+            .await
+            .map_err(AppError::db)?;
 
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     for (note_id, folder_id) in rows {
@@ -82,12 +81,11 @@ pub(crate) async fn upsert_tag(
     db: &sqlx::Pool<sqlx::Sqlite>,
 ) -> Result<String, AppError> {
     let now = Utc::now().to_rfc3339();
-    let existing: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM note_tags WHERE name = ?")
-            .bind(name)
-            .fetch_optional(db)
-            .await
-            .map_err(AppError::db)?;
+    let existing: Option<(String,)> = sqlx::query_as("SELECT id FROM note_tags WHERE name = ?")
+        .bind(name)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::db)?;
 
     if let Some((id,)) = existing {
         return Ok(id);
@@ -181,10 +179,7 @@ pub async fn note_tag_create(
 }
 
 #[tauri::command]
-pub async fn note_tag_delete(
-    id: String,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<()> {
+pub async fn note_tag_delete(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
     sqlx::query("DELETE FROM note_tag_links WHERE tag_id = ?")
         .bind(&id)
         .execute(&state.db)
@@ -206,7 +201,9 @@ pub async fn note_tag_update(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<NoteTag> {
     let now = Utc::now().to_rfc3339();
-    let name = name.map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty());
+    let name = name
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| !n.is_empty());
     sqlx::query(
         "UPDATE note_tags SET
             name       = COALESCE(?, name),
@@ -232,4 +229,3 @@ pub async fn note_tag_update(
 
     Ok(tag)
 }
-

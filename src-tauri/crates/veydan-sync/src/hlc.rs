@@ -17,7 +17,10 @@ pub struct Hlc {
 impl Hlc {
     /// Sortable string: lexicographic order equals logical order.
     pub fn encode(&self) -> String {
-        format!("{:016x}-{:08x}-{}", self.wall_ms, self.counter, self.device_id)
+        format!(
+            "{:016x}-{:08x}-{}",
+            self.wall_ms, self.counter, self.device_id
+        )
     }
 
     pub fn decode(s: &str) -> Option<Hlc> {
@@ -25,7 +28,11 @@ impl Hlc {
         let wall_ms = u64::from_str_radix(parts.next()?, 16).ok()?;
         let counter = u32::from_str_radix(parts.next()?, 16).ok()?;
         let device_id = parts.next()?.to_string();
-        Some(Hlc { wall_ms, counter, device_id })
+        Some(Hlc {
+            wall_ms,
+            counter,
+            device_id,
+        })
     }
 }
 

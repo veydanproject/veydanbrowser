@@ -51,7 +51,9 @@ impl LargeFileSource for FileSource {
             .await
             .map_err(|e| SyncError::Source(e.to_string()))?;
         if skipped != offset {
-            return Err(SyncError::Source(format!("source shorter than offset {offset}")));
+            return Err(SyncError::Source(format!(
+                "source shorter than offset {offset}"
+            )));
         }
         Ok(Box::new(reader))
     }
@@ -63,7 +65,9 @@ pub struct PathSource(FileSource);
 impl PathSource {
     pub fn new(path: impl Into<PathBuf>) -> Result<Self> {
         let path: PathBuf = path.into();
-        let len = std::fs::metadata(&path).map_err(|e| SyncError::Source(format!("{}: {e}", path.display())))?.len();
+        let len = std::fs::metadata(&path)
+            .map_err(|e| SyncError::Source(format!("{}: {e}", path.display())))?
+            .len();
         let opener: Opener = Arc::new(move || std::fs::File::open(&path));
         Ok(Self(FileSource::new(opener, Some(len))))
     }
@@ -106,7 +110,11 @@ pub struct PathSink {
 impl PathSink {
     pub fn new(dest: impl Into<PathBuf>) -> Self {
         let dest: PathBuf = dest.into();
-        Self { part: with_suffix(&dest, PART_SUFFIX), sidecar: with_suffix(&dest, SIDECAR_SUFFIX), dest }
+        Self {
+            part: with_suffix(&dest, PART_SUFFIX),
+            sidecar: with_suffix(&dest, SIDECAR_SUFFIX),
+            dest,
+        }
     }
 
     pub fn is_staging_file(name: &str) -> bool {
@@ -141,7 +149,12 @@ impl LargeFileSink for PathSink {
         Ok(std::fs::metadata(&self.part).map(|m| m.len()).unwrap_or(0))
     }
 
-    async fn open_staging(&self, manifest_id: &str, offset: u64, total: u64) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
+    async fn open_staging(
+        &self,
+        manifest_id: &str,
+        offset: u64,
+        total: u64,
+    ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
         if let Some(parent) = self.dest.parent() {
             std::fs::create_dir_all(parent).map_err(Self::disk)?;
         }
@@ -151,9 +164,16 @@ impl LargeFileSink for PathSink {
                 return Err(SyncError::Disk(format!("need {need} bytes, {free} free")));
             }
         }
-        let sidecar = serde_json::to_vec(&Sidecar { manifest_id: manifest_id.to_string() })?;
+        let sidecar = serde_json::to_vec(&Sidecar {
+            manifest_id: manifest_id.to_string(),
+        })?;
         std::fs::write(&self.sidecar, sidecar).map_err(Self::disk)?;
-        let file = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(&self.part).map_err(Self::disk)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&self.part)
+            .map_err(Self::disk)?;
         file.set_len(offset).map_err(Self::disk)?;
         let mut file = file;
         file.seek(SeekFrom::Start(offset)).map_err(Self::disk)?;
@@ -197,9 +217,20 @@ pub fn available_space(dir: &Path) -> Option<u64> {
 pub fn available_space(dir: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let mut free_to_caller: u64 = 0;
-    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free_to_caller, std::ptr::null_mut(), std::ptr::null_mut()) };
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_to_caller,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
     (ok != 0).then_some(free_to_caller)
 }
 

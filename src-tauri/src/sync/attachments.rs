@@ -15,11 +15,12 @@
 use super::config::load_config;
 use super::notes::{docs_dir, valid_id, write_raw};
 use super::state::{
-    load_attachment_state, load_attachment_states, load_deferred_attachments, save_attachment_state, AttachmentSyncState,
+    load_attachment_state, load_attachment_states, load_deferred_attachments,
+    save_attachment_state, AttachmentSyncState,
 };
 use crate::commands::notes::{
-    attachments_dir_for, is_staging_name, load_attachment_policy, resolve_note_abs_path, safe_file_name,
-    NoteAttachmentPolicy,
+    attachments_dir_for, is_staging_name, load_attachment_policy, resolve_note_abs_path,
+    safe_file_name, NoteAttachmentPolicy,
 };
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
@@ -28,7 +29,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 use veydan_sync::{
-    sha256_hex, Engine, Hlc, HlcClock, LargeFileRef, LargeFileStore, Op, PathSink, PathSource, Progress, SyncError,
+    sha256_hex, Engine, Hlc, HlcClock, LargeFileRef, LargeFileStore, Op, PathSink, PathSource,
+    Progress, SyncError,
 };
 
 pub const ENTITY: &str = "note_attachment";
@@ -89,7 +91,13 @@ fn is_v2_head(head_blob: &str) -> bool {
     head_blob.starts_with(LF_HEAD_PREFIX)
 }
 
-fn op_with(entity_type: &str, note_id: &str, name: &str, hlc: Hlc, payload: AttachmentPayload) -> Op {
+fn op_with(
+    entity_type: &str,
+    note_id: &str,
+    name: &str,
+    hlc: Hlc,
+    payload: AttachmentPayload,
+) -> Op {
     Op {
         entity_type: entity_type.into(),
         entity_id: entity_id(note_id, name),
@@ -100,16 +108,34 @@ fn op_with(entity_type: &str, note_id: &str, name: &str, hlc: Hlc, payload: Atta
 }
 
 fn base_payload(note_id: &str, name: &str) -> AttachmentPayload {
-    AttachmentPayload { note_id: note_id.into(), name: name.into(), ..Default::default() }
+    AttachmentPayload {
+        note_id: note_id.into(),
+        name: name.into(),
+        ..Default::default()
+    }
 }
 
 fn make_op_v1(note_id: &str, name: &str, hlc: Hlc, blob: String, size: u64) -> Op {
-    op_with(ENTITY, note_id, name, hlc, AttachmentPayload { blob, size, ..base_payload(note_id, name) })
+    op_with(
+        ENTITY,
+        note_id,
+        name,
+        hlc,
+        AttachmentPayload {
+            blob,
+            size,
+            ..base_payload(note_id, name)
+        },
+    )
 }
 
 fn make_op_v2(note_id: &str, name: &str, hlc: Hlc, lf: LargeFileRef) -> Op {
-    let payload =
-        AttachmentPayload { size: lf.size, lf_refs: vec![lf.manifest_id.clone()], lf: Some(lf), ..base_payload(note_id, name) };
+    let payload = AttachmentPayload {
+        size: lf.size,
+        lf_refs: vec![lf.manifest_id.clone()],
+        lf: Some(lf),
+        ..base_payload(note_id, name)
+    };
     op_with(ENTITY_V2, note_id, name, hlc, payload)
 }
 
@@ -128,14 +154,19 @@ async fn attachment_dir(state: &AppState, note_id: &str) -> CmdResult<PathBuf> {
         .await
         .map_err(AppError::db)?;
     Ok(match row {
-        Some((file_path,)) => attachments_dir_for(&resolve_note_abs_path(&state.app_data_dir, &file_path), note_id),
+        Some((file_path,)) => attachments_dir_for(
+            &resolve_note_abs_path(&state.app_data_dir, &file_path),
+            note_id,
+        ),
         None => docs_dir(state).join("attachments").join(note_id),
     })
 }
 
 /// Attachment names in a directory (sanitizer-safe, no staging files).
 fn dir_names(dir: &Path) -> Vec<String> {
-    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
     rd.filter_map(|e| e.ok())
         .filter(|e| e.path().is_file())
         .filter_map(|e| e.file_name().to_str().map(str::to_string))
@@ -143,7 +174,13 @@ fn dir_names(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-fn emit_transfer(app: &AppHandle, note_id: &str, name: &str, direction: &'static str, p: &Progress) {
+fn emit_transfer(
+    app: &AppHandle,
+    note_id: &str,
+    name: &str,
+    direction: &'static str,
+    p: &Progress,
+) {
     let _ = app.emit(
         EVENT_TRANSFER,
         TransferEvent {
@@ -159,7 +196,13 @@ fn emit_transfer(app: &AppHandle, note_id: &str, name: &str, direction: &'static
     );
 }
 
-fn emit_transfer_end(app: &AppHandle, note_id: &str, name: &str, direction: &'static str, error: Option<String>) {
+fn emit_transfer_end(
+    app: &AppHandle,
+    note_id: &str,
+    name: &str,
+    direction: &'static str,
+    error: Option<String>,
+) {
     let _ = app.emit(
         EVENT_TRANSFER,
         TransferEvent {
@@ -199,9 +242,16 @@ pub async fn collect_local_changes(
     clock: &mut HlcClock,
 ) -> CmdResult<LocalChanges> {
     let db = &state.db;
-    let rows: Vec<(String, String)> = sqlx::query_as("SELECT id, file_path FROM notes").fetch_all(db).await.map_err(AppError::db)?;
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT id, file_path FROM notes")
+        .fetch_all(db)
+        .await
+        .map_err(AppError::db)?;
     let mut states = load_attachment_states(db).await?;
-    let mut out = LocalChanges { ops: Vec::new(), states: Vec::new(), errors: Vec::new() };
+    let mut out = LocalChanges {
+        ops: Vec::new(),
+        states: Vec::new(),
+        errors: Vec::new(),
+    };
     let policy = load_attachment_policy(db).await;
     let store = open_store(engine, state).await?;
 
@@ -209,7 +259,12 @@ pub async fn collect_local_changes(
     // of notes whose row has not been created yet.
     let mut dirs: Vec<(String, PathBuf)> = rows
         .iter()
-        .map(|(id, fp)| (id.clone(), attachments_dir_for(&resolve_note_abs_path(&state.app_data_dir, fp), id)))
+        .map(|(id, fp)| {
+            (
+                id.clone(),
+                attachments_dir_for(&resolve_note_abs_path(&state.app_data_dir, fp), id),
+            )
+        })
         .collect();
     let known: HashSet<&String> = rows.iter().map(|(id, _)| id).collect();
     if let Ok(rd) = std::fs::read_dir(docs_dir(state).join("attachments")) {
@@ -224,24 +279,38 @@ pub async fn collect_local_changes(
     for (note_id, dir) in &dirs {
         for name in dir_names(dir) {
             let path = dir.join(&name);
-            let Some(hash) = state.sync.file_hashes.file_hash(&path) else { continue };
+            let Some(hash) = state.sync.file_hashes.file_hash(&path) else {
+                continue;
+            };
             let prev = states.remove(&(note_id.clone(), name.clone()));
-            if prev.as_ref().map(|s| s.synced_hash == hash && !s.deleted).unwrap_or(false) {
+            if prev
+                .as_ref()
+                .map(|s| s.synced_hash == hash && !s.deleted)
+                .unwrap_or(false)
+            {
                 continue;
             }
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             let published = if policy.uses_large_files(size) {
                 match upload_large(&store, app, state, &policy, note_id, &name, &path, size).await {
-                    Ok(lf) => (make_op_v2(note_id, &name, clock.now(), lf.clone()), head_for_v2(&lf.manifest_id)),
+                    Ok(lf) => (
+                        make_op_v2(note_id, &name, clock.now(), lf.clone()),
+                        head_for_v2(&lf.manifest_id),
+                    ),
                     Err(e) => {
                         out.errors.push(format!("{name}: {e}"));
                         continue;
                     }
                 }
             } else {
-                let Ok(raw) = std::fs::read(&path) else { continue };
+                let Ok(raw) = std::fs::read(&path) else {
+                    continue;
+                };
                 let blob = engine.put_blob(&raw).await.map_err(AppError::other)?;
-                (make_op_v1(note_id, &name, clock.now(), blob.clone(), raw.len() as u64), blob)
+                (
+                    make_op_v1(note_id, &name, clock.now(), blob.clone(), raw.len() as u64),
+                    blob,
+                )
             };
             let (op, head_blob) = published;
             out.states.push(AttachmentSyncState {
@@ -259,10 +328,18 @@ pub async fn collect_local_changes(
 
     // Whatever is left in `states` is no longer on disk. Deferred files were
     // never downloaded, so their absence is not a delete.
-    for (_, mut st) in states.into_iter().filter(|(_, s)| !s.deleted && s.deferred.is_none()) {
+    for (_, mut st) in states
+        .into_iter()
+        .filter(|(_, s)| !s.deleted && s.deferred.is_none())
+    {
         let hlc = clock.now();
-        let entity_type = if is_v2_head(&st.head_blob) { ENTITY_V2 } else { ENTITY };
-        out.ops.push(delete_op(entity_type, &st.note_id, &st.name, hlc.clone()));
+        let entity_type = if is_v2_head(&st.head_blob) {
+            ENTITY_V2
+        } else {
+            ENTITY
+        };
+        out.ops
+            .push(delete_op(entity_type, &st.note_id, &st.name, hlc.clone()));
         st.deleted = true;
         st.head_hlc = Some(hlc);
         out.states.push(st);
@@ -292,11 +369,20 @@ async fn upload_large(
                 emit_transfer(app, note_id, name, "up", &p);
                 super::emit_progress(app, "attachments_up", 20, 0, 0, name);
             };
-            store.upload(&source, &progress, &cancel).await.map_err(AppError::other)
+            store
+                .upload(&source, &progress, &cancel)
+                .await
+                .map_err(AppError::other)
         }
     };
     state.sync.end_transfer(&key);
-    emit_transfer_end(app, note_id, name, "up", result.as_ref().err().map(|e| e.to_string()));
+    emit_transfer_end(
+        app,
+        note_id,
+        name,
+        "up",
+        result.as_ref().err().map(|e| e.to_string()),
+    );
     result
 }
 
@@ -322,15 +408,23 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
     let policy = load_attachment_policy(db).await;
 
     for op in ops.iter().filter(|op| is_ours(op)) {
-        let payload: AttachmentPayload = serde_json::from_value(op.payload.clone()).unwrap_or_default();
+        let payload: AttachmentPayload =
+            serde_json::from_value(op.payload.clone()).unwrap_or_default();
         if !valid_id(&payload.note_id) || !valid_name(&payload.name) {
             continue;
         }
         let prev = load_attachment_state(db, &payload.note_id, &payload.name).await?;
-        if prev.as_ref().and_then(|s| s.head_hlc.as_ref()).map(|h| *h >= op.hlc).unwrap_or(false) {
+        if prev
+            .as_ref()
+            .and_then(|s| s.head_hlc.as_ref())
+            .map(|h| *h >= op.hlc)
+            .unwrap_or(false)
+        {
             continue;
         }
-        let path = attachment_dir(&state, &payload.note_id).await?.join(&payload.name);
+        let path = attachment_dir(&state, &payload.note_id)
+            .await?
+            .join(&payload.name);
         let mut st = prev.unwrap_or_else(|| AttachmentSyncState {
             note_id: payload.note_id.clone(),
             name: payload.name.clone(),
@@ -352,10 +446,19 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
         }
 
         current += 1;
-        super::emit_progress(app, "apply", super::progress_pct(40, 44, current, total.max(1)), current, total, &payload.name);
+        super::emit_progress(
+            app,
+            "apply",
+            super::progress_pct(40, 44, current, total.max(1)),
+            current,
+            total,
+            &payload.name,
+        );
 
         let applied = if op.entity_type == ENTITY_V2 {
-            let Some(lf) = payload.lf.as_ref() else { continue };
+            let Some(lf) = payload.lf.as_ref() else {
+                continue;
+            };
             apply_large(&store, app, &state, &policy, &payload, lf, &path, &mut st).await?
         } else {
             apply_blob(engine, &payload, &path, &mut st).await?
@@ -383,9 +486,21 @@ enum Applied {
     Retry(String),
 }
 
-async fn apply_blob(engine: &Engine, payload: &AttachmentPayload, path: &Path, st: &mut AttachmentSyncState) -> CmdResult<Applied> {
-    let Some(raw) = engine.get_blob(&payload.blob).await.map_err(AppError::other)? else {
-        return Ok(Applied::Retry(format!("blob for attachment {}/{} not available yet", payload.note_id, payload.name)));
+async fn apply_blob(
+    engine: &Engine,
+    payload: &AttachmentPayload,
+    path: &Path,
+    st: &mut AttachmentSyncState,
+) -> CmdResult<Applied> {
+    let Some(raw) = engine
+        .get_blob(&payload.blob)
+        .await
+        .map_err(AppError::other)?
+    else {
+        return Ok(Applied::Retry(format!(
+            "blob for attachment {}/{} not available yet",
+            payload.note_id, payload.name
+        )));
     };
     st.synced_hash = sha256_hex(&raw);
     st.head_blob = payload.blob.clone();
@@ -424,8 +539,18 @@ async fn apply_large(
     match result {
         Ok(()) => {}
         // Not fully published yet, or the user paused it: come back next cycle.
-        Err(SyncError::Storage(msg)) => return Ok(Applied::Retry(format!("{}/{}: {msg}", payload.note_id, payload.name))),
-        Err(SyncError::Cancelled) => return Ok(Applied::Retry(format!("{}/{} cancelled", payload.note_id, payload.name))),
+        Err(SyncError::Storage(msg)) => {
+            return Ok(Applied::Retry(format!(
+                "{}/{}: {msg}",
+                payload.note_id, payload.name
+            )))
+        }
+        Err(SyncError::Cancelled) => {
+            return Ok(Applied::Retry(format!(
+                "{}/{} cancelled",
+                payload.note_id, payload.name
+            )))
+        }
         Err(e) => return Err(AppError::other(e)),
     }
     st.synced_hash = state.sync.file_hashes.file_hash(path).unwrap_or_default();
@@ -453,7 +578,13 @@ async fn download_large(
     };
     let result = store.download(lf, &sink, &progress, &cancel).await;
     state.sync.end_transfer(&key);
-    emit_transfer_end(app, note_id, name, "down", result.as_ref().err().map(|e| e.to_string()));
+    emit_transfer_end(
+        app,
+        note_id,
+        name,
+        "down",
+        result.as_ref().err().map(|e| e.to_string()),
+    );
     result
 }
 
@@ -463,25 +594,43 @@ pub struct DeferredAttachment {
     pub size: u64,
 }
 
-pub async fn deferred_for_note(state: &AppState, note_id: &str) -> CmdResult<Vec<DeferredAttachment>> {
+pub async fn deferred_for_note(
+    state: &AppState,
+    note_id: &str,
+) -> CmdResult<Vec<DeferredAttachment>> {
     Ok(load_deferred_attachments(&state.db, note_id)
         .await?
         .into_iter()
-        .filter_map(|s| s.deferred.map(|lf| DeferredAttachment { name: s.name, size: lf.size }))
+        .filter_map(|s| {
+            s.deferred.map(|lf| DeferredAttachment {
+                name: s.name,
+                size: lf.size,
+            })
+        })
         .collect())
 }
 
 /// Download one deferred attachment on request; the file then syncs like any other.
-pub async fn fetch_deferred(app: &AppHandle, state: &AppState, note_id: &str, name: &str) -> CmdResult<()> {
+pub async fn fetch_deferred(
+    app: &AppHandle,
+    state: &AppState,
+    note_id: &str,
+    name: &str,
+) -> CmdResult<()> {
     let mut st = load_attachment_state(&state.db, note_id, name)
         .await?
         .filter(|s| !s.deleted)
         .ok_or_else(|| AppError::not_found(format!("attachment {note_id}/{name}")))?;
-    let lf = st.deferred.clone().ok_or_else(|| AppError::other("attachment is already downloaded"))?;
+    let lf = st
+        .deferred
+        .clone()
+        .ok_or_else(|| AppError::other("attachment is already downloaded"))?;
     let engine = super::open_engine(state).await?;
     let store = open_store(&engine, state).await?;
     let path = attachment_dir(state, note_id).await?.join(name);
-    download_large(&store, app, state, note_id, name, &lf, &path).await.map_err(AppError::other)?;
+    download_large(&store, app, state, note_id, name, &lf, &path)
+        .await
+        .map_err(AppError::other)?;
     st.synced_hash = state.sync.file_hashes.file_hash(&path).unwrap_or_default();
     st.deferred = None;
     save_attachment_state(&state.db, &st).await?;

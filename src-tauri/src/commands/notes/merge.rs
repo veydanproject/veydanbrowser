@@ -26,11 +26,21 @@ pub struct MergeBlock {
 
 impl MergeBlock {
     fn normal(text: String) -> Self {
-        Self { kind: "normal".into(), text, ours: String::new(), theirs: String::new() }
+        Self {
+            kind: "normal".into(),
+            text,
+            ours: String::new(),
+            theirs: String::new(),
+        }
     }
 
     fn conflict(ours: String, theirs: String) -> Self {
-        Self { kind: "conflict".into(), text: String::new(), ours, theirs }
+        Self {
+            kind: "conflict".into(),
+            text: String::new(),
+            ours,
+            theirs,
+        }
     }
 
     fn is_conflict(&self) -> bool {
@@ -54,7 +64,11 @@ impl MergeResult {
         if self.has_conflicts || o == t {
             return self;
         }
-        Self { content: self.content, has_conflicts: true, blocks: vec![MergeBlock::conflict(unescape(&o), unescape(&t))] }
+        Self {
+            content: self.content,
+            has_conflicts: true,
+            blocks: vec![MergeBlock::conflict(unescape(&o), unescape(&t))],
+        }
     }
 }
 
@@ -67,7 +81,9 @@ fn marker(ch: char) -> String {
 }
 
 fn looks_like_marker(line: &str) -> bool {
-    ['<', '=', '>'].iter().any(|&c| line.starts_with(&marker(c)))
+    ['<', '=', '>']
+        .iter()
+        .any(|&c| line.starts_with(&marker(c)))
 }
 
 /// LF endings, a final newline, and user lines that mimic a marker escaped.
@@ -86,28 +102,44 @@ fn prepare(s: &str) -> String {
 }
 
 fn unescape(s: &str) -> String {
-    s.split_inclusive('\n').map(|l| l.strip_prefix(ESCAPE).unwrap_or(l)).collect()
+    s.split_inclusive('\n')
+        .map(|l| l.strip_prefix(ESCAPE).unwrap_or(l))
+        .collect()
 }
 
 pub fn merge3(ancestor: &str, ours: &str, theirs: &str) -> MergeResult {
     let (a, o, t) = (prepare(ancestor), prepare(ours), prepare(theirs));
     let mut opts = MergeOptions::new();
-    opts.set_conflict_style(ConflictStyle::Merge).set_conflict_marker_length(MARKER_LEN);
+    opts.set_conflict_style(ConflictStyle::Merge)
+        .set_conflict_marker_length(MARKER_LEN);
     match opts.merge(&a, &o, &t) {
         Ok(content) => {
             let content = unescape(&content);
-            MergeResult { blocks: vec![MergeBlock::normal(content.clone())], content, has_conflicts: false }
+            MergeResult {
+                blocks: vec![MergeBlock::normal(content.clone())],
+                content,
+                has_conflicts: false,
+            }
         }
         Err(marked) => {
             let mut blocks: Vec<MergeBlock> = parse_blocks(&marked)
                 .into_iter()
-                .map(|b| MergeBlock { text: unescape(&b.text), ours: unescape(&b.ours), theirs: unescape(&b.theirs), ..b })
+                .map(|b| MergeBlock {
+                    text: unescape(&b.text),
+                    ours: unescape(&b.ours),
+                    theirs: unescape(&b.theirs),
+                    ..b
+                })
                 .collect();
             // Never hand the UI "conflict, but nothing to choose": fall back to whole texts.
             if !blocks.iter().any(MergeBlock::is_conflict) {
                 blocks = vec![MergeBlock::conflict(unescape(&o), unescape(&t))];
             }
-            MergeResult { blocks, content: unescape(&marked), has_conflicts: true }
+            MergeResult {
+                blocks,
+                content: unescape(&marked),
+                has_conflicts: true,
+            }
         }
     }
 }
@@ -133,7 +165,11 @@ impl Parser {
         let mut found: Option<(usize, Marker)> = None;
         let candidates = [
             (Marker::Start, '<', self.ours.is_none()),
-            (Marker::Sep, '=', self.ours.is_some() && self.theirs.is_none()),
+            (
+                Marker::Sep,
+                '=',
+                self.ours.is_some() && self.theirs.is_none(),
+            ),
             (Marker::End, '>', self.theirs.is_some()),
         ];
         for (kind, ch, valid) in candidates {
@@ -166,13 +202,17 @@ impl Parser {
 
     fn flush_normal(&mut self) {
         if !self.normal.is_empty() {
-            self.blocks.push(MergeBlock::normal(std::mem::take(&mut self.normal)));
+            self.blocks
+                .push(MergeBlock::normal(std::mem::take(&mut self.normal)));
         }
     }
 
     fn close_conflict(&mut self) {
         if let Some(ours) = self.ours.take() {
-            self.blocks.push(MergeBlock::conflict(ours, self.theirs.take().unwrap_or_default()));
+            self.blocks.push(MergeBlock::conflict(
+                ours,
+                self.theirs.take().unwrap_or_default(),
+            ));
         }
     }
 

@@ -23,7 +23,11 @@ fn read_window_size_from_xulstore(firefox_profile_dir: &std::path::Path) -> Opti
         .get("main-window")?;
     let w: i64 = win.get("width")?.as_str()?.parse().ok()?;
     let h: i64 = win.get("height")?.as_str()?.parse().ok()?;
-    if w > 0 && h > 0 { Some((w, h)) } else { None }
+    if w > 0 && h > 0 {
+        Some((w, h))
+    } else {
+        None
+    }
 }
 
 const UI_STATE_PREF: &str = "user_pref(\"browser.uiCustomization.state\", \"";
@@ -73,7 +77,10 @@ fn repair_placements(state: &mut serde_json::Value) -> bool {
         "TabsToolbar".into(),
         serde_json::json!(["tabbrowser-tabs", "new-tab-button", "alltabs-button"]),
     );
-    placements.insert("PersonalToolbar".into(), serde_json::json!([BOOKMARKS_WIDGET]));
+    placements.insert(
+        "PersonalToolbar".into(),
+        serde_json::json!([BOOKMARKS_WIDGET]),
+    );
     true
 }
 
@@ -92,7 +99,10 @@ fn pin_notes_widget(state: &mut serde_json::Value) -> bool {
     if nav_bar.contains(&widget) {
         return false;
     }
-    match nav_bar.iter().position(|id| id.as_str() == Some("unified-extensions-button")) {
+    match nav_bar
+        .iter()
+        .position(|id| id.as_str() == Some("unified-extensions-button"))
+    {
         Some(pos) => nav_bar.insert(pos, widget),
         None => nav_bar.push(widget),
     }
@@ -110,7 +120,11 @@ fn repair_ui_customization_state(firefox_profile_dir: &std::path::Path) {
     };
     let value_start = start + UI_STATE_PREF.len();
     let rest = &content[value_start..];
-    let line = rest.split('\n').next().unwrap_or(rest).trim_end_matches('\r');
+    let line = rest
+        .split('\n')
+        .next()
+        .unwrap_or(rest)
+        .trim_end_matches('\r');
     let Some(raw) = line.strip_suffix("\");") else {
         return;
     };
@@ -178,6 +192,7 @@ pub async fn launch_profile(
 
     let pid = browser_launch::launch(
         profile.id.clone(),
+        profile.locale.clone(),
         profile_path,
         binary_path,
         profile.timezone.clone(),

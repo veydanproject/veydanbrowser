@@ -31,48 +31,45 @@ use commands::backup::{
     start_backup_scheduler, BackupManager,
 };
 #[cfg(desktop)]
-use commands::settings::{
-    app_locale_get, app_locale_set, tray_set_labels, tray_settings_get, tray_settings_set, window_minimize,
-};
-#[cfg(desktop)]
 use commands::camoufox::{
     camoufox_download, camoufox_download_cancel, camoufox_download_state, camoufox_latest_version,
     camoufox_status, DownloadManager,
 };
 use commands::demo::{app_clear_data, demo_seed};
 use commands::notes::{
-    note_archive, note_create, note_delete, note_delete_many, note_trash_empty, note_draft_discard,
-    note_draft_get, note_draft_save, note_get,
-    note_list, note_nav, note_reindex, note_restore, note_search,
-    note_set_tags, note_sync, note_tag_list, note_tag_create, note_tag_delete, note_tag_update,
-    note_folder_list, note_folder_create, note_folder_update, note_folder_delete,
-    note_add_folder, note_remove_folder, note_set_folder, note_add_binding, note_remove_binding,
-    note_update,
-    note_smart_view_create, note_smart_view_delete, note_smart_view_list,
-    note_smart_view_update,
-    note_backlinks, note_links, note_related, note_resolve_link,
-    notes_lock_status, notes_lock_set, notes_lock_timeout_set, notes_lock_unlock, notes_lock_lock, notes_lock_touch,
-    note_history_list, note_history_get, note_history_diff,
-    note_history_restore, note_history_merge,
-    note_attachment_add_from_path, note_attachment_fetch, note_attachment_list, note_attachment_delete, note_attachment_read,
-    note_attachment_save,
-    notes_attachment_policy_get, notes_attachment_policy_set,
+    note_add_binding, note_add_folder, note_archive, note_attachment_add_from_path,
+    note_attachment_delete, note_attachment_fetch, note_attachment_list, note_attachment_read,
+    note_attachment_save, note_backlinks, note_create, note_delete, note_delete_many,
+    note_draft_discard, note_draft_get, note_draft_save, note_folder_create, note_folder_delete,
+    note_folder_list, note_folder_update, note_get, note_history_diff, note_history_get,
+    note_history_list, note_history_merge, note_history_restore, note_links, note_list, note_nav,
+    note_reindex, note_related, note_remove_binding, note_remove_folder, note_resolve_link,
+    note_restore, note_search, note_set_folder, note_set_tags, note_smart_view_create,
+    note_smart_view_delete, note_smart_view_list, note_smart_view_update, note_sync,
+    note_tag_create, note_tag_delete, note_tag_list, note_tag_update, note_trash_empty,
+    note_update, notes_attachment_policy_get, notes_attachment_policy_set, notes_lock_lock,
+    notes_lock_set, notes_lock_status, notes_lock_timeout_set, notes_lock_touch, notes_lock_unlock,
+};
+#[cfg(desktop)]
+use commands::settings::{
+    app_locale_get, app_locale_set, tray_set_labels, tray_settings_get, tray_settings_set,
+    window_minimize,
 };
 // Desktop only: OS integration (open in editor / file manager, clipboard, dialogs, extra windows).
 #[cfg(desktop)]
-use commands::notes::{
-    clipboard_file_paths, note_attachment_add, note_attachment_open,
-    note_attachments_gc, note_export, note_import, note_open_external, note_open_folder,
-    note_open_window, notes_capture_rules_get, notes_capture_rules_set, notes_get_dir, notes_set_dir,
-    open_quick_capture, quick_capture_shortcut_get, quick_capture_shortcut_set,
+use commands::fs::{
+    fs_chmod, fs_create_file, fs_delete, fs_home, fs_list, fs_mkdir, fs_rename, fs_stat,
 };
 use commands::media::media_grant_access;
+#[cfg(desktop)]
+use commands::notes::{
+    clipboard_file_paths, note_attachment_add, note_attachment_open, note_attachments_gc,
+    note_export, note_import, note_open_external, note_open_folder, note_open_window,
+    notes_capture_rules_get, notes_capture_rules_set, notes_get_dir, notes_set_dir,
+    open_quick_capture, quick_capture_shortcut_get, quick_capture_shortcut_set,
+};
 use commands::password::{
     pwgen_history_add, pwgen_history_clear, pwgen_history_list, pwgen_history_trim,
-};
-use commands::totp::{
-    totp_add, totp_delete, totp_generate_code, totp_generate_codes, totp_list, totp_preview_uri,
-    totp_update,
 };
 #[cfg(desktop)]
 use commands::profiles::*;
@@ -80,42 +77,42 @@ use commands::profiles::*;
 use commands::proxies::*;
 #[cfg(desktop)]
 use commands::sftp::{
-    sftp_chmod, sftp_connect, sftp_create_file, sftp_delete, sftp_disconnect, sftp_home,
-    sftp_list, sftp_mkdir, sftp_rename, sftp_respond_prompt, sftp_session_list, sftp_stat,
-    SftpSessions,
-};
-#[cfg(desktop)]
-use commands::transfer::{sftp_transfer_cancel, sftp_transfer_start};
-#[cfg(desktop)]
-use commands::fs::{
-    fs_chmod, fs_create_file, fs_delete, fs_home, fs_list, fs_mkdir, fs_rename, fs_stat,
+    sftp_chmod, sftp_connect, sftp_create_file, sftp_delete, sftp_disconnect, sftp_home, sftp_list,
+    sftp_mkdir, sftp_rename, sftp_respond_prompt, sftp_session_list, sftp_stat, SftpSessions,
 };
 #[cfg(desktop)]
 use commands::ssh::{
     ssh_connect, ssh_connection_create, ssh_connection_delete, ssh_connection_get,
-    ssh_connection_list, ssh_connection_trust_fingerprint, ssh_connection_update,
-    ssh_disconnect, ssh_resize, ssh_send_data, ssh_session_list, ssh_session_remove,
-    ssh_respond_prompt, SshSessions,
+    ssh_connection_list, ssh_connection_trust_fingerprint, ssh_connection_update, ssh_disconnect,
+    ssh_resize, ssh_respond_prompt, ssh_send_data, ssh_session_list, ssh_session_remove,
+    SshSessions,
 };
 #[cfg(desktop)]
 use commands::ssh_keys::{
-    ssh_key_delete, ssh_key_export_private, ssh_key_generate, ssh_key_get, ssh_key_import, ssh_key_list,
-    ssh_key_update,
+    ssh_key_delete, ssh_key_export_private, ssh_key_generate, ssh_key_get, ssh_key_import,
+    ssh_key_list, ssh_key_update,
 };
+use commands::totp::{
+    totp_add, totp_delete, totp_generate_code, totp_generate_codes, totp_list, totp_preview_uri,
+    totp_update,
+};
+#[cfg(desktop)]
+use commands::transfer::{sftp_transfer_cancel, sftp_transfer_start};
 #[cfg(desktop)]
 use commands::workspaces::*;
 use sqlx::{Pool, Sqlite};
-use sync::{
-    note_sync_info, start_sync_scheduler, sync_attachment_cancel, sync_change_passphrase, sync_conflict_get,
-    sync_conflict_resolve, sync_create_vault, sync_get_config, sync_join_vault, sync_leave, sync_probe,
-    sync_run_now, sync_set_config, sync_status, sync_trigger, SyncManager,
-};
-#[cfg(desktop)]
-use sync::{sync_profile_files_push_mine, sync_profile_files_take_remote};
 use std::path::PathBuf;
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use sync::{
+    note_sync_info, start_sync_scheduler, sync_attachment_cancel, sync_change_passphrase,
+    sync_conflict_get, sync_conflict_resolve, sync_create_vault, sync_debug_clear, sync_debug_get,
+    sync_debug_set, sync_get_config, sync_join_vault, sync_leave, sync_probe, sync_run_now,
+    sync_set_config, sync_status, sync_trigger, SyncManager,
+};
+#[cfg(desktop)]
+use sync::{sync_profile_files_push_mine, sync_profile_files_take_remote};
 #[cfg(desktop)]
 use tauri::tray::TrayIcon;
 #[cfg(desktop)]
@@ -171,7 +168,11 @@ pub struct HostInfo {
 
 #[tauri::command]
 fn host_info() -> HostInfo {
-    HostInfo { os: std::env::consts::OS, arch: std::env::consts::ARCH, version: env!("CARGO_PKG_VERSION") }
+    HostInfo {
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        version: env!("CARGO_PKG_VERSION"),
+    }
 }
 
 /// Create the notes directory layout under `data_dir`.
@@ -252,14 +253,19 @@ fn run_mobile() {
             std::fs::create_dir_all(&data_dir)?;
             ensure_notes_dirs(&data_dir)?;
 
-            let (db, legacy) = tauri::async_runtime::block_on(db::init_pool_mobile(&data_dir.join("veydan.db")))
-                .expect("Failed to initialize database");
-            if let Err(e) = tauri::async_runtime::block_on(sync::check_install_marker(&db, &data_dir)) {
+            let (db, legacy) =
+                tauri::async_runtime::block_on(db::init_pool_mobile(&data_dir.join("veydan.db")))
+                    .expect("Failed to initialize database");
+            if let Err(e) =
+                tauri::async_runtime::block_on(sync::check_install_marker(&db, &data_dir))
+            {
                 eprintln!("sync: install marker check failed: {e}");
             }
             if legacy {
                 // Old index has no FTS row ids or link table; rebuild both from the note files.
-                if let Err(e) = tauri::async_runtime::block_on(commands::notes::sync_notes_index(&db, &data_dir, None)) {
+                if let Err(e) = tauri::async_runtime::block_on(commands::notes::sync_notes_index(
+                    &db, &data_dir, None,
+                )) {
                     eprintln!("notes: legacy reindex failed: {e}");
                 }
             }
@@ -275,7 +281,8 @@ fn run_mobile() {
 
             {
                 let state = app.state::<AppState>();
-                let watcher = commands::notes::start_notes_watcher(app.handle().clone(), data_dir, None);
+                let watcher =
+                    commands::notes::start_notes_watcher(app.handle().clone(), data_dir, None);
                 if let Ok(mut slot) = state.notes_watcher.lock() {
                     *slot = watcher;
                 };
@@ -298,6 +305,9 @@ fn run_mobile() {
             sync_leave,
             sync_change_passphrase,
             sync_status,
+            sync_debug_get,
+            sync_debug_set,
+            sync_debug_clear,
             sync_run_now,
             sync_trigger,
             sync_conflict_get,
@@ -410,7 +420,9 @@ fn run_desktop() {
             let db_path = data_dir.join("profiles.db");
             let db = tauri::async_runtime::block_on(db::init_pool(&db_path))
                 .expect("Failed to initialize database");
-            if let Err(e) = tauri::async_runtime::block_on(sync::check_install_marker(&db, &data_dir)) {
+            if let Err(e) =
+                tauri::async_runtime::block_on(sync::check_install_marker(&db, &data_dir))
+            {
                 eprintln!("sync: install marker check failed: {e}");
             }
 
@@ -428,15 +440,18 @@ fn run_desktop() {
             // Load tray-behavior settings
             let tray_settings = Arc::new(TraySettings::default());
             tauri::async_runtime::block_on(async {
-                tray_settings
-                    .minimize_to_tray
-                    .store(read_bool_setting(&db, "minimize_to_tray").await, Ordering::Relaxed);
-                tray_settings
-                    .close_to_tray
-                    .store(read_bool_setting(&db, "close_to_tray").await, Ordering::Relaxed);
-                tray_settings
-                    .start_hidden
-                    .store(read_bool_setting(&db, "start_hidden").await, Ordering::Relaxed);
+                tray_settings.minimize_to_tray.store(
+                    read_bool_setting(&db, "minimize_to_tray").await,
+                    Ordering::Relaxed,
+                );
+                tray_settings.close_to_tray.store(
+                    read_bool_setting(&db, "close_to_tray").await,
+                    Ordering::Relaxed,
+                );
+                tray_settings.start_hidden.store(
+                    read_bool_setting(&db, "start_hidden").await,
+                    Ordering::Relaxed,
+                );
             });
 
             app.manage(AppState {
@@ -467,12 +482,18 @@ fn run_desktop() {
                 let state = app.state::<AppState>();
                 let custom_dir = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
                 // Attachments are served through the asset protocol from both dirs.
-                commands::notes::allow_asset_dir(app.handle(), &data_dir.join("notes").join("documents"));
+                commands::notes::allow_asset_dir(
+                    app.handle(),
+                    &data_dir.join("notes").join("documents"),
+                );
                 if let Some(ref custom) = custom_dir {
                     commands::notes::allow_asset_dir(app.handle(), custom);
                 }
-                let watcher =
-                    commands::notes::start_notes_watcher(app.handle().clone(), data_dir, custom_dir);
+                let watcher = commands::notes::start_notes_watcher(
+                    app.handle().clone(),
+                    data_dir,
+                    custom_dir,
+                );
                 if let Ok(mut slot) = state.notes_watcher.lock() {
                     *slot = watcher;
                 };
@@ -567,6 +588,9 @@ fn run_desktop() {
             sync_leave,
             sync_change_passphrase,
             sync_status,
+            sync_debug_get,
+            sync_debug_set,
+            sync_debug_clear,
             sync_run_now,
             sync_trigger,
             sync_conflict_get,

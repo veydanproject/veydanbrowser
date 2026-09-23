@@ -20,11 +20,26 @@ const MANIFEST: &str = include_str!("../../../extensions/veydan-notes/manifest.j
 
 /// Static files bundled as-is.
 const FILES: &[(&str, &str)] = &[
-    ("background.js", include_str!("../../../extensions/veydan-notes/background.js")),
-    ("article.js", include_str!("../../../extensions/veydan-notes/article.js")),
-    ("popup.html", include_str!("../../../extensions/veydan-notes/popup.html")),
-    ("popup.js", include_str!("../../../extensions/veydan-notes/popup.js")),
-    ("i18n.js", include_str!("../../../extensions/veydan-notes/i18n.js")),
+    (
+        "background.js",
+        include_str!("../../../extensions/veydan-notes/background.js"),
+    ),
+    (
+        "article.js",
+        include_str!("../../../extensions/veydan-notes/article.js"),
+    ),
+    (
+        "popup.html",
+        include_str!("../../../extensions/veydan-notes/popup.html"),
+    ),
+    (
+        "popup.js",
+        include_str!("../../../extensions/veydan-notes/popup.js"),
+    ),
+    (
+        "i18n.js",
+        include_str!("../../../extensions/veydan-notes/i18n.js"),
+    ),
 ];
 
 /// Toolbar/add-on manager icons, reused from the app icon set.
@@ -39,14 +54,25 @@ fn build_xpi(profile_id: &str, locale: &str) -> Result<Vec<u8>, String> {
     let manifest = MANIFEST.replace("__VERSION__", env!("CARGO_PKG_VERSION"));
     let json = |s: &str| serde_json::to_string(s).map_err(|e| e.to_string());
     // Per-profile constants read by background.js and popup.js
-    let config = format!("const PROFILE_ID = {};\nconst LOCALE = {};\n", json(profile_id)?, json(locale)?);
+    let config = format!(
+        "const PROFILE_ID = {};\nconst LOCALE = {};\n",
+        json(profile_id)?,
+        json(locale)?
+    );
 
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut zip = zip::ZipWriter::new(&mut buf);
-        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        let generated = [("manifest.json", manifest.as_str()), ("config.js", config.as_str())];
-        let texts = generated.iter().chain(FILES.iter()).map(|(n, b)| (*n, b.as_bytes()));
+        let opts =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let generated = [
+            ("manifest.json", manifest.as_str()),
+            ("config.js", config.as_str()),
+        ];
+        let texts = generated
+            .iter()
+            .chain(FILES.iter())
+            .map(|(n, b)| (*n, b.as_bytes()));
         for (name, body) in texts.chain(ICONS.iter().copied()) {
             zip.start_file(name, opts).map_err(|e| e.to_string())?;
             zip.write_all(body).map_err(|e| e.to_string())?;
@@ -58,12 +84,19 @@ fn build_xpi(profile_id: &str, locale: &str) -> Result<Vec<u8>, String> {
 
 /// Write `extensions/{id}.xpi` into the Firefox profile; skipped when unchanged
 /// so the add-on manager does not see a modified file on every launch.
-pub fn install_extension(firefox_profile_dir: &Path, profile_id: &str, locale: &str) -> Result<(), String> {
+pub fn install_extension(
+    firefox_profile_dir: &Path,
+    profile_id: &str,
+    locale: &str,
+) -> Result<(), String> {
     let dir = firefox_profile_dir.join("extensions");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let target = dir.join(format!("{EXTENSION_ID}.xpi"));
     let bytes = build_xpi(profile_id, locale)?;
-    if std::fs::read(&target).map(|cur| cur == bytes).unwrap_or(false) {
+    if std::fs::read(&target)
+        .map(|cur| cur == bytes)
+        .unwrap_or(false)
+    {
         return Ok(());
     }
     std::fs::write(&target, bytes).map_err(|e| e.to_string())
@@ -90,7 +123,12 @@ fn manifest_json(exe: &Path) -> String {
 #[cfg(target_os = "linux")]
 fn manifest_path(_app_data_dir: &Path) -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".mozilla").join("native-messaging-hosts").join(format!("{HOST_NAME}.json")))
+    Some(
+        PathBuf::from(home)
+            .join(".mozilla")
+            .join("native-messaging-hosts")
+            .join(format!("{HOST_NAME}.json")),
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -116,7 +154,10 @@ pub fn register_native_host(app_data_dir: &Path) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let json = manifest_json(&exe);
-    if std::fs::read_to_string(&path).map(|cur| cur == json).unwrap_or(false) {
+    if std::fs::read_to_string(&path)
+        .map(|cur| cur == json)
+        .unwrap_or(false)
+    {
         return Ok(());
     }
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
@@ -126,7 +167,16 @@ pub fn register_native_host(app_data_dir: &Path) -> Result<(), String> {
         // Firefox on Windows finds the manifest through the registry, not a fixed dir.
         let key = format!(r"HKCU\Software\Mozilla\NativeMessagingHosts\{HOST_NAME}");
         std::process::Command::new("reg")
-            .args(["add", &key, "/ve", "/t", "REG_SZ", "/d", &path.to_string_lossy(), "/f"])
+            .args([
+                "add",
+                &key,
+                "/ve",
+                "/t",
+                "REG_SZ",
+                "/d",
+                &path.to_string_lossy(),
+                "/f",
+            ])
             .output()
             .map_err(|e| e.to_string())?;
     }

@@ -43,7 +43,9 @@ async fn main() -> anyhow::Result<()> {
     let key = russh::keys::PrivateKey::from_openssh(pem.trim())
         .or_else(|_| decode_secret_key(pem.trim(), None))?;
     let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
-    let auth = handle.authenticate_publickey(&username, key_with_alg).await?;
+    let auth = handle
+        .authenticate_publickey(&username, key_with_alg)
+        .await?;
     anyhow::ensure!(
         matches!(auth, client::AuthResult::Success),
         "auth failed: {auth:?}"
@@ -67,7 +69,9 @@ async fn main() -> anyhow::Result<()> {
         let md = entry.metadata();
         println!(
             "{:>9} {:>8} dir={} sym={} uid={:?} mtime={:?}  {}",
-            md.permissions.map(|p| format!("{:04o}", p & 0o7777)).unwrap_or_default(),
+            md.permissions
+                .map(|p| format!("{:04o}", p & 0o7777))
+                .unwrap_or_default(),
             md.size.unwrap_or(0),
             md.is_dir(),
             md.is_symlink(),

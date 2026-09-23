@@ -15,8 +15,7 @@ use russh::keys::{HashAlg, PrivateKeyWithHashAlg};
 use std::sync::Arc;
 use veydan_lib::commands::ssh::{resolve_key_material, SshConnection};
 use veydan_lib::commands::ssh_keys::{
-    generate_key_material, parse_imported, KeyMaterial, ERR_KEY_ENCRYPTED,
-    ERR_KEY_WRONG_PASSPHRASE,
+    generate_key_material, parse_imported, KeyMaterial, ERR_KEY_ENCRYPTED, ERR_KEY_WRONG_PASSPHRASE,
 };
 
 struct AcceptAll;
@@ -38,16 +37,27 @@ fn check(cond: bool, label: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn auth_with(port: u16, material: &KeyMaterial, passphrase: Option<&str>) -> anyhow::Result<()> {
+async fn auth_with(
+    port: u16,
+    material: &KeyMaterial,
+    passphrase: Option<&str>,
+) -> anyhow::Result<()> {
     let username = std::env::var("USER")?;
     let config = Arc::new(client::Config::default());
     let mut handle = client::connect(config, ("127.0.0.1", port), AcceptAll).await?;
 
     // Same parse + hash-alg selection as commands::ssh::do_authenticate.
-    let key = parse_imported(&material.private_pem, passphrase).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let hash_alg = if key.algorithm().is_rsa() { Some(HashAlg::Sha256) } else { None };
+    let key =
+        parse_imported(&material.private_pem, passphrase).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let hash_alg = if key.algorithm().is_rsa() {
+        Some(HashAlg::Sha256)
+    } else {
+        None
+    };
     let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
-    let auth = handle.authenticate_publickey(&username, key_with_alg).await?;
+    let auth = handle
+        .authenticate_publickey(&username, key_with_alg)
+        .await?;
     anyhow::ensure!(
         matches!(auth, client::AuthResult::Success),
         "auth failed for {}: {auth:?}",
@@ -67,23 +77,47 @@ async fn main() -> anyhow::Result<()> {
     println!("generate:");
     let ed = generate_key_material("ed25519", None, "smoke@ed25519".into(), None)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    check(ed.algorithm == "ed25519" && ed.bits.is_none(), "ed25519 meta")?;
-    check(ed.public_openssh.starts_with("ssh-ed25519 "), "ed25519 public key format")?;
+    check(
+        ed.algorithm == "ed25519" && ed.bits.is_none(),
+        "ed25519 meta",
+    )?;
+    check(
+        ed.public_openssh.starts_with("ssh-ed25519 "),
+        "ed25519 public key format",
+    )?;
     check(ed.fingerprint.starts_with("SHA256:"), "ed25519 fingerprint")?;
-    check(ed.comment.as_deref() == Some("smoke@ed25519"), "ed25519 comment")?;
+    check(
+        ed.comment.as_deref() == Some("smoke@ed25519"),
+        "ed25519 comment",
+    )?;
 
     let rsa = generate_key_material("rsa", Some(2048), String::new(), Some("s3cret"))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    check(rsa.algorithm == "rsa" && rsa.bits == Some(2048), "rsa 2048 meta")?;
-    check(rsa.public_openssh.starts_with("ssh-rsa "), "rsa public key format")?;
+    check(
+        rsa.algorithm == "rsa" && rsa.bits == Some(2048),
+        "rsa 2048 meta",
+    )?;
+    check(
+        rsa.public_openssh.starts_with("ssh-rsa "),
+        "rsa public key format",
+    )?;
 
     let ec = generate_key_material("ecdsa", Some(256), String::new(), None)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     check(ec.algorithm == "ecdsa-p256", "ecdsa p256 meta")?;
-    check(ec.public_openssh.starts_with("ecdsa-sha2-nistp256 "), "ecdsa public key format")?;
+    check(
+        ec.public_openssh.starts_with("ecdsa-sha2-nistp256 "),
+        "ecdsa public key format",
+    )?;
 
-    check(generate_key_material("rsa", Some(1024), String::new(), None).is_err(), "rsa 1024 rejected")?;
-    check(generate_key_material("dsa", None, String::new(), None).is_err(), "unknown algo rejected")?;
+    check(
+        generate_key_material("rsa", Some(1024), String::new(), None).is_err(),
+        "rsa 1024 rejected",
+    )?;
+    check(
+        generate_key_material("dsa", None, String::new(), None).is_err(),
+        "unknown algo rejected",
+    )?;
 
     // ── Import round-trip ───────────────────────────────────────────────────
     println!("import:");
@@ -94,11 +128,22 @@ async fn main() -> anyhow::Result<()> {
     )?;
 
     // Encrypted RSA: needs the passphrase, distinct errors otherwise.
-    let err = parse_imported(&rsa.private_pem, None).unwrap_err().to_string();
-    check(err.contains(ERR_KEY_ENCRYPTED), "encrypted key without passphrase → key_encrypted")?;
-    let err = parse_imported(&rsa.private_pem, Some("wrong")).unwrap_err().to_string();
-    check(err.contains(ERR_KEY_WRONG_PASSPHRASE), "wrong passphrase → key_wrong_passphrase")?;
-    let re = parse_imported(&rsa.private_pem, Some("s3cret")).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let err = parse_imported(&rsa.private_pem, None)
+        .unwrap_err()
+        .to_string();
+    check(
+        err.contains(ERR_KEY_ENCRYPTED),
+        "encrypted key without passphrase → key_encrypted",
+    )?;
+    let err = parse_imported(&rsa.private_pem, Some("wrong"))
+        .unwrap_err()
+        .to_string();
+    check(
+        err.contains(ERR_KEY_WRONG_PASSPHRASE),
+        "wrong passphrase → key_wrong_passphrase",
+    )?;
+    let re =
+        parse_imported(&rsa.private_pem, Some("s3cret")).map_err(|e| anyhow::anyhow!("{e}"))?;
     check(
         re.public_key().to_openssh()? == rsa.public_openssh,
         "encrypted rsa re-import public key matches",
@@ -150,10 +195,21 @@ async fn main() -> anyhow::Result<()> {
         created_at: String::new(),
         updated_at: String::new(),
     };
-    resolve_key_material(&db, &mut conn).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-    check(conn.private_key.as_deref() == Some(rsa.private_pem.as_str()), "resolver injects key material")?;
-    check(conn.key_passphrase.as_deref() == Some("s3cret"), "resolver injects passphrase")?;
-    check(conn.auth_type == "key_password", "resolver normalizes auth_type")?;
+    resolve_key_material(&db, &mut conn)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    check(
+        conn.private_key.as_deref() == Some(rsa.private_pem.as_str()),
+        "resolver injects key material",
+    )?;
+    check(
+        conn.key_passphrase.as_deref() == Some("s3cret"),
+        "resolver injects passphrase",
+    )?;
+    check(
+        conn.auth_type == "key_password",
+        "resolver normalizes auth_type",
+    )?;
 
     let mut dangling = conn.clone();
     dangling.ssh_key_id = Some("missing".into());
@@ -166,8 +222,13 @@ async fn main() -> anyhow::Result<()> {
     let mut password_conn = conn.clone();
     password_conn.auth_type = "password".into();
     password_conn.private_key = None;
-    resolve_key_material(&db, &mut password_conn).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-    check(password_conn.private_key.is_none(), "password auth untouched by resolver")?;
+    resolve_key_material(&db, &mut password_conn)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    check(
+        password_conn.private_key.is_none(),
+        "password auth untouched by resolver",
+    )?;
 
     // ── Live auth against a local sshd (optional) ───────────────────────────
     if let (Some(port), Some(ak_path)) = (port, authorized_keys) {

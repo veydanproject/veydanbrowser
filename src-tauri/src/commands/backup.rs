@@ -123,16 +123,22 @@ async fn set_setting(db: &Pool<Sqlite>, key: &str, value: &str) -> CmdResult<()>
 
 async fn load_config(db: &Pool<Sqlite>) -> BackupConfig {
     let d = BackupConfig::default();
-    let password = get_setting(db, "backup_password").await.filter(|s| !s.is_empty());
+    let password = get_setting(db, "backup_password")
+        .await
+        .filter(|s| !s.is_empty());
     BackupConfig {
-        dir: get_setting(db, "backup_dir").await.filter(|s| !s.is_empty()),
+        dir: get_setting(db, "backup_dir")
+            .await
+            .filter(|s| !s.is_empty()),
         has_password: password.is_some(),
         password,
         schedule_enabled: get_setting(db, "backup_schedule_enabled")
             .await
             .map(|v| v == "1")
             .unwrap_or(d.schedule_enabled),
-        schedule_mode: get_setting(db, "backup_schedule_mode").await.unwrap_or(d.schedule_mode),
+        schedule_mode: get_setting(db, "backup_schedule_mode")
+            .await
+            .unwrap_or(d.schedule_mode),
         interval_hours: get_setting(db, "backup_interval_hours")
             .await
             .and_then(|v| v.parse().ok())
@@ -171,7 +177,12 @@ pub async fn backup_set_config(
     if let Some(v) = cfg.password.as_deref() {
         set_setting(db, "backup_password", v).await?;
     }
-    set_setting(db, "backup_schedule_enabled", if cfg.schedule_enabled { "1" } else { "0" }).await?;
+    set_setting(
+        db,
+        "backup_schedule_enabled",
+        if cfg.schedule_enabled { "1" } else { "0" },
+    )
+    .await?;
     set_setting(db, "backup_schedule_mode", &cfg.schedule_mode).await?;
     set_setting(db, "backup_interval_hours", &cfg.interval_hours.to_string()).await?;
     set_setting(db, "backup_time", &cfg.time).await?;
@@ -298,7 +309,9 @@ async fn perform_backup(app: &AppHandle) -> Result<PathBuf, String> {
     emit_progress(app, "snapshot", 2);
 
     // 1) Consistent DB snapshot via VACUUM INTO into a staging dir.
-    let staging = data_dir.join("backup_tmp").join(uuid::Uuid::new_v4().to_string());
+    let staging = data_dir
+        .join("backup_tmp")
+        .join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let db_snapshot = staging.join("profiles.db");
     let vacuum_sql = format!(
@@ -335,8 +348,7 @@ async fn perform_backup(app: &AppHandle) -> Result<PathBuf, String> {
             .map(|p| p.to_string_lossy().to_string()),
         entries: files.iter().map(|(n, _)| n.clone()).collect(),
     };
-    let manifest_json =
-        serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
+    let manifest_json = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
 
     // 4) Stream the archive (blocking CPU/IO work off the async runtime).
     let out_name = format!(
@@ -348,7 +360,14 @@ async fn perform_backup(app: &AppHandle) -> Result<PathBuf, String> {
     let db_snapshot2 = db_snapshot.clone();
     let out_path2 = out_path.clone();
     let write_res = tauri::async_runtime::spawn_blocking(move || {
-        write_archive(Some(&app2), &out_path2, &password, &manifest_json, &db_snapshot2, &files)
+        write_archive(
+            Some(&app2),
+            &out_path2,
+            &password,
+            &manifest_json,
+            &db_snapshot2,
+            &files,
+        )
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -555,7 +574,9 @@ pub async fn backup_restore(
     // The custom notes dir recorded in the archive is only honored when it is
     // the dir this install already uses; anything else lands under data_dir so
     // a foreign archive cannot write to an arbitrary path.
-    let local_custom = get_setting(&state.db, "notes_custom_dir").await.filter(|s| !s.is_empty());
+    let local_custom = get_setting(&state.db, "notes_custom_dir")
+        .await
+        .filter(|s| !s.is_empty());
     let custom_target = manifest.notes_custom_dir.as_ref().map(|recorded| {
         if local_custom.as_deref() == Some(recorded.as_str()) {
             PathBuf::from(recorded)
@@ -606,7 +627,11 @@ pub async fn backup_restore(
 /// Profiles always live at `profiles/<id>`; note files are matched by basename
 /// against the staged `notes/documents`, custom-dir notes against the staged
 /// `notes_custom` and remapped to `custom_target`.
-fn remap_paths(staging: &Path, data_dir: &Path, custom_target: Option<&Path>) -> Result<(), String> {
+fn remap_paths(
+    staging: &Path,
+    data_dir: &Path,
+    custom_target: Option<&Path>,
+) -> Result<(), String> {
     let conn = rusqlite::Connection::open(staging.join("profiles.db"))
         .map_err(|e| format!("Cannot open restored DB: {e}"))?;
 
@@ -643,7 +668,11 @@ fn remap_paths(staging: &Path, data_dir: &Path, custom_target: Option<&Path>) ->
     let staged_custom = staging.join("notes_custom");
     for (id, file_path) in notes {
         // Basename split on both separators: the backup may come from Windows.
-        let Some(name) = file_path.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()) else {
+        let Some(name) = file_path
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|n| !n.is_empty())
+        else {
             continue;
         };
         let path = if staged_docs.join(name).is_file() {
@@ -675,7 +704,10 @@ fn remap_paths(staging: &Path, data_dir: &Path, custom_target: Option<&Path>) ->
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             rusqlite::params![target.to_string_lossy().to_string()],
         ),
-        None => conn.execute("DELETE FROM app_settings WHERE key = 'notes_custom_dir'", []),
+        None => conn.execute(
+            "DELETE FROM app_settings WHERE key = 'notes_custom_dir'",
+            [],
+        ),
     }
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -775,7 +807,13 @@ fn swap_in(data_dir: &Path, staging: &Path, custom_target: Option<&Path>) -> Res
     // Undo a partial swap: anything saved in `old` goes back to its live path
     // (dropping whatever staged entry may have been placed there meanwhile).
     let rollback = |err: String| {
-        let all = ["profiles.db", "profiles", "notes", "profiles.db-wal", "profiles.db-shm"];
+        let all = [
+            "profiles.db",
+            "profiles",
+            "notes",
+            "profiles.db-wal",
+            "profiles.db-shm",
+        ];
         for name in all {
             let saved = old.join(name);
             if !saved.exists() {
@@ -830,7 +868,10 @@ fn rename_retry(from: &Path, to: &Path) -> std::io::Result<()> {
             Ok(()) => return Ok(()),
             Err(e) if attempt + 1 < ATTEMPTS => {
                 attempt += 1;
-                eprintln!("backup restore: rename {} failed ({e}), retry {attempt}", from.display());
+                eprintln!(
+                    "backup restore: rename {} failed ({e}), retry {attempt}",
+                    from.display()
+                );
                 std::thread::sleep(DELAY);
             }
             Err(e) => return Err(e),
@@ -928,7 +969,9 @@ fn last_scheduled_daily(now: DateTime<Local>, h: u32, m: u32) -> Option<DateTime
     if today_l <= now {
         Some(today_l)
     } else {
-        Local.from_local_datetime(&(today - chrono::Duration::days(1))).single()
+        Local
+            .from_local_datetime(&(today - chrono::Duration::days(1)))
+            .single()
     }
 }
 
@@ -975,8 +1018,16 @@ mod tests {
         let root = tmp_root("rt");
         let src = root.join("src");
         std::fs::create_dir_all(src.join("profiles/p1/firefox-profile")).unwrap();
-        std::fs::write(src.join("profiles/p1/firefox-profile/prefs.js"), b"user_pref(1);").unwrap();
-        std::fs::write(src.join("profiles/p1/firefox-profile/startupCache"), b"CACHE").unwrap(); // blacklisted
+        std::fs::write(
+            src.join("profiles/p1/firefox-profile/prefs.js"),
+            b"user_pref(1);",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("profiles/p1/firefox-profile/startupCache"),
+            b"CACHE",
+        )
+        .unwrap(); // blacklisted
         std::fs::create_dir_all(src.join("notes")).unwrap();
         std::fs::write(src.join("notes/hello.md"), b"# hello \xE2\x9C\x93").unwrap();
 
@@ -998,16 +1049,27 @@ mod tests {
         let dest = root.join("restored");
         extract_archive(None, &out, "s3cret", &dest).expect("extract");
 
-        assert_eq!(std::fs::read(dest.join("profiles.db")).unwrap(), b"SQLITE-SNAPSHOT-BYTES");
+        assert_eq!(
+            std::fs::read(dest.join("profiles.db")).unwrap(),
+            b"SQLITE-SNAPSHOT-BYTES"
+        );
         assert_eq!(
             std::fs::read(dest.join("profiles/p1/firefox-profile/prefs.js")).unwrap(),
             b"user_pref(1);"
         );
-        assert_eq!(std::fs::read(dest.join("notes/hello.md")).unwrap(), "# hello ✓".as_bytes());
-        assert!(!dest.join("profiles/p1/firefox-profile/startupCache").exists());
+        assert_eq!(
+            std::fs::read(dest.join("notes/hello.md")).unwrap(),
+            "# hello ✓".as_bytes()
+        );
+        assert!(!dest
+            .join("profiles/p1/firefox-profile/startupCache")
+            .exists());
 
         let mut mf = String::new();
-        File::open(dest.join("manifest.json")).unwrap().read_to_string(&mut mf).unwrap();
+        File::open(dest.join("manifest.json"))
+            .unwrap()
+            .read_to_string(&mut mf)
+            .unwrap();
         assert!(mf.contains("format_version"));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1036,8 +1098,16 @@ mod tests {
         };
         let now = Local::now();
         assert!(is_due(&cfg, None, now), "never-run is due");
-        assert!(is_due(&cfg, Some(Utc::now() - chrono::Duration::hours(25)), now));
-        assert!(!is_due(&cfg, Some(Utc::now() - chrono::Duration::hours(1)), now));
+        assert!(is_due(
+            &cfg,
+            Some(Utc::now() - chrono::Duration::hours(25)),
+            now
+        ));
+        assert!(!is_due(
+            &cfg,
+            Some(Utc::now() - chrono::Duration::hours(1)),
+            now
+        ));
     }
 
     #[test]
@@ -1050,7 +1120,11 @@ mod tests {
             ..Default::default()
         };
         let now = Local::now();
-        assert!(is_due(&cfg, Some(Utc::now() - chrono::Duration::days(2)), now));
+        assert!(is_due(
+            &cfg,
+            Some(Utc::now() - chrono::Duration::days(2)),
+            now
+        ));
         // A run at the current instant is at/after the last scheduled 03:00,
         // so nothing is due.
         assert!(!is_due(&cfg, Some(Utc::now()), now));

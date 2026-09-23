@@ -96,20 +96,22 @@ impl SshSession {
             known_fingerprint,
             received_fingerprint: Arc::clone(&received_fingerprint),
         };
-        let mut handle =
-            match tokio::time::timeout(CONNECT_TIMEOUT, client::connect(config, (host, port), handler))
-                .await
-            {
-                Err(_) => anyhow::bail!("SSH connect to {host}:{port} timed out"),
-                Ok(Err(russh::Error::WrongServerSig)) => anyhow::bail!(
-                    "SSH host key verification failed: the server key fingerprint does not match \
+        let mut handle = match tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            client::connect(config, (host, port), handler),
+        )
+        .await
+        {
+            Err(_) => anyhow::bail!("SSH connect to {host}:{port} timed out"),
+            Ok(Err(russh::Error::WrongServerSig)) => anyhow::bail!(
+                "SSH host key verification failed: the server key fingerprint does not match \
                      the one stored for this proxy. The server key may have changed, or the \
                      connection may be intercepted (possible MITM). If you trust the new key, \
                      re-confirm the fingerprint for this proxy."
-                ),
-                Ok(Err(e)) => return Err(e.into()),
-                Ok(Ok(h)) => h,
-            };
+            ),
+            Ok(Err(e)) => return Err(e.into()),
+            Ok(Ok(h)) => h,
+        };
 
         let result = tokio::time::timeout(CONNECT_TIMEOUT, async {
             match auth {
@@ -119,7 +121,11 @@ impl SshSession {
                 SshAuth::PrivateKey(pem) => {
                     let key = decode_secret_key(&pem, None)?;
                     let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
-                    anyhow::Ok(handle.authenticate_publickey(username, key_with_alg).await?)
+                    anyhow::Ok(
+                        handle
+                            .authenticate_publickey(username, key_with_alg)
+                            .await?,
+                    )
                 }
             }
         })

@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
+use super::attachments::allow_asset_dir;
+use super::files::*;
+use super::index::{start_notes_watcher, sync_notes_index};
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
-use super::files::*;
-use super::attachments::allow_asset_dir;
-use super::index::{start_notes_watcher, sync_notes_index};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -38,7 +38,9 @@ pub(crate) async fn load_capture_rules(state: &AppState) -> Vec<CaptureRule> {
 }
 
 #[tauri::command]
-pub async fn notes_capture_rules_get(state: tauri::State<'_, AppState>) -> CmdResult<Vec<CaptureRule>> {
+pub async fn notes_capture_rules_get(
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<CaptureRule>> {
     Ok(load_capture_rules(&state).await)
 }
 
@@ -53,7 +55,12 @@ pub async fn notes_capture_rules_set(
         .map(|r| CaptureRule {
             domain: r.domain.trim().to_lowercase(),
             folder_id: r.folder_id.filter(|f| !f.is_empty()),
-            tags: r.tags.into_iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect(),
+            tags: r
+                .tags
+                .into_iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
             template_id: r.template_id.filter(|t| !t.is_empty()),
         })
         .collect();
@@ -118,13 +125,19 @@ impl Default for NoteAttachmentPolicy {
 impl NoteAttachmentPolicy {
     pub fn validate(&self) -> CmdResult<()> {
         if !(1..=MAX_THRESHOLD_MIB).contains(&self.threshold_mib) {
-            return Err(AppError::other(format!("threshold must be 1..{MAX_THRESHOLD_MIB} MiB")));
+            return Err(AppError::other(format!(
+                "threshold must be 1..{MAX_THRESHOLD_MIB} MiB"
+            )));
         }
         if self.max_file_gib > MAX_FILE_GIB {
-            return Err(AppError::other(format!("max file size must be 0..{MAX_FILE_GIB} GiB")));
+            return Err(AppError::other(format!(
+                "max file size must be 0..{MAX_FILE_GIB} GiB"
+            )));
         }
         if !(1..=MAX_THRESHOLD_MIB).contains(&self.ask_above_mib) {
-            return Err(AppError::other(format!("download prompt threshold must be 1..{MAX_THRESHOLD_MIB} MiB")));
+            return Err(AppError::other(format!(
+                "download prompt threshold must be 1..{MAX_THRESHOLD_MIB} MiB"
+            )));
         }
         Ok(())
     }
@@ -150,9 +163,10 @@ impl NoteAttachmentPolicy {
     /// Product limit check; `None` size (unknown source length) passes.
     pub fn check_size(&self, size: Option<u64>) -> CmdResult<()> {
         match (size, self.max_file_bytes()) {
-            (Some(n), Some(max)) if n > max => {
-                Err(AppError::other(format!("attachment exceeds the {} GiB limit", self.max_file_gib)))
-            }
+            (Some(n), Some(max)) if n > max => Err(AppError::other(format!(
+                "attachment exceeds the {} GiB limit",
+                self.max_file_gib
+            ))),
             _ => Ok(()),
         }
     }
@@ -170,7 +184,9 @@ pub(crate) async fn load_attachment_policy(db: &sqlx::Pool<sqlx::Sqlite>) -> Not
 }
 
 #[tauri::command]
-pub async fn notes_attachment_policy_get(state: tauri::State<'_, AppState>) -> CmdResult<NoteAttachmentPolicy> {
+pub async fn notes_attachment_policy_get(
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<NoteAttachmentPolicy> {
     Ok(load_attachment_policy(&state.db).await)
 }
 
@@ -207,7 +223,12 @@ pub async fn notes_get_dir(state: tauri::State<'_, AppState>) -> CmdResult<Notes
     let (current, is_custom) = if let Some(ref p) = custom {
         (p.to_string_lossy().to_string(), true)
     } else {
-        (documents_dir(&state.app_data_dir).to_string_lossy().to_string(), false)
+        (
+            documents_dir(&state.app_data_dir)
+                .to_string_lossy()
+                .to_string(),
+            false,
+        )
     };
     Ok(NotesDirInfo { current, is_custom })
 }
@@ -220,7 +241,11 @@ pub async fn notes_set_dir(
 ) -> CmdResult<NotesDirInfo> {
     let new_custom: Option<PathBuf> = path.as_deref().and_then(|p| {
         let trimmed = p.trim();
-        if trimmed.is_empty() { None } else { Some(PathBuf::from(trimmed)) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(trimmed))
+        }
     });
 
     if let Some(ref p) = new_custom {
@@ -262,8 +287,12 @@ pub async fn notes_set_dir(
     let (current, is_custom) = if let Some(ref p) = new_custom {
         (p.to_string_lossy().to_string(), true)
     } else {
-        (documents_dir(&state.app_data_dir).to_string_lossy().to_string(), false)
+        (
+            documents_dir(&state.app_data_dir)
+                .to_string_lossy()
+                .to_string(),
+            false,
+        )
     };
     Ok(NotesDirInfo { current, is_custom })
 }
-

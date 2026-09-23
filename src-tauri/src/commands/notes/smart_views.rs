@@ -32,7 +32,9 @@ async fn fetch_view(id: &str, state: &AppState) -> Result<NoteSmartView, AppErro
 }
 
 #[tauri::command]
-pub async fn note_smart_view_list(state: tauri::State<'_, AppState>) -> CmdResult<Vec<NoteSmartView>> {
+pub async fn note_smart_view_list(
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<NoteSmartView>> {
     let rows = sqlx::query_as::<_, SmartViewRow>(
         "SELECT * FROM note_smart_views ORDER BY sort_order ASC, created_at ASC",
     )
@@ -54,10 +56,11 @@ pub async fn note_smart_view_create(
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let conditions = serde_json::to_string(&input.conditions).map_err(AppError::other)?;
-    let next_order: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM note_smart_views")
-        .fetch_one(&state.db)
-        .await
-        .map_err(AppError::db)?;
+    let next_order: i64 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM note_smart_views")
+            .fetch_one(&state.db)
+            .await
+            .map_err(AppError::db)?;
     sqlx::query(
         "INSERT INTO note_smart_views (id, name, color, conditions, sort_order, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -101,7 +104,10 @@ pub async fn note_smart_view_update(
 }
 
 #[tauri::command]
-pub async fn note_smart_view_delete(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+pub async fn note_smart_view_delete(
+    id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
     sqlx::query("DELETE FROM note_smart_views WHERE id = ?")
         .bind(&id)
         .execute(&state.db)

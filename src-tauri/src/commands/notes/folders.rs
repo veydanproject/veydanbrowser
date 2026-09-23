@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-use crate::error::{AppError, CmdResult};
-use crate::AppState;
 use super::files::*;
 use super::index::rebuild_manifest;
 use super::models::*;
+use crate::error::{AppError, CmdResult};
+use crate::AppState;
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -33,13 +33,12 @@ pub async fn note_folder_create(
         return Err(AppError::io("Folder name cannot be empty"));
     }
     if let Some(ref pid) = parent_id {
-        let parent: Option<(Option<String>,)> = sqlx::query_as(
-            "SELECT parent_id FROM note_folders WHERE id = ?",
-        )
-        .bind(pid)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(AppError::db)?;
+        let parent: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT parent_id FROM note_folders WHERE id = ?")
+                .bind(pid)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(AppError::db)?;
         match parent {
             None => return Err(AppError::io("Parent folder not found")),
             Some((Some(_),)) => {
@@ -109,10 +108,7 @@ pub async fn note_folder_update(
 }
 
 #[tauri::command]
-pub async fn note_folder_delete(
-    id: String,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<()> {
+pub async fn note_folder_delete(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
     // Collect all descendant folder IDs recursively using CTE
     let descendants: Vec<(String,)> = sqlx::query_as(
         "WITH RECURSIVE sub(id) AS (
@@ -196,7 +192,9 @@ pub async fn note_add_binding(
     binding: String,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
-    let Some(mut bindings) = load_bindings(&note_id, &state).await? else { return Ok(()); };
+    let Some(mut bindings) = load_bindings(&note_id, &state).await? else {
+        return Ok(());
+    };
     if !bindings.contains(&binding) {
         bindings.push(binding);
         persist_bindings(&note_id, &bindings, &state).await?;
@@ -210,7 +208,9 @@ pub async fn note_remove_binding(
     binding: String,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
-    let Some(mut bindings) = load_bindings(&note_id, &state).await? else { return Ok(()); };
+    let Some(mut bindings) = load_bindings(&note_id, &state).await? else {
+        return Ok(());
+    };
     bindings.retain(|b| b != &binding);
     persist_bindings(&note_id, &bindings, &state).await
 }
@@ -221,14 +221,12 @@ pub async fn note_add_folder(
     folder_id: String,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO note_folder_links (note_id, folder_id) VALUES (?, ?)",
-    )
-    .bind(&note_id)
-    .bind(&folder_id)
-    .execute(&state.db)
-    .await
-    .map_err(AppError::db)?;
+    sqlx::query("INSERT OR IGNORE INTO note_folder_links (note_id, folder_id) VALUES (?, ?)")
+        .bind(&note_id)
+        .bind(&folder_id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
     Ok(())
 }
 
@@ -269,4 +267,3 @@ pub async fn note_set_folder(
     }
     Ok(())
 }
-

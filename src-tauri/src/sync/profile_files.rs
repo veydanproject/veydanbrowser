@@ -16,8 +16,8 @@
 use super::fs_hash::HashCache;
 use super::notes::write_raw;
 use super::state::{
-    delete_profile_files_state, load_profile_files_state, load_profile_files_states, save_profile_files_state,
-    ProfileFilesState,
+    delete_profile_files_state, load_profile_files_state, load_profile_files_states,
+    save_profile_files_state, ProfileFilesState,
 };
 use crate::commands::profiles::is_blacklisted;
 use crate::error::{AppError, CmdResult};
@@ -80,7 +80,10 @@ impl Manifest {
     }
 
     fn blob_by_hash(&self) -> HashMap<&str, &str> {
-        self.files.iter().map(|f| (f.hash.as_str(), f.blob.as_str())).collect()
+        self.files
+            .iter()
+            .map(|f| (f.hash.as_str(), f.blob.as_str()))
+            .collect()
     }
 }
 
@@ -99,7 +102,9 @@ async fn profile_dir(state: &AppState, profile_id: &str) -> CmdResult<Option<Pat
 /// Every syncable file below `dir` as (relative path, absolute path).
 fn scan(dir: &Path) -> Vec<(String, PathBuf)> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         for e in rd.filter_map(|e| e.ok()) {
             let name = e.file_name().to_string_lossy().to_string();
             if is_blacklisted(&name) || name.ends_with(".tmp") {
@@ -111,7 +116,11 @@ fn scan(dir: &Path) -> Vec<(String, PathBuf)> {
                 walk(root, &path, out);
             } else if ty.is_file() {
                 if let Ok(rel) = path.strip_prefix(root) {
-                    let rel = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+                    let rel = rel
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/");
                     out.push((rel, path));
                 }
             }
@@ -131,7 +140,9 @@ fn has_files(dir: &Path) -> bool {
 fn valid_rel_path(rel: &str) -> bool {
     !rel.is_empty()
         && rel.len() <= 1024
-        && rel.split('/').all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains('\\') && !is_blacklisted(c))
+        && rel.split('/').all(|c| {
+            !c.is_empty() && c != "." && c != ".." && !c.contains('\\') && !is_blacklisted(c)
+        })
 }
 
 /// Timestamps come as RFC 3339 (ours) or SQLite `datetime('now')` (profiles table).
@@ -139,7 +150,11 @@ fn parse_time(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|t| t.with_timezone(&Utc))
         .ok()
-        .or_else(|| NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok().map(|n| n.and_utc()))
+        .or_else(|| {
+            NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|n| n.and_utc())
+        })
 }
 
 fn lease_op(profile_id: &str, hlc: Hlc, payload: Option<LeasePayload>) -> Op {
@@ -165,7 +180,10 @@ fn snapshot_op(profile_id: &str, hlc: Hlc, payload: SnapshotPayload) -> Op {
 // ── Lease bookkeeping (called from launch / stop) ────────────────────────────
 
 /// Another device's lease, if any: (device_id, device_name).
-pub async fn foreign_lease(state: &AppState, profile_id: &str) -> CmdResult<Option<(String, String)>> {
+pub async fn foreign_lease(
+    state: &AppState,
+    profile_id: &str,
+) -> CmdResult<Option<(String, String)>> {
     let device = super::config::device_id(&state.db).await?;
     Ok(load_profile_files_state(&state.db, profile_id)
         .await?
@@ -176,7 +194,9 @@ pub async fn foreign_lease(state: &AppState, profile_id: &str) -> CmdResult<Opti
 /// Take the lease locally; the next cycle publishes it.
 pub async fn acquire_lease(state: &AppState, profile_id: &str) -> CmdResult<()> {
     let db = &state.db;
-    let mut st = load_profile_files_state(db, profile_id).await?.unwrap_or_else(|| ProfileFilesState::new(profile_id));
+    let mut st = load_profile_files_state(db, profile_id)
+        .await?
+        .unwrap_or_else(|| ProfileFilesState::new(profile_id));
     st.lease_device = super::config::device_id(db).await?;
     st.lease_name = super::config::device_name(db).await;
     st.lease_since = Utc::now().to_rfc3339();
@@ -187,7 +207,9 @@ pub async fn acquire_lease(state: &AppState, profile_id: &str) -> CmdResult<()> 
 /// The browser exited: files changed, our lease is released.
 pub async fn on_profile_stopped(state: &AppState, profile_id: &str) -> CmdResult<()> {
     let db = &state.db;
-    let mut st = load_profile_files_state(db, profile_id).await?.unwrap_or_else(|| ProfileFilesState::new(profile_id));
+    let mut st = load_profile_files_state(db, profile_id)
+        .await?
+        .unwrap_or_else(|| ProfileFilesState::new(profile_id));
     st.dirty = true;
     // A remote snapshot arrived while the browser ran: both sides changed now.
     if !st.pending_manifest.is_empty() {
@@ -256,8 +278,17 @@ async fn build_manifest(
     let mut files = Vec::new();
     for (i, (rel, abs)) in entries.into_iter().enumerate() {
         let current = i as u32 + 1;
-        super::emit_progress(app, "profiles_up", super::progress_pct(55, 75, current, total.max(1)), current, total, &rel);
-        let Some(hash) = cache.file_hash(&abs) else { continue };
+        super::emit_progress(
+            app,
+            "profiles_up",
+            super::progress_pct(55, 75, current, total.max(1)),
+            current,
+            total,
+            &rel,
+        );
+        let Some(hash) = cache.file_hash(&abs) else {
+            continue;
+        };
         let size = std::fs::metadata(&abs).map(|m| m.len()).unwrap_or(0);
         // A name from the previous manifest is reused only while the blob is
         // still in the vault; GC may have dropped it since.
@@ -268,11 +299,18 @@ async fn build_manifest(
         let blob = match reusable {
             Some(b) => b,
             None => {
-                let Ok(data) = std::fs::read(&abs) else { continue };
+                let Ok(data) = std::fs::read(&abs) else {
+                    continue;
+                };
                 blobs.put(&data).await?
             }
         };
-        files.push(ManifestFile { path: rel, blob, size, hash });
+        files.push(ManifestFile {
+            path: rel,
+            blob,
+            size,
+            hash,
+        });
     }
     Ok(Manifest { files })
 }
@@ -281,11 +319,18 @@ async fn build_manifest(
 pub async fn collect_leases(state: &AppState, clock: &mut HlcClock) -> CmdResult<LocalChanges> {
     let db = &state.db;
     let device = super::config::device_id(db).await?;
-    let mut out = LocalChanges { ops: Vec::new(), states: Vec::new() };
-    let rows: Vec<(String,)> =
-        sqlx::query_as("SELECT id FROM profiles").fetch_all(db).await.map_err(AppError::db)?;
+    let mut out = LocalChanges {
+        ops: Vec::new(),
+        states: Vec::new(),
+    };
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM profiles")
+        .fetch_all(db)
+        .await
+        .map_err(AppError::db)?;
     for (id,) in rows {
-        let mut st = load_profile_files_state(db, &id).await?.unwrap_or_else(|| ProfileFilesState::new(&id));
+        let mut st = load_profile_files_state(db, &id)
+            .await?
+            .unwrap_or_else(|| ProfileFilesState::new(&id));
         if st.lease_synced {
             continue;
         }
@@ -304,6 +349,15 @@ pub async fn collect_leases(state: &AppState, clock: &mut HlcClock) -> CmdResult
 }
 
 /// Snapshots of profiles that ran since the last one. Leases are collected separately.
+/// One profile decision for the developer sync log.
+fn trace_profile(app: &AppHandle, id: &str, message: &str) {
+    if !super::debug_on(app) {
+        return;
+    }
+    let short: String = id.chars().take(8).collect();
+    super::trace(app, "info", "profiles", &format!("{short} {message}"));
+}
+
 pub async fn collect_local_changes(
     engine: &Engine,
     state: &AppState,
@@ -312,17 +366,34 @@ pub async fn collect_local_changes(
 ) -> CmdResult<LocalChanges> {
     let db = &state.db;
     let device = super::config::device_id(db).await?;
-    let mut out = LocalChanges { ops: Vec::new(), states: Vec::new() };
+    let mut out = LocalChanges {
+        ops: Vec::new(),
+        states: Vec::new(),
+    };
     let mut states = load_profile_files_states(db).await?;
     let rows: Vec<(String, String, Option<String>)> =
-        sqlx::query_as("SELECT id, profile_path, last_launch_at FROM profiles").fetch_all(db).await.map_err(AppError::db)?;
-    let mut blobs = BlobIndex { engine, uploaded: BTreeSet::new() };
+        sqlx::query_as("SELECT id, profile_path, last_launch_at FROM profiles")
+            .fetch_all(db)
+            .await
+            .map_err(AppError::db)?;
+    if rows.is_empty() {
+        super::trace(app, "info", "profiles", "no profiles");
+    }
+    let mut blobs = BlobIndex {
+        engine,
+        uploaded: BTreeSet::new(),
+    };
 
     for (id, profile_path, last_launch_at) in rows {
-        let mut st = states.remove(&id).unwrap_or_else(|| ProfileFilesState::new(&id));
+        let mut st = states
+            .remove(&id)
+            .unwrap_or_else(|| ProfileFilesState::new(&id));
 
         let dir = PathBuf::from(&profile_path).join("firefox-profile");
-        let launched_after = match (last_launch_at.as_deref().and_then(parse_time), parse_time(&st.snapshot_at)) {
+        let launched_after = match (
+            last_launch_at.as_deref().and_then(parse_time),
+            parse_time(&st.snapshot_at),
+        ) {
             (Some(launch), Some(snap)) => launch > snap,
             (Some(_), None) => true,
             _ => false,
@@ -337,12 +408,23 @@ pub async fn collect_local_changes(
                 st.diverged = true;
                 save_profile_files_state(db, &st).await?;
             }
+            let reason = if running {
+                "running"
+            } else if foreign_lease {
+                "foreign lease"
+            } else if st.diverged {
+                "diverged"
+            } else {
+                "unchanged"
+            };
+            trace_profile(app, &id, reason);
             continue;
         }
 
         // Local bookkeeping only; empty before the first snapshot.
         let prev = Manifest::parse(&st.manifest_json).unwrap_or_default();
-        let manifest = build_manifest(&state.sync.file_hashes, &mut blobs, &dir, &prev, app).await?;
+        let manifest =
+            build_manifest(&state.sync.file_hashes, &mut blobs, &dir, &prev, app).await?;
         let json = manifest.to_json();
         let hash = sha256_hex(json.as_bytes());
         let now = Utc::now().to_rfc3339();
@@ -350,18 +432,21 @@ pub async fn collect_local_changes(
             st.dirty = false;
             st.snapshot_at = now;
             save_profile_files_state(db, &st).await?;
+            trace_profile(app, &id, "hash unchanged");
             continue;
         }
         let manifest_blob = blobs.put(json.as_bytes()).await?;
         let hlc = clock.now();
+        let files = manifest.files.len();
+        let bytes: u64 = manifest.files.iter().map(|f| f.size).sum();
         out.ops.push(snapshot_op(
             &id,
             hlc.clone(),
             SnapshotPayload {
                 manifest_blob,
                 taken_at: now.clone(),
-                files: manifest.files.len() as u64,
-                bytes: manifest.files.iter().map(|f| f.size).sum(),
+                files: files as u64,
+                bytes,
             },
         ));
         st.head_hlc = Some(hlc);
@@ -371,6 +456,7 @@ pub async fn collect_local_changes(
         st.dirty = false;
         st.pending_manifest.clear();
         out.states.push(st);
+        trace_profile(app, &id, &format!("snapshot {files} files, {bytes} bytes"));
     }
     // Profiles deleted locally leave no state behind.
     for id in states.keys() {
@@ -398,7 +484,11 @@ async fn apply_manifest(
 ) -> CmdResult<Option<String>> {
     std::fs::create_dir_all(dir).map_err(AppError::io)?;
     let mut keep: HashSet<&str> = HashSet::new();
-    let listed: Vec<&ManifestFile> = manifest.files.iter().filter(|f| valid_rel_path(&f.path)).collect();
+    let listed: Vec<&ManifestFile> = manifest
+        .files
+        .iter()
+        .filter(|f| valid_rel_path(&f.path))
+        .collect();
     let total = listed.len() as u32;
     for (i, f) in listed.into_iter().enumerate() {
         let current = i as u32 + 1;
@@ -416,7 +506,10 @@ async fn apply_manifest(
             continue;
         }
         let Some(data) = engine.get_blob(&f.blob).await.map_err(AppError::other)? else {
-            return Ok(Some(format!("blob for profile file {} not available yet", f.path)));
+            return Ok(Some(format!(
+                "blob for profile file {} not available yet",
+                f.path
+            )));
         };
         write_raw(&dest, &data)?;
     }
@@ -436,7 +529,13 @@ async fn fetch_and_apply(
     dir: &Path,
     manifest_blob: &str,
 ) -> CmdResult<Option<Manifest>> {
-    let Some(raw) = engine.get_blob(manifest_blob).await.map_err(AppError::other)? else { return Ok(None) };
+    let Some(raw) = engine
+        .get_blob(manifest_blob)
+        .await
+        .map_err(AppError::other)?
+    else {
+        return Ok(None);
+    };
     let manifest = Manifest::parse(&String::from_utf8_lossy(&raw))?;
     match apply_manifest(engine, &state.sync.file_hashes, dir, &manifest, app).await? {
         None => Ok(Some(manifest)),
@@ -466,7 +565,9 @@ pub async fn apply_leases(app: &AppHandle, ops: &[Op]) -> CmdResult<ApplyOutcome
             continue;
         }
         let id = op.entity_id.as_str();
-        let mut st = load_profile_files_state(db, id).await?.unwrap_or_else(|| ProfileFilesState::new(id));
+        let mut st = load_profile_files_state(db, id)
+            .await?
+            .unwrap_or_else(|| ProfileFilesState::new(id));
         let stale = st.lease_hlc.as_ref().map(|h| *h >= op.hlc).unwrap_or(false);
         if op.deleted {
             if stale {
@@ -511,11 +612,14 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
                 if op.deleted {
                     continue;
                 }
-                let mut st = load_profile_files_state(db, id).await?.unwrap_or_else(|| ProfileFilesState::new(id));
+                let mut st = load_profile_files_state(db, id)
+                    .await?
+                    .unwrap_or_else(|| ProfileFilesState::new(id));
                 if st.head_hlc.as_ref().map(|h| *h >= op.hlc).unwrap_or(false) {
                     continue;
                 }
-                let p: SnapshotPayload = serde_json::from_value(op.payload.clone()).unwrap_or_default();
+                let p: SnapshotPayload =
+                    serde_json::from_value(op.payload.clone()).unwrap_or_default();
                 let Some(dir) = profile_dir(&state, id).await? else {
                     // Profile row not here yet; the retry batch brings both.
                     outcome.retry = Some(format!("profile {id} not known yet"));
@@ -536,7 +640,9 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
                         st.head_hlc = Some(op.hlc.clone());
                         save_profile_files_state(db, &st).await?;
                     }
-                    None => outcome.retry = Some(format!("profile files for {id} not available yet")),
+                    None => {
+                        outcome.retry = Some(format!("profile files for {id} not available yet"))
+                    }
                 }
             }
             _ => {}
@@ -548,24 +654,40 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
 // ── Explicit actions (launch, conflict UI) ───────────────────────────────────
 
 /// Apply the snapshot that waited while the browser ran. No-op without one.
-pub async fn apply_pending(engine: &Engine, state: &AppState, app: &AppHandle, profile_id: &str) -> CmdResult<()> {
+pub async fn apply_pending(
+    engine: &Engine,
+    state: &AppState,
+    app: &AppHandle,
+    profile_id: &str,
+) -> CmdResult<()> {
     let db = &state.db;
-    let Some(mut st) = load_profile_files_state(db, profile_id).await? else { return Ok(()) };
+    let Some(mut st) = load_profile_files_state(db, profile_id).await? else {
+        return Ok(());
+    };
     if st.pending_manifest.is_empty() {
         return Ok(());
     }
-    let dir = profile_dir(state, profile_id).await?.ok_or_else(|| AppError::not_found("Profile not found"))?;
+    let dir = profile_dir(state, profile_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Profile not found"))?;
     match fetch_and_apply(engine, state, app, &dir, &st.pending_manifest).await? {
         Some(manifest) => {
             record_applied(&mut st, &manifest);
             save_profile_files_state(db, &st).await
         }
-        None => Err(AppError::other("profile files are not fully available in the vault yet")),
+        None => Err(AppError::other(
+            "profile files are not fully available in the vault yet",
+        )),
     }
 }
 
 /// Conflict choice: replace local files with the remote snapshot.
-pub async fn take_remote(engine: &Engine, state: &AppState, app: &AppHandle, profile_id: &str) -> CmdResult<()> {
+pub async fn take_remote(
+    engine: &Engine,
+    state: &AppState,
+    app: &AppHandle,
+    profile_id: &str,
+) -> CmdResult<()> {
     if state.browser.is_running(profile_id).await {
         return Err(AppError::other("Stop the profile first"));
     }
@@ -575,7 +697,9 @@ pub async fn take_remote(engine: &Engine, state: &AppState, app: &AppHandle, pro
 /// Conflict choice: keep local files and publish them as the new snapshot.
 pub async fn push_mine(state: &AppState, profile_id: &str) -> CmdResult<()> {
     let db = &state.db;
-    let Some(mut st) = load_profile_files_state(db, profile_id).await? else { return Ok(()) };
+    let Some(mut st) = load_profile_files_state(db, profile_id).await? else {
+        return Ok(());
+    };
     st.diverged = false;
     st.dirty = true;
     st.pending_manifest.clear();
@@ -597,6 +721,11 @@ pub async fn blob_refs(engine: &Engine, op: &Op) -> CmdResult<Vec<String>> {
         .map_err(AppError::other)?
         .ok_or_else(|| AppError::other(format!("manifest {} missing", p.manifest_blob)))?;
     let mut refs = vec![p.manifest_blob];
-    refs.extend(Manifest::parse(&String::from_utf8_lossy(&raw))?.files.into_iter().map(|f| f.blob));
+    refs.extend(
+        Manifest::parse(&String::from_utf8_lossy(&raw))?
+            .files
+            .into_iter()
+            .map(|f| f.blob),
+    );
     Ok(refs)
 }

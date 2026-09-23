@@ -14,7 +14,10 @@ pub async fn init_pool(db_path: &Path) -> Result<Pool<Sqlite>> {
 
 async fn connect(db_path: &Path) -> Result<Pool<Sqlite>> {
     let url = format!("sqlite://{}?mode=rwc", db_path.display());
-    Ok(SqlitePoolOptions::new().max_connections(5).connect(&url).await?)
+    Ok(SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&url)
+        .await?)
 }
 
 /// Mobile: also upgrades a database written by the standalone mobile app.
@@ -54,27 +57,30 @@ mod legacy_mobile {
     async fn column_exists(pool: &Pool<Sqlite>, table: &str, column: &str) -> Result<bool> {
         let n: i64 = match table {
             "notes" => {
-                let (n,): (i64,) =
-                    sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = ?")
-                        .bind(column)
-                        .fetch_one(pool)
-                        .await?;
+                let (n,): (i64,) = sqlx::query_as(
+                    "SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = ?",
+                )
+                .bind(column)
+                .fetch_one(pool)
+                .await?;
                 n
             }
             "profiles" => {
-                let (n,): (i64,) =
-                    sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE name = ?")
-                        .bind(column)
-                        .fetch_one(pool)
-                        .await?;
+                let (n,): (i64,) = sqlx::query_as(
+                    "SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE name = ?",
+                )
+                .bind(column)
+                .fetch_one(pool)
+                .await?;
                 n
             }
             "note_history" => {
-                let (n,): (i64,) =
-                    sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('note_history') WHERE name = ?")
-                        .bind(column)
-                        .fetch_one(pool)
-                        .await?;
+                let (n,): (i64,) = sqlx::query_as(
+                    "SELECT COUNT(*) FROM pragma_table_info('note_history') WHERE name = ?",
+                )
+                .bind(column)
+                .fetch_one(pool)
+                .await?;
                 n
             }
             _ => 0,
@@ -83,7 +89,9 @@ mod legacy_mobile {
     }
 
     pub async fn detect(pool: &Pool<Sqlite>) -> Result<bool> {
-        if table_exists(pool, "legacy_profiles").await? || table_exists(pool, "legacy_note_history").await? {
+        if table_exists(pool, "legacy_profiles").await?
+            || table_exists(pool, "legacy_note_history").await?
+        {
             return Ok(true);
         }
         if !table_exists(pool, "notes").await? {
@@ -92,7 +100,8 @@ mod legacy_mobile {
         if !column_exists(pool, "notes", "fts_rowid").await? {
             return Ok(true);
         }
-        Ok(table_exists(pool, "profiles").await? && !column_exists(pool, "profiles", "status").await?)
+        Ok(table_exists(pool, "profiles").await?
+            && !column_exists(pool, "profiles", "status").await?)
     }
 
     /// Before the shared migrations: widen `notes`, park tables whose shape differs.
@@ -111,13 +120,27 @@ mod legacy_mobile {
             }
         }
         if table_exists(pool, "sync_note_state").await? {
-            add_column_if_not_exists(pool, "sync_note_state", "conflict", "INTEGER NOT NULL DEFAULT 0").await?;
+            add_column_if_not_exists(
+                pool,
+                "sync_note_state",
+                "conflict",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            .await?;
         }
-        if table_exists(pool, "profiles").await? && !column_exists(pool, "profiles", "status").await? {
-            sqlx::query("ALTER TABLE profiles RENAME TO legacy_profiles").execute(pool).await?;
+        if table_exists(pool, "profiles").await?
+            && !column_exists(pool, "profiles", "status").await?
+        {
+            sqlx::query("ALTER TABLE profiles RENAME TO legacy_profiles")
+                .execute(pool)
+                .await?;
         }
-        if table_exists(pool, "note_history").await? && !column_exists(pool, "note_history", "content_hash").await? {
-            sqlx::query("ALTER TABLE note_history RENAME TO legacy_note_history").execute(pool).await?;
+        if table_exists(pool, "note_history").await?
+            && !column_exists(pool, "note_history", "content_hash").await?
+        {
+            sqlx::query("ALTER TABLE note_history RENAME TO legacy_note_history")
+                .execute(pool)
+                .await?;
         }
         Ok(())
     }
@@ -135,13 +158,24 @@ mod legacy_mobile {
             )
             .execute(pool)
             .await?;
-            sqlx::query("DROP TABLE legacy_profiles").execute(pool).await?;
+            sqlx::query("DROP TABLE legacy_profiles")
+                .execute(pool)
+                .await?;
         }
 
         if !table_exists(pool, "legacy_note_history").await? {
             return Ok(());
         }
-        let rows: Vec<(String, String, i64, String, String, String, Option<String>, String)> = sqlx::query_as(
+        let rows: Vec<(
+            String,
+            String,
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+            String,
+        )> = sqlx::query_as(
             "SELECT id, note_id, revision, version_type, title, content, device, created_at
              FROM legacy_note_history ORDER BY note_id, revision",
         )
@@ -166,7 +200,9 @@ mod legacy_mobile {
             .execute(pool)
             .await?;
         }
-        sqlx::query("DROP TABLE legacy_note_history").execute(pool).await?;
+        sqlx::query("DROP TABLE legacy_note_history")
+            .execute(pool)
+            .await?;
         Ok(())
     }
 }
@@ -642,7 +678,12 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     .await?;
 
     // Pending sync conflict: history snapshots of both sides and the remote blob to merge with.
-    for col in ["conflict_ancestor_id", "conflict_local_id", "conflict_remote_id", "conflict_remote_blob"] {
+    for col in [
+        "conflict_ancestor_id",
+        "conflict_local_id",
+        "conflict_remote_id",
+        "conflict_remote_blob",
+    ] {
         add_column_if_not_exists(pool, "sync_note_state", col, "TEXT NOT NULL DEFAULT ''").await?;
     }
 
@@ -661,7 +702,13 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     .execute(pool)
     .await?;
     // Chunked attachment accepted from the vault but not downloaded yet (LargeFileRef JSON).
-    add_column_if_not_exists(pool, "sync_attachment_state", "deferred_ref", "TEXT NOT NULL DEFAULT ''").await?;
+    add_column_if_not_exists(
+        pool,
+        "sync_attachment_state",
+        "deferred_ref",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await?;
 
     // Per-row sync position for table entities (profiles, proxies, ...).
     sqlx::query(
@@ -793,7 +840,7 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
              (SELECT json_group_array(value) FROM json_each(tags) WHERE value != ''),
              '[]'
          )
-         WHERE EXISTS (SELECT 1 FROM json_each(tags) WHERE value = '')"
+         WHERE EXISTS (SELECT 1 FROM json_each(tags) WHERE value = '')",
     )
     .execute(pool)
     .await?;

@@ -29,7 +29,19 @@ pub struct NoteSyncState {
     pub conflict_remote_blob: String,
 }
 
-type NoteStateRow = (String, String, String, String, String, i64, i64, String, String, String, String);
+type NoteStateRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    String,
+);
 
 const SELECT_NOTE_STATE: &str = "SELECT note_id, head_blob, head_parents, head_hlc, synced_hash, deleted, conflict,
     conflict_ancestor_id, conflict_local_id, conflict_remote_id, conflict_remote_blob FROM sync_note_state";
@@ -51,8 +63,15 @@ fn row_to_state(r: NoteStateRow) -> NoteSyncState {
 }
 
 pub async fn load_note_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<String, NoteSyncState>> {
-    let rows: Vec<NoteStateRow> = sqlx::query_as(SELECT_NOTE_STATE).fetch_all(db).await.map_err(AppError::db)?;
-    Ok(rows.into_iter().map(row_to_state).map(|s| (s.note_id.clone(), s)).collect())
+    let rows: Vec<NoteStateRow> = sqlx::query_as(SELECT_NOTE_STATE)
+        .fetch_all(db)
+        .await
+        .map_err(AppError::db)?;
+    Ok(rows
+        .into_iter()
+        .map(row_to_state)
+        .map(|s| (s.note_id.clone(), s))
+        .collect())
 }
 
 pub async fn load_note_state(db: &Pool<Sqlite>, note_id: &str) -> CmdResult<Option<NoteSyncState>> {
@@ -106,7 +125,10 @@ pub async fn clear_all_states(db: &Pool<Sqlite>) -> CmdResult<()> {
         "sync_gc_candidates",
         "sync_peers",
     ] {
-        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}"))).execute(db).await.map_err(AppError::db)?;
+        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
+            .execute(db)
+            .await
+            .map_err(AppError::db)?;
     }
     Ok(())
 }
@@ -127,10 +149,19 @@ pub struct RowSyncState {
 type RowStateRow = (String, String, String, String, i64);
 
 fn row_to_row_state(r: RowStateRow) -> RowSyncState {
-    RowSyncState { entity: r.0, id: r.1, head_hlc: Hlc::decode(&r.2), synced_hash: r.3, deleted: r.4 != 0 }
+    RowSyncState {
+        entity: r.0,
+        id: r.1,
+        head_hlc: Hlc::decode(&r.2),
+        synced_hash: r.3,
+        deleted: r.4 != 0,
+    }
 }
 
-pub async fn load_row_states(db: &Pool<Sqlite>, entity: &str) -> CmdResult<HashMap<String, RowSyncState>> {
+pub async fn load_row_states(
+    db: &Pool<Sqlite>,
+    entity: &str,
+) -> CmdResult<HashMap<String, RowSyncState>> {
     let rows: Vec<RowStateRow> = sqlx::query_as(
         "SELECT entity_type, entity_id, head_hlc, synced_hash, deleted FROM sync_row_state WHERE entity_type = ?",
     )
@@ -138,10 +169,18 @@ pub async fn load_row_states(db: &Pool<Sqlite>, entity: &str) -> CmdResult<HashM
     .fetch_all(db)
     .await
     .map_err(AppError::db)?;
-    Ok(rows.into_iter().map(row_to_row_state).map(|s| (s.id.clone(), s)).collect())
+    Ok(rows
+        .into_iter()
+        .map(row_to_row_state)
+        .map(|s| (s.id.clone(), s))
+        .collect())
 }
 
-pub async fn load_row_state(db: &Pool<Sqlite>, entity: &str, id: &str) -> CmdResult<Option<RowSyncState>> {
+pub async fn load_row_state(
+    db: &Pool<Sqlite>,
+    entity: &str,
+    id: &str,
+) -> CmdResult<Option<RowSyncState>> {
     let row: Option<RowStateRow> = sqlx::query_as(
         "SELECT entity_type, entity_id, head_hlc, synced_hash, deleted FROM sync_row_state
          WHERE entity_type = ? AND entity_id = ?",
@@ -201,7 +240,9 @@ fn row_to_attachment_state(r: AttachmentStateRow) -> AttachmentSyncState {
     }
 }
 
-pub async fn load_attachment_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<(String, String), AttachmentSyncState>> {
+pub async fn load_attachment_states(
+    db: &Pool<Sqlite>,
+) -> CmdResult<HashMap<(String, String), AttachmentSyncState>> {
     let rows: Vec<AttachmentStateRow> =
         sqlx::query_as("SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted, deferred_ref FROM sync_attachment_state")
             .fetch_all(db)
@@ -214,7 +255,11 @@ pub async fn load_attachment_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<(Str
         .collect())
 }
 
-pub async fn load_attachment_state(db: &Pool<Sqlite>, note_id: &str, name: &str) -> CmdResult<Option<AttachmentSyncState>> {
+pub async fn load_attachment_state(
+    db: &Pool<Sqlite>,
+    note_id: &str,
+    name: &str,
+) -> CmdResult<Option<AttachmentSyncState>> {
     let row: Option<AttachmentStateRow> = sqlx::query_as(
         "SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted, deferred_ref FROM sync_attachment_state
          WHERE note_id = ? AND name = ?",
@@ -228,7 +273,10 @@ pub async fn load_attachment_state(db: &Pool<Sqlite>, note_id: &str, name: &str)
 }
 
 /// Deferred (not yet downloaded) attachments of one note.
-pub async fn load_deferred_attachments(db: &Pool<Sqlite>, note_id: &str) -> CmdResult<Vec<AttachmentSyncState>> {
+pub async fn load_deferred_attachments(
+    db: &Pool<Sqlite>,
+    note_id: &str,
+) -> CmdResult<Vec<AttachmentSyncState>> {
     let rows: Vec<AttachmentStateRow> = sqlx::query_as(
         "SELECT note_id, name, head_blob, head_hlc, synced_hash, deleted, deferred_ref FROM sync_attachment_state
          WHERE note_id = ? AND deleted = 0 AND deferred_ref != ''",
@@ -241,7 +289,11 @@ pub async fn load_deferred_attachments(db: &Pool<Sqlite>, note_id: &str) -> CmdR
 }
 
 pub async fn save_attachment_state(db: &Pool<Sqlite>, s: &AttachmentSyncState) -> CmdResult<()> {
-    let deferred = s.deferred.as_ref().map(|r| serde_json::to_string(r).unwrap_or_default()).unwrap_or_default();
+    let deferred = s
+        .deferred
+        .as_ref()
+        .map(|r| serde_json::to_string(r).unwrap_or_default())
+        .unwrap_or_default();
     sqlx::query(
         "INSERT INTO sync_attachment_state (note_id, name, head_blob, head_hlc, synced_hash, deleted, deferred_ref)
          VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -295,12 +347,30 @@ pub struct ProfileFilesState {
 #[cfg(desktop)]
 impl ProfileFilesState {
     pub fn new(profile_id: &str) -> Self {
-        Self { profile_id: profile_id.into(), lease_synced: true, ..Default::default() }
+        Self {
+            profile_id: profile_id.into(),
+            lease_synced: true,
+            ..Default::default()
+        }
     }
 }
 
 #[cfg(desktop)]
-type ProfileFilesRow = (String, String, String, String, String, i64, String, String, String, String, String, i64, i64);
+type ProfileFilesRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+);
 
 #[cfg(desktop)]
 const SELECT_PROFILE_FILES: &str = "SELECT profile_id, head_hlc, synced_hash, manifest_json, snapshot_at, dirty,
@@ -326,13 +396,25 @@ fn row_to_profile_files(r: ProfileFilesRow) -> ProfileFilesState {
 }
 
 #[cfg(desktop)]
-pub async fn load_profile_files_states(db: &Pool<Sqlite>) -> CmdResult<HashMap<String, ProfileFilesState>> {
-    let rows: Vec<ProfileFilesRow> = sqlx::query_as(SELECT_PROFILE_FILES).fetch_all(db).await.map_err(AppError::db)?;
-    Ok(rows.into_iter().map(row_to_profile_files).map(|s| (s.profile_id.clone(), s)).collect())
+pub async fn load_profile_files_states(
+    db: &Pool<Sqlite>,
+) -> CmdResult<HashMap<String, ProfileFilesState>> {
+    let rows: Vec<ProfileFilesRow> = sqlx::query_as(SELECT_PROFILE_FILES)
+        .fetch_all(db)
+        .await
+        .map_err(AppError::db)?;
+    Ok(rows
+        .into_iter()
+        .map(row_to_profile_files)
+        .map(|s| (s.profile_id.clone(), s))
+        .collect())
 }
 
 #[cfg(desktop)]
-pub async fn load_profile_files_state(db: &Pool<Sqlite>, profile_id: &str) -> CmdResult<Option<ProfileFilesState>> {
+pub async fn load_profile_files_state(
+    db: &Pool<Sqlite>,
+    profile_id: &str,
+) -> CmdResult<Option<ProfileFilesState>> {
     let row: Option<ProfileFilesRow> = sqlx::query_as(
         "SELECT profile_id, head_hlc, synced_hash, manifest_json, snapshot_at, dirty,
          pending_manifest, lease_device, lease_name, lease_since, lease_hlc, lease_synced, diverged
@@ -420,15 +502,39 @@ pub async fn conflicts(db: &Pool<Sqlite>) -> CmdResult<Vec<(String, String)>> {
 }
 
 pub async fn load_local_state(db: &Pool<Sqlite>) -> CmdResult<(LocalState, Option<Hlc>)> {
-    let own_seq = get_setting(db, "sync_own_seq").await.and_then(|v| v.parse().ok()).unwrap_or(0);
-    let own_head_hash = get_setting(db, "sync_own_head").await.unwrap_or_default();
-    let hlc = get_setting(db, "sync_hlc").await.and_then(|v| Hlc::decode(&v));
-    let rows: Vec<(String, i64, String)> = sqlx::query_as("SELECT device_id, seq, head_hash FROM sync_peers")
-        .fetch_all(db)
+    let own_seq = get_setting(db, "sync_own_seq")
         .await
-        .map_err(AppError::db)?;
-    let peers = rows.into_iter().map(|(d, seq, hash)| (d, PeerHead { seq: seq as u64, hash })).collect();
-    Ok((LocalState { own_seq, own_head_hash, peers }, hlc))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let own_head_hash = get_setting(db, "sync_own_head").await.unwrap_or_default();
+    let hlc = get_setting(db, "sync_hlc")
+        .await
+        .and_then(|v| Hlc::decode(&v));
+    let rows: Vec<(String, i64, String)> =
+        sqlx::query_as("SELECT device_id, seq, head_hash FROM sync_peers")
+            .fetch_all(db)
+            .await
+            .map_err(AppError::db)?;
+    let peers = rows
+        .into_iter()
+        .map(|(d, seq, hash)| {
+            (
+                d,
+                PeerHead {
+                    seq: seq as u64,
+                    hash,
+                },
+            )
+        })
+        .collect();
+    Ok((
+        LocalState {
+            own_seq,
+            own_head_hash,
+            peers,
+        },
+        hlc,
+    ))
 }
 
 /// Own log position and clock. Called right after every push so a crash can

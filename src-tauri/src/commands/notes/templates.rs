@@ -22,7 +22,10 @@ pub(crate) struct TemplateVars {
 impl TemplateVars {
     /// Fill profile/workspace names from bindings.
     pub(crate) async fn from_bindings(title: &str, bindings: &[String], state: &AppState) -> Self {
-        let mut vars = Self { title: title.to_string(), ..Default::default() };
+        let mut vars = Self {
+            title: title.to_string(),
+            ..Default::default()
+        };
         for b in bindings {
             if let Some(id) = b.strip_prefix("profile:") {
                 vars.profile = lookup_name("profiles", id, state).await;
@@ -64,25 +67,32 @@ pub(crate) fn render(body: &str, vars: &TemplateVars) -> String {
     ];
     let mut out = body.to_string();
     for (key, value) in pairs {
-        out = out.replace(&format!("{{{{{key}}}}}"), &value).replace(&format!("{{{{ {key} }}}}"), &value);
+        out = out
+            .replace(&format!("{{{{{key}}}}}"), &value)
+            .replace(&format!("{{{{ {key} }}}}"), &value);
     }
     out
 }
 
 /// Body of a template note.
 pub(crate) async fn template_body(template_id: &str, state: &AppState) -> Result<String, AppError> {
-    let file_path: String = sqlx::query_scalar("SELECT file_path FROM notes WHERE id = ? AND deleted = 0")
-        .bind(template_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(AppError::db)?
-        .ok_or_else(|| AppError::not_found(format!("Template {template_id}")))?;
+    let file_path: String =
+        sqlx::query_scalar("SELECT file_path FROM notes WHERE id = ? AND deleted = 0")
+            .bind(template_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::db)?
+            .ok_or_else(|| AppError::not_found(format!("Template {template_id}")))?;
     let (_, _, body) = read_note_file(&resolve_note_abs_path(&state.app_data_dir, &file_path))?;
     Ok(body)
 }
 
 /// Render a template into content for a new note.
-pub(crate) async fn render_template(template_id: &str, vars: &TemplateVars, state: &AppState) -> Result<String, AppError> {
+pub(crate) async fn render_template(
+    template_id: &str,
+    vars: &TemplateVars,
+    state: &AppState,
+) -> Result<String, AppError> {
     let body = template_body(template_id, state).await?;
     Ok(render(&body, vars))
 }
@@ -93,7 +103,11 @@ mod tests {
 
     #[test]
     fn renders_known_placeholders_and_keeps_unknown() {
-        let vars = TemplateVars { title: "T".into(), profile: "P".into(), ..Default::default() };
+        let vars = TemplateVars {
+            title: "T".into(),
+            profile: "P".into(),
+            ..Default::default()
+        };
         let out = render("# {{title}} / {{ profile }} / {{unknown}}", &vars);
         assert_eq!(out, "# T / P / {{unknown}}");
     }

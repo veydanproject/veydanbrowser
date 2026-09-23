@@ -66,15 +66,39 @@ pub struct CaptureResponse {
 
 impl CaptureResponse {
     pub fn ok(note_id: String, title: String) -> Self {
-        Self { ok: true, note_id: Some(note_id), title: Some(title), notes: None, error: None }
+        Self {
+            ok: true,
+            note_id: Some(note_id),
+            title: Some(title),
+            notes: None,
+            error: None,
+        }
     }
     pub fn notes(notes: Vec<NoteRef>) -> Self {
-        Self { ok: true, note_id: None, title: None, notes: Some(notes), error: None }
+        Self {
+            ok: true,
+            note_id: None,
+            title: None,
+            notes: Some(notes),
+            error: None,
+        }
     }
     pub fn done() -> Self {
-        Self { ok: true, note_id: None, title: None, notes: None, error: None }
+        Self {
+            ok: true,
+            note_id: None,
+            title: None,
+            notes: None,
+            error: None,
+        }
     }
     pub fn err(msg: impl Into<String>) -> Self {
-        Self { ok: false, note_id: None, title: None, notes: None, error: Some(msg.into()) }
+        Self {
+            ok: false,
+            note_id: None,
+            title: None,
+            notes: None,
+            error: Some(msg.into()),
+        }
     }
 }

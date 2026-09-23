@@ -79,9 +79,16 @@ fn note_title(req: &CaptureRequest) -> String {
 
 /// Markdown header with source link and capture time, plus quoted selection.
 fn capture_block(req: &CaptureRequest, captured_at: &str) -> String {
-    let title = if req.title.trim().is_empty() { req.url.clone() } else { req.title.trim().to_string() };
+    let title = if req.title.trim().is_empty() {
+        req.url.clone()
+    } else {
+        req.title.trim().to_string()
+    };
     let title = title.replace(['[', ']'], " ");
-    let mut out = format!("Source: [{}]({})  \nCaptured: {}\n", title, req.url, captured_at);
+    let mut out = format!(
+        "Source: [{}]({})  \nCaptured: {}\n",
+        title, req.url, captured_at
+    );
     let text = req.selection_text.trim();
     if !text.is_empty() {
         out.push('\n');
@@ -123,7 +130,9 @@ fn store_assets(note_id: &str, assets: &[CaptureAsset], state: &AppState) -> Vec
     let mut total = 0usize;
     let mut links = Vec::new();
     for asset in assets.iter().take(MAX_ASSETS) {
-        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&asset.data_b64) else { continue };
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&asset.data_b64) else {
+            continue;
+        };
         total += bytes.len();
         if bytes.is_empty() || total > MAX_ASSET_BYTES {
             break;
@@ -155,7 +164,11 @@ async fn apply_rules(domain: Option<&str>, new: &mut NewNote, state: &AppState) 
     rule.folder_id.clone().filter(|f| !f.is_empty())
 }
 
-async fn create_note(req: &CaptureRequest, body: String, state: &AppState) -> Result<(String, String), String> {
+async fn create_note(
+    req: &CaptureRequest,
+    body: String,
+    state: &AppState,
+) -> Result<(String, String), String> {
     let now = Utc::now().to_rfc3339();
     let workspace = profile_workspace(&req.profile_id, state).await;
     let id = Uuid::new_v4().to_string();
@@ -185,11 +198,13 @@ async fn create_note(req: &CaptureRequest, body: String, state: &AppState) -> Re
 
     insert_note(new, state).await.map_err(|e| e.to_string())?;
     if let Some(folder_id) = folder_id {
-        let _ = sqlx::query("INSERT OR IGNORE INTO note_folder_links (note_id, folder_id) VALUES (?, ?)")
-            .bind(&id)
-            .bind(&folder_id)
-            .execute(&state.db)
-            .await;
+        let _ = sqlx::query(
+            "INSERT OR IGNORE INTO note_folder_links (note_id, folder_id) VALUES (?, ?)",
+        )
+        .bind(&id)
+        .bind(&folder_id)
+        .execute(&state.db)
+        .await;
     }
     Ok((id, title))
 }
@@ -205,10 +220,19 @@ async fn note_by_id(id: &str, state: &AppState) -> Option<NoteRow> {
 
 /// Append the capture to `req.note_id`, or to the profile's most recent note;
 /// creates a new note when neither exists.
-async fn append_to_note(req: &CaptureRequest, state: &AppState) -> Result<(String, String), String> {
+async fn append_to_note(
+    req: &CaptureRequest,
+    state: &AppState,
+) -> Result<(String, String), String> {
     let target = match req.note_id.as_deref().filter(|s| !s.is_empty()) {
-        Some(id) => Some(note_by_id(id, state).await.ok_or_else(|| format!("Note {id} not found"))?),
-        None => notes_with_binding(&format!("profile:{}", req.profile_id), 1, state).await.pop(),
+        Some(id) => Some(
+            note_by_id(id, state)
+                .await
+                .ok_or_else(|| format!("Note {id} not found"))?,
+        ),
+        None => notes_with_binding(&format!("profile:{}", req.profile_id), 1, state)
+            .await
+            .pop(),
     };
     let Some(row) = target else {
         return create_note(req, String::new(), state).await;
@@ -222,8 +246,15 @@ async fn append_to_note(req: &CaptureRequest, state: &AppState) -> Result<(Strin
     }
     content.push_str(&capture_block(req, &now));
 
-    let input = NoteUpdateInput { title: None, content: Some(content), pinned: None, base_hash: None };
-    update_note(&row.id, input, state).await.map_err(|e| e.to_string())?;
+    let input = NoteUpdateInput {
+        title: None,
+        content: Some(content),
+        pinned: None,
+        base_hash: None,
+    };
+    update_note(&row.id, input, state)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Merge page bindings so the note shows up for this url/domain too
     let mut bindings: Vec<String> = serde_json::from_str(&row.bindings).unwrap_or_default();
@@ -235,7 +266,9 @@ async fn append_to_note(req: &CaptureRequest, state: &AppState) -> Result<(Strin
         }
     }
     if changed {
-        persist_bindings(&row.id, &bindings, state).await.map_err(|e| e.to_string())?;
+        persist_bindings(&row.id, &bindings, state)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok((row.id, row.title))
 }
@@ -246,18 +279,32 @@ async fn list_notes(req: &CaptureRequest, state: &AppState) -> Vec<NoteRef> {
     let mut push = |rows: Vec<NoteRow>, scope: &str| {
         for r in rows {
             if !out.iter().any(|n| n.id == r.id) {
-                out.push(NoteRef { id: r.id, title: r.title, updated_at: r.updated_at, scope: scope.to_string() });
+                out.push(NoteRef {
+                    id: r.id,
+                    title: r.title,
+                    updated_at: r.updated_at,
+                    scope: scope.to_string(),
+                });
             }
         }
     };
     let url = canonical_url(&req.url);
     if !url.is_empty() {
-        push(notes_with_binding(&format!("url:{url}"), 50, state).await, "url");
+        push(
+            notes_with_binding(&format!("url:{url}"), 50, state).await,
+            "url",
+        );
     }
     if let Some(d) = domain_of(&req.url) {
-        push(notes_with_binding(&format!("domain:{d}"), 50, state).await, "domain");
+        push(
+            notes_with_binding(&format!("domain:{d}"), 50, state).await,
+            "domain",
+        );
     }
-    push(notes_with_binding(&format!("profile:{}", req.profile_id), 20, state).await, "profile");
+    push(
+        notes_with_binding(&format!("profile:{}", req.profile_id), 20, state).await,
+        "profile",
+    );
     out
 }
 
@@ -276,12 +323,21 @@ async fn search_notes(req: &CaptureRequest, state: &AppState) -> Vec<NoteRef> {
     .await
     .unwrap_or_default()
     .into_iter()
-    .map(|r| NoteRef { id: r.id, title: r.title, updated_at: r.updated_at, scope: "all".to_string() })
+    .map(|r| NoteRef {
+        id: r.id,
+        title: r.title,
+        updated_at: r.updated_at,
+        scope: "all".to_string(),
+    })
     .collect()
 }
 
 /// Entry point for the IPC server.
-pub async fn handle_capture(req: CaptureRequest, state: &AppState, app: &tauri::AppHandle) -> CaptureResponse {
+pub async fn handle_capture(
+    req: CaptureRequest,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> CaptureResponse {
     if req.profile_id.is_empty() {
         return CaptureResponse::err("profile_id is required");
     }
@@ -296,7 +352,9 @@ pub async fn handle_capture(req: CaptureRequest, state: &AppState, app: &tauri::
             let Some(id) = req.note_id.clone().filter(|s| !s.is_empty()) else {
                 return CaptureResponse::err("note_id is required");
             };
-            if let Err(e) = super::window::open_notes_window(app.clone(), "Notes".to_string(), Some(id)).await {
+            if let Err(e) =
+                super::window::open_notes_window(app.clone(), "Notes".to_string(), Some(id)).await
+            {
                 return CaptureResponse::err(e.to_string());
             }
             return CaptureResponse::done();
@@ -307,7 +365,9 @@ pub async fn handle_capture(req: CaptureRequest, state: &AppState, app: &tauri::
         return CaptureResponse::err("url is required");
     }
     let result = match req.kind.as_str() {
-        "selection_new" | "bookmark" | "screenshot" => create_note(&req, String::new(), state).await,
+        "selection_new" | "bookmark" | "screenshot" => {
+            create_note(&req, String::new(), state).await
+        }
         "article" => create_note(&req, req.markdown.trim().to_string(), state).await,
         "selection_append" => append_to_note(&req, state).await,
         other => Err(format!("unknown capture kind: {other}")),
@@ -333,13 +393,21 @@ mod tests {
 
     #[test]
     fn domain_of_extracts_host() {
-        assert_eq!(domain_of("https://User@Www.Example.com:8443/p?q").as_deref(), Some("www.example.com"));
+        assert_eq!(
+            domain_of("https://User@Www.Example.com:8443/p?q").as_deref(),
+            Some("www.example.com")
+        );
         assert_eq!(domain_of("about:blank"), None);
     }
 
     #[test]
     fn rule_matches_domain_and_subdomains() {
-        let rule = CaptureRule { domain: "*.example.com".into(), folder_id: None, tags: vec![], template_id: None };
+        let rule = CaptureRule {
+            domain: "*.example.com".into(),
+            folder_id: None,
+            tags: vec![],
+            template_id: None,
+        };
         assert!(rule_matches(&rule, "example.com"));
         assert!(rule_matches(&rule, "docs.example.com"));
         assert!(!rule_matches(&rule, "notexample.com"));

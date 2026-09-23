@@ -17,7 +17,10 @@ fn serialize_presence<S>(secret: &Option<String>, s: S) -> Result<S::Ok, S::Erro
 where
     S: Serializer,
 {
-    secret.as_deref().is_some_and(|v| !v.is_empty()).serialize(s)
+    secret
+        .as_deref()
+        .is_some_and(|v| !v.is_empty())
+        .serialize(s)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -219,18 +222,30 @@ pub struct FileEntry {
 pub fn format_permissions(mode: u32) -> String {
     let mut s = String::with_capacity(9);
     let flags = [
-        (0o400, 'r'), (0o200, 'w'), (0o100, 'x'),
-        (0o040, 'r'), (0o020, 'w'), (0o010, 'x'),
-        (0o004, 'r'), (0o002, 'w'), (0o001, 'x'),
+        (0o400, 'r'),
+        (0o200, 'w'),
+        (0o100, 'x'),
+        (0o040, 'r'),
+        (0o020, 'w'),
+        (0o010, 'x'),
+        (0o004, 'r'),
+        (0o002, 'w'),
+        (0o001, 'x'),
     ];
     for (bit, ch) in flags {
         s.push(if mode & bit != 0 { ch } else { '-' });
     }
     // setuid / setgid / sticky replace the corresponding execute slot
     let mut b: Vec<char> = s.chars().collect();
-    if mode & 0o4000 != 0 { b[2] = if mode & 0o100 != 0 { 's' } else { 'S' }; }
-    if mode & 0o2000 != 0 { b[5] = if mode & 0o010 != 0 { 's' } else { 'S' }; }
-    if mode & 0o1000 != 0 { b[8] = if mode & 0o001 != 0 { 't' } else { 'T' }; }
+    if mode & 0o4000 != 0 {
+        b[2] = if mode & 0o100 != 0 { 's' } else { 'S' };
+    }
+    if mode & 0o2000 != 0 {
+        b[5] = if mode & 0o010 != 0 { 's' } else { 'S' };
+    }
+    if mode & 0o1000 != 0 {
+        b[8] = if mode & 0o001 != 0 { 't' } else { 'T' };
+    }
     b.into_iter().collect()
 }
 

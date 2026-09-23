@@ -179,12 +179,11 @@ fn generate_code_for(entry: &TotpEntry) -> Result<TotpCode, AppError> {
 
 #[tauri::command]
 pub async fn totp_list(state: tauri::State<'_, AppState>) -> CmdResult<Vec<TotpEntryPublic>> {
-    let rows = sqlx::query_as::<_, TotpEntry>(
-        "SELECT * FROM totp_entries ORDER BY created_at DESC",
-    )
-    .fetch_all(&state.db)
-    .await
-    .map_err(AppError::db)?;
+    let rows =
+        sqlx::query_as::<_, TotpEntry>("SELECT * FROM totp_entries ORDER BY created_at DESC")
+            .fetch_all(&state.db)
+            .await
+            .map_err(AppError::db)?;
 
     rows.iter()
         .map(|r| r.to_public().map_err(|e| AppError::other(e)))
@@ -220,7 +219,11 @@ pub async fn totp_add(
         let issuer = totp.issuer.clone();
         let account = totp.account_name.clone();
         (
-            if req.name.is_empty() { account } else { req.name.clone() },
+            if req.name.is_empty() {
+                account
+            } else {
+                req.name.clone()
+            },
             issuer,
             secret_b32,
             alg.to_string(),
@@ -228,7 +231,9 @@ pub async fn totp_add(
             totp.step as i64,
         )
     } else {
-        let raw = req.secret.ok_or_else(|| AppError::other("secret or uri required"))?;
+        let raw = req
+            .secret
+            .ok_or_else(|| AppError::other("secret or uri required"))?;
         let normalized = normalize_secret(&raw)?;
         (
             req.name.clone(),
@@ -258,8 +263,7 @@ pub async fn totp_add(
 
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
-    let tags_json =
-        serde_json::to_string(&req.tags).map_err(|e| AppError::other(e))?;
+    let tags_json = serde_json::to_string(&req.tags).map_err(|e| AppError::other(e))?;
 
     sqlx::query(
         "INSERT INTO totp_entries (id, name, issuer, secret, algorithm, digits, period, tags, created_at, updated_at)
@@ -308,37 +312,37 @@ pub async fn totp_update(
 ) -> CmdResult<TotpEntryPublic> {
     let now = Utc::now().to_rfc3339();
 
-    let mut entry = sqlx::query_as::<_, TotpEntry>(
-        "SELECT * FROM totp_entries WHERE id = ?",
-    )
-    .bind(&id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(AppError::db)?
-    .ok_or_else(|| AppError::not_found(format!("TOTP entry {id}")))?;
+    let mut entry = sqlx::query_as::<_, TotpEntry>("SELECT * FROM totp_entries WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found(format!("TOTP entry {id}")))?;
 
     if let Some(name) = req.name {
         entry.name = name;
     }
     if let Some(issuer) = req.issuer {
-        entry.issuer = if issuer.is_empty() { None } else { Some(issuer) };
+        entry.issuer = if issuer.is_empty() {
+            None
+        } else {
+            Some(issuer)
+        };
     }
     if let Some(tags) = &req.tags {
         entry.tags = serde_json::to_string(tags).map_err(|e| AppError::other(e))?;
     }
     entry.updated_at = now;
 
-    sqlx::query(
-        "UPDATE totp_entries SET name=?, issuer=?, tags=?, updated_at=? WHERE id=?",
-    )
-    .bind(&entry.name)
-    .bind(&entry.issuer)
-    .bind(&entry.tags)
-    .bind(&entry.updated_at)
-    .bind(&id)
-    .execute(&state.db)
-    .await
-    .map_err(AppError::db)?;
+    sqlx::query("UPDATE totp_entries SET name=?, issuer=?, tags=?, updated_at=? WHERE id=?")
+        .bind(&entry.name)
+        .bind(&entry.issuer)
+        .bind(&entry.tags)
+        .bind(&entry.updated_at)
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
 
     entry.to_public().map_err(|e| AppError::other(e))
 }
@@ -358,14 +362,12 @@ pub async fn totp_generate_code(
     id: String,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<TotpCode> {
-    let entry = sqlx::query_as::<_, TotpEntry>(
-        "SELECT * FROM totp_entries WHERE id = ?",
-    )
-    .bind(&id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(AppError::db)?
-    .ok_or_else(|| AppError::not_found(format!("TOTP entry {id}")))?;
+    let entry = sqlx::query_as::<_, TotpEntry>("SELECT * FROM totp_entries WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found(format!("TOTP entry {id}")))?;
 
     let code = generate_code_for(&entry)?;
 
@@ -390,10 +392,7 @@ pub async fn totp_generate_codes(
     }
 
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT * FROM totp_entries WHERE id IN ({})",
-        placeholders
-    );
+    let sql = format!("SELECT * FROM totp_entries WHERE id IN ({})", placeholders);
 
     // Safe: only `?` placeholders are interpolated; ids are bound below.
     let mut q = sqlx::query_as::<_, TotpEntry>(sqlx::AssertSqlSafe(sql));
@@ -402,17 +401,24 @@ pub async fn totp_generate_codes(
     }
     let rows = q.fetch_all(&state.db).await.map_err(AppError::db)?;
 
-    Ok(rows.iter().filter_map(|row| generate_code_for(row).ok()).collect())
+    Ok(rows
+        .iter()
+        .filter_map(|row| generate_code_for(row).ok())
+        .collect())
 }
 
 #[tauri::command]
 pub async fn totp_preview_uri(uri: String) -> CmdResult<TotpPreview> {
-    let totp = TOTP::from_url(&uri)
-        .map_err(|e| AppError::other(format!("Invalid otpauth URI: {e}")))?;
+    let totp =
+        TOTP::from_url(&uri).map_err(|e| AppError::other(format!("Invalid otpauth URI: {e}")))?;
 
     let secret_b32 = totp.get_secret_base32();
     let masked = if secret_b32.len() > 4 {
-        format!("{}…{}", &secret_b32[..2], &secret_b32[secret_b32.len() - 2..])
+        format!(
+            "{}…{}",
+            &secret_b32[..2],
+            &secret_b32[secret_b32.len() - 2..]
+        )
     } else {
         "••••".to_string()
     };

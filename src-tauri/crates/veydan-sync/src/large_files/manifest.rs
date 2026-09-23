@@ -66,7 +66,9 @@ impl ManifestV2 {
             if c.size == 0 || c.size > self.chunk_size || (!last && c.size != self.chunk_size) {
                 return bad("chunk size does not match layout");
             }
-            total = total.checked_add(c.size).ok_or_else(|| SyncError::Format("manifest v2: size overflow".into()))?;
+            total = total
+                .checked_add(c.size)
+                .ok_or_else(|| SyncError::Format("manifest v2: size overflow".into()))?;
         }
         if total != self.size {
             return bad("chunk sizes do not sum to file size");

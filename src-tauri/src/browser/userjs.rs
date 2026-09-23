@@ -27,8 +27,14 @@ pub fn generate(profile: &Profile, proxy: Option<&Proxy>) -> String {
         pref_bool("browser.sessionstore.resume_from_crash", false),
         // History: places (sidebar) + session (back/forward buttons)
         pref_bool("places.history.enabled", profile.history_enabled),
-        pref_bool("browser.privatebrowsing.autostart", !profile.history_enabled),
-        pref_int("browser.sessionhistory.max_entries", if profile.history_enabled { 50 } else { 0 }),
+        pref_bool(
+            "browser.privatebrowsing.autostart",
+            !profile.history_enabled,
+        ),
+        pref_int(
+            "browser.sessionhistory.max_entries",
+            if profile.history_enabled { 50 } else { 0 },
+        ),
     ];
 
     // Startup page
@@ -121,11 +127,17 @@ pub fn generate(profile: &Profile, proxy: Option<&Proxy>) -> String {
     if profile.browser_type == "camoufox" {
         let engine_name = search_engine_display_name(&profile.default_search_engine);
         prefs.push(pref_string("browser.search.defaultenginename", engine_name));
-        prefs.push(pref_string("browser.search.defaultenginename.private", engine_name));
+        prefs.push(pref_string(
+            "browser.search.defaultenginename.private",
+            engine_name,
+        ));
         // Address bar placeholder text — set here so it matches the engine immediately
         // on first launch (SearchService updates it async, causing stale display otherwise)
         prefs.push(pref_string("browser.urlbar.placeholderName", engine_name));
-        prefs.push(pref_string("browser.urlbar.placeholderName.private", engine_name));
+        prefs.push(pref_string(
+            "browser.urlbar.placeholderName.private",
+            engine_name,
+        ));
     }
 
     // Proxy
@@ -214,6 +226,95 @@ fn pref_string(key: &str, value: &str) -> String {
     format!("user_pref(\"{key}\", \"{escaped}\");")
 }
 
+/// Profile locale options. Same order as `src/lib/locales.ts`: a bare language
+/// code (`ru`) maps to the first matching entry (`ru-RU`).
+const LOCALE_OPTIONS: &[(&str, &str)] = &[
+    ("en-US", "en-US,en"),
+    ("en-GB", "en-GB,en"),
+    ("ru-RU", "ru-RU,ru"),
+    ("de-DE", "de-DE,de"),
+    ("fr-FR", "fr-FR,fr"),
+    ("es-ES", "es-ES,es"),
+    ("es-MX", "es-MX,es"),
+    ("pt-BR", "pt-BR,pt"),
+    ("pt-PT", "pt-PT,pt"),
+    ("it-IT", "it-IT,it"),
+    ("nl-NL", "nl-NL,nl"),
+    ("pl-PL", "pl-PL,pl"),
+    ("tr-TR", "tr-TR,tr"),
+    ("uk-UA", "uk-UA,uk"),
+    ("zh-CN", "zh-CN,zh"),
+    ("zh-TW", "zh-TW,zh"),
+    ("ja-JP", "ja-JP,ja"),
+    ("ko-KR", "ko-KR,ko"),
+    ("ar-SA", "ar-SA,ar"),
+    ("fa-IR", "fa-IR,fa"),
+    ("hi-IN", "hi-IN,hi"),
+    ("id-ID", "id-ID,id"),
+    ("vi-VN", "vi-VN,vi"),
+    ("th-TH", "th-TH,th"),
+];
+
+/// Maps a Firefox `intl.locale.requested` value to the profile locale and its languages list.
+pub fn match_locale(requested: &str) -> Option<(&'static str, &'static str)> {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return None;
+    }
+    if let Some(hit) = LOCALE_OPTIONS
+        .iter()
+        .find(|(locale, _)| locale.eq_ignore_ascii_case(requested))
+    {
+        return Some(*hit);
+    }
+    let prefix = requested.split(['-', '_']).next().unwrap_or(requested);
+    LOCALE_OPTIONS
+        .iter()
+        .find(|(locale, _)| {
+            locale
+                .split('-')
+                .next()
+                .is_some_and(|lang| lang.eq_ignore_ascii_case(prefix))
+        })
+        .copied()
+}
+
+/// Last string value of `key` in a prefs.js file. Firefox appends overrides, so the last one wins.
+pub fn read_pref_string(content: &str, key: &str) -> Option<String> {
+    let needle = format!("user_pref(\"{key}\", \"");
+    let mut last = None;
+    let mut rest = content;
+    while let Some(idx) = rest.find(&needle) {
+        let after = &rest[idx + needle.len()..];
+        match take_js_string(after) {
+            Some((raw, consumed)) => {
+                last = Some(raw);
+                rest = &after[consumed..];
+            }
+            None => break,
+        }
+    }
+    last
+}
+
+/// Decodes a JS string body and returns how many bytes of `input` it consumed, including the closing quote.
+fn take_js_string(input: &str) -> Option<(String, usize)> {
+    let mut out = String::new();
+    let mut chars = input.char_indices();
+    while let Some((i, c)) = chars.next() {
+        if c == '\\' {
+            let (_, next) = chars.next()?;
+            out.push(next);
+            continue;
+        }
+        if c == '"' {
+            return Some((out, i + c.len_utf8()));
+        }
+        out.push(c);
+    }
+    None
+}
+
 fn pref_bool(key: &str, value: bool) -> String {
     format!("user_pref(\"{key}\", {value});")
 }
@@ -251,8 +352,7 @@ mod tests {
         let js = generate(&p, None);
         assert!(js.contains("user_pref(\"media.peerconnection.enabled\", true);"));
         assert!(js.contains("user_pref(\"media.peerconnection.ice.no_host\", true);"));
-        assert!(js
-            .contains("user_pref(\"media.peerconnection.ice.default_address_only\", true);"));
+        assert!(js.contains("user_pref(\"media.peerconnection.ice.default_address_only\", true);"));
     }
 
     #[test]

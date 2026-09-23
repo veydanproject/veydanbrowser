@@ -83,7 +83,10 @@ async fn write_setting(state: &AppState, key: &str, value: Option<&str>) -> Resu
 }
 
 async fn timeout_min(state: &AppState) -> u32 {
-    read_setting(state, TIMEOUT_KEY).await.and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_TIMEOUT_MIN)
+    read_setting(state, TIMEOUT_KEY)
+        .await
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_TIMEOUT_MIN)
 }
 
 fn hash_password(password: &str) -> Result<String, AppError> {
@@ -95,7 +98,11 @@ fn hash_password(password: &str) -> Result<String, AppError> {
 
 fn verify(password: &str, phc: &str) -> bool {
     PasswordHash::new(phc)
-        .map(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+        .map(|parsed| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok()
+        })
         .unwrap_or(false)
 }
 
@@ -103,7 +110,11 @@ pub(crate) async fn status(state: &AppState) -> LockStatus {
     let enabled = read_setting(state, HASH_KEY).await.is_some();
     let timeout_min = timeout_min(state).await;
     let locked = enabled && !state.notes_lock.is_unlocked(timeout_min);
-    LockStatus { enabled, locked, timeout_min }
+    LockStatus {
+        enabled,
+        locked,
+        timeout_min,
+    }
 }
 
 /// True when the notes UI must not reveal content (used by the capture bridge too).
@@ -127,12 +138,17 @@ pub async fn notes_lock_set(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<LockStatus> {
     if let Some(existing) = read_setting(&state, HASH_KEY).await {
-        let ok = current.as_deref().map(|c| verify(c, &existing)).unwrap_or(false);
+        let ok = current
+            .as_deref()
+            .map(|c| verify(c, &existing))
+            .unwrap_or(false);
         if !ok {
             return Err(AppError::other("Current password is incorrect").into());
         }
     }
-    let password = password.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    let password = password
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty());
     match password {
         Some(p) => {
             if p.chars().count() < 4 {
@@ -151,7 +167,10 @@ pub async fn notes_lock_set(
 }
 
 #[tauri::command]
-pub async fn notes_lock_timeout_set(minutes: u32, state: tauri::State<'_, AppState>) -> CmdResult<LockStatus> {
+pub async fn notes_lock_timeout_set(
+    minutes: u32,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<LockStatus> {
     write_setting(&state, TIMEOUT_KEY, Some(&minutes.to_string())).await?;
     Ok(status(&state).await)
 }
@@ -174,7 +193,10 @@ pub async fn notes_lock_unlock(
 }
 
 #[tauri::command]
-pub async fn notes_lock_lock(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> CmdResult<LockStatus> {
+pub async fn notes_lock_lock(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<LockStatus> {
     state.notes_lock.clear();
     let _ = app.emit(EVENT_LOCKED, ());
     Ok(status(&state).await)

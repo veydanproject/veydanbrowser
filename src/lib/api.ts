@@ -438,6 +438,9 @@ export const api = {
       call<boolean>('sync_attachment_cancel', { noteId, name }),
     /** Background cycle if a vault is joined and the rate limit allows. */
     trigger: () => call<void>('sync_trigger'),
+    debugGet: () => call<SyncDebugState>('sync_debug_get'),
+    debugSet: (enabled: boolean) => call<void>('sync_debug_set', { enabled }),
+    debugClear: () => call<void>('sync_debug_clear'),
     conflictGet: (noteId: string) => call<ConflictView>('sync_conflict_get', { noteId }),
     /** Fails with `conflict_changed` when the conflict moved since `conflictGet`. */
     conflictResolve: (noteId: string, token: string, content: string) =>
@@ -603,6 +606,21 @@ export interface StorageDevice {
   id: string;
   name: string;
   own: boolean;
+}
+
+export interface SyncDebugEntry {
+  seq: number;
+  at: string;
+  cycle: number;
+  source: string;
+  level: string;
+  step: string;
+  message: string;
+}
+
+export interface SyncDebugState {
+  enabled: boolean;
+  entries: SyncDebugEntry[];
 }
 
 export interface SyncStatus {

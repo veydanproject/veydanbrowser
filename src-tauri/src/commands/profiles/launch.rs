@@ -93,10 +93,7 @@ pub async fn profile_stop(
 }
 
 #[tauri::command]
-pub async fn profile_is_running(
-    id: String,
-    state: tauri::State<'_, AppState>,
-) -> CmdResult<bool> {
+pub async fn profile_is_running(id: String, state: tauri::State<'_, AppState>) -> CmdResult<bool> {
     Ok(state.browser.is_running(&id).await)
 }
 

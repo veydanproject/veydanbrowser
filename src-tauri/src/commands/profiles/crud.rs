@@ -127,7 +127,9 @@ pub async fn profile_update(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<Profile> {
     if state.browser.is_running(&id).await {
-        return Err(AppError::other("Cannot update a running profile. Stop it first."));
+        return Err(AppError::other(
+            "Cannot update a running profile. Stop it first.",
+        ));
     }
 
     let now = Utc::now();
@@ -225,7 +227,9 @@ pub async fn profile_delete(
 #[tauri::command]
 pub async fn profile_clone(id: String, state: tauri::State<'_, AppState>) -> CmdResult<Profile> {
     if state.browser.is_running(&id).await {
-        return Err(AppError::other("Cannot clone a running profile. Stop it first."));
+        return Err(AppError::other(
+            "Cannot clone a running profile. Stop it first.",
+        ));
     }
 
     let original = sqlx::query_as::<_, Profile>("SELECT * FROM profiles WHERE id = ?")

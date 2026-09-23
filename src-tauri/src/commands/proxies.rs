@@ -36,7 +36,8 @@ pub async fn proxy_create(
 ) -> CmdResult<Proxy> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now();
-    let tags_json = serde_json::to_string(&req.tags.unwrap_or_default()).map_err(AppError::other)?;
+    let tags_json =
+        serde_json::to_string(&req.tags.unwrap_or_default()).map_err(AppError::other)?;
 
     sqlx::query(
         "INSERT INTO proxies
@@ -81,7 +82,12 @@ fn validate_bulk_item(item: &BulkProxyItem) -> Result<(), String> {
     Ok(())
 }
 
-fn dedup_key(proxy_type: &str, host: &str, port: i64, username: Option<&str>) -> (String, String, i64, String) {
+fn dedup_key(
+    proxy_type: &str,
+    host: &str,
+    port: i64,
+    username: Option<&str>,
+) -> (String, String, i64, String) {
     (
         proxy_type.to_string(),
         host.trim().to_lowercase(),
@@ -102,12 +108,11 @@ async fn bulk_create_impl(
     db: &sqlx::Pool<sqlx::Sqlite>,
     items: Vec<BulkProxyItem>,
 ) -> CmdResult<BulkImportResult> {
-    let existing: Vec<(String, String, i64, Option<String>)> = sqlx::query_as(
-        "SELECT proxy_type, LOWER(host), port, username FROM proxies",
-    )
-    .fetch_all(db)
-    .await
-    .map_err(AppError::db)?;
+    let existing: Vec<(String, String, i64, Option<String>)> =
+        sqlx::query_as("SELECT proxy_type, LOWER(host), port, username FROM proxies")
+            .fetch_all(db)
+            .await
+            .map_err(AppError::db)?;
 
     let mut seen: HashSet<(String, String, i64, String)> = existing
         .into_iter()
@@ -130,7 +135,12 @@ async fn bulk_create_impl(
             continue;
         }
 
-        let key = dedup_key(&item.proxy_type, &item.host, item.port, item.username.as_deref());
+        let key = dedup_key(
+            &item.proxy_type,
+            &item.host,
+            item.port,
+            item.username.as_deref(),
+        );
         if seen.contains(&key) {
             rows.push(BulkImportRowResult {
                 line_number: item.line_number,
@@ -296,17 +306,20 @@ mod tests {
             &pool,
             vec![
                 full_item(1, "1.2.3.4", 8080, None),
-                full_item(2, "1.2.3.4", 8080, None),        // dup within batch
+                full_item(2, "1.2.3.4", 8080, None), // dup within batch
                 full_item(3, "1.2.3.4", 8080, Some("user")), // different username -> new
-                full_item(4, "bad host", 8080, None),        // error
-                full_item(5, "5.6.7.8", 0, None),            // error: port
+                full_item(4, "bad host", 8080, None), // error
+                full_item(5, "5.6.7.8", 0, None),    // error: port
             ],
         )
         .await
         .unwrap();
 
         let statuses: Vec<&str> = result.rows.iter().map(|r| r.status.as_str()).collect();
-        assert_eq!(statuses, ["imported", "duplicate", "imported", "error", "error"]);
+        assert_eq!(
+            statuses,
+            ["imported", "duplicate", "imported", "error", "error"]
+        );
         assert_eq!(result.imported.len(), 2);
         assert_eq!(result.imported[0].name, "1.2.3.4:8080");
         assert_eq!(result.imported[0].status, "unknown");
@@ -348,7 +361,8 @@ pub async fn proxy_update(
     req: CreateProxyRequest,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<Proxy> {
-    let tags_json = serde_json::to_string(&req.tags.unwrap_or_default()).map_err(AppError::other)?;
+    let tags_json =
+        serde_json::to_string(&req.tags.unwrap_or_default()).map_err(AppError::other)?;
 
     sqlx::query(
         "UPDATE proxies SET
@@ -380,15 +394,21 @@ pub async fn proxy_update(
 
 /// TOFU pin for an SSH proxy after a successful connect made outside `proxy_check`
 /// (profile launch, jump host). Only fills an empty slot; never overwrites.
-pub async fn pin_ssh_fingerprint(db: &sqlx::SqlitePool, proxy: &Proxy, result: &crate::proxy::ssh::SshConnectResult) {
+pub async fn pin_ssh_fingerprint(
+    db: &sqlx::SqlitePool,
+    proxy: &Proxy,
+    result: &crate::proxy::ssh::SshConnectResult,
+) {
     if !result.is_new || proxy.server_fingerprint.is_some() {
         return;
     }
-    if let Err(e) = sqlx::query("UPDATE proxies SET server_fingerprint = ? WHERE id = ? AND server_fingerprint IS NULL")
-        .bind(&result.fingerprint)
-        .bind(&proxy.id)
-        .execute(db)
-        .await
+    if let Err(e) = sqlx::query(
+        "UPDATE proxies SET server_fingerprint = ? WHERE id = ? AND server_fingerprint IS NULL",
+    )
+    .bind(&result.fingerprint)
+    .bind(&proxy.id)
+    .execute(db)
+    .await
     {
         eprintln!("[proxy] failed to pin host key for {}: {e}", proxy.id);
     }

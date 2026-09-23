@@ -163,8 +163,8 @@ fn patch_zip_file(zip_path: &Path, replacements: &[(&str, &[u8])]) -> Result<(),
     {
         let src = std::fs::File::open(zip_path)
             .map_err(|e| format!("open {}: {e}", zip_path.display()))?;
-        let mut archive = ZipArchive::new(src)
-            .map_err(|e| format!("read zip {}: {e}", zip_path.display()))?;
+        let mut archive =
+            ZipArchive::new(src).map_err(|e| format!("read zip {}: {e}", zip_path.display()))?;
 
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).map_err(|e| format!("entry {i}: {e}"))?;
@@ -182,11 +182,10 @@ fn patch_zip_file(zip_path: &Path, replacements: &[(&str, &[u8])]) -> Result<(),
 
     let tmp_path = zip_path.with_extension("tmp");
     {
-        let dst = std::fs::File::create(&tmp_path)
-            .map_err(|e| format!("create tmp: {e}"))?;
+        let dst = std::fs::File::create(&tmp_path).map_err(|e| format!("create tmp: {e}"))?;
         let mut writer = ZipWriter::new(dst);
-        let options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         for (name, content) in &entries {
             writer
@@ -796,7 +795,8 @@ pub async fn camoufox_download(
             }
             Err(DownloadError::Cancelled) => {
                 *dl_state.lock().await = DownloadState::Idle;
-                app.emit("camoufox://error", "Download cancelled".to_string()).ok();
+                app.emit("camoufox://error", "Download cancelled".to_string())
+                    .ok();
             }
             Err(DownloadError::Other(e)) => {
                 *dl_state.lock().await = DownloadState::Failed { error: e.clone() };
@@ -912,7 +912,8 @@ async fn run_download(
     let mut file = if start_from > 0 {
         std::fs::OpenOptions::new().append(true).open(&tmp_path)
     } else {
-        std::fs::write(&version_path, &version).map_err(|e| format!("Cannot write version marker: {e}"))?;
+        std::fs::write(&version_path, &version)
+            .map_err(|e| format!("Cannot write version marker: {e}"))?;
         std::fs::File::create(&tmp_path)
     }
     .map_err(|e| format!("Cannot open temp file: {e}"))?;
@@ -953,7 +954,9 @@ async fn run_download(
     if downloaded != total_size {
         let _ = std::fs::remove_file(&tmp_path);
         let _ = std::fs::remove_file(&version_path);
-        return Err(format!("Downloaded size {downloaded} does not match asset size {total_size}").into());
+        return Err(
+            format!("Downloaded size {downloaded} does not match asset size {total_size}").into(),
+        );
     }
 
     // Extract zip + patch — heavy synchronous IO, moved off the async worker
@@ -963,9 +966,11 @@ async fn run_download(
         let tmp_path = tmp_path.clone();
         let app_data_dir = app_data_dir.clone();
         let version = version.clone();
-        tokio::task::spawn_blocking(move || extract_and_install(&tmp_path, &app_data_dir, &version))
-            .await
-            .map_err(|e| format!("Extraction task failed: {e}"))??;
+        tokio::task::spawn_blocking(move || {
+            extract_and_install(&tmp_path, &app_data_dir, &version)
+        })
+        .await
+        .map_err(|e| format!("Extraction task failed: {e}"))??;
     }
 
     Ok(version)
@@ -974,11 +979,7 @@ async fn run_download(
 /// Synchronous tail of the download: zip validation + extraction, permissions,
 /// omni.ja/chrome.css/policies patching and marker files. Runs inside
 /// `spawn_blocking` — everything here is blocking `std::fs`/zip IO.
-fn extract_and_install(
-    tmp_path: &Path,
-    app_data_dir: &Path,
-    version: &str,
-) -> Result<(), String> {
+fn extract_and_install(tmp_path: &Path, app_data_dir: &Path, version: &str) -> Result<(), String> {
     // Runs on a spawn_blocking thread, so blocking_lock is safe here. Keeps a
     // concurrently launching profile from patching/reading the install dir
     // while it is being replaced.
@@ -1193,10 +1194,22 @@ pub fn write_search_engine_to_profile(
         .and_then(|v| v.as_object_mut())
         .ok_or("missing metaData")?;
 
-    meta.insert("defaultEngineId".into(), serde_json::Value::String(engine_id.into()));
-    meta.insert("privateDefaultEngineId".into(), serde_json::Value::String(engine_id.into()));
-    meta.insert("defaultEngineIdHash".into(), serde_json::Value::String(hash.clone()));
-    meta.insert("privateDefaultEngineIdHash".into(), serde_json::Value::String(hash));
+    meta.insert(
+        "defaultEngineId".into(),
+        serde_json::Value::String(engine_id.into()),
+    );
+    meta.insert(
+        "privateDefaultEngineId".into(),
+        serde_json::Value::String(engine_id.into()),
+    );
+    meta.insert(
+        "defaultEngineIdHash".into(),
+        serde_json::Value::String(hash.clone()),
+    );
+    meta.insert(
+        "privateDefaultEngineIdHash".into(),
+        serde_json::Value::String(hash),
+    );
 
     let json_bytes = serde_json::to_vec(&doc).map_err(|e| e.to_string())?;
     write_mozlz4(&search_json, &json_bytes)

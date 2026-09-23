@@ -9,7 +9,10 @@
 
 use super::crypto::{self, chunk_key, manifest_key};
 use super::manifest::{ChunkEntry, ManifestV2, CODEC_ZSTD, FORMAT_VERSION};
-use super::{CancelFlag, LargeFileRef, LargeFileSink, LargeFileSource, LargeFileStore, Phase, Progress, ProgressFn};
+use super::{
+    CancelFlag, LargeFileRef, LargeFileSink, LargeFileSource, LargeFileStore, Phase, Progress,
+    ProgressFn,
+};
 use crate::{Result, SyncError};
 use futures_util::stream::{FuturesOrdered, StreamExt};
 use std::future::Future;
@@ -26,7 +29,9 @@ fn retryable(e: &SyncError) -> bool {
 }
 
 fn backoff(attempt: u32) -> Duration {
-    let base = RETRY_BASE.saturating_mul(1u32 << attempt.min(6)).min(RETRY_MAX);
+    let base = RETRY_BASE
+        .saturating_mul(1u32 << attempt.min(6))
+        .min(RETRY_MAX);
     let jitter = rand::random::<u64>() % (base.as_millis() as u64 / 2 + 1);
     base + Duration::from_millis(jitter)
 }
@@ -57,7 +62,10 @@ async fn read_chunk(reader: &mut (dyn AsyncRead + Send + Unpin), size: usize) ->
     let mut buf = vec![0u8; size];
     let mut filled = 0;
     while filled < size {
-        let n = reader.read(&mut buf[filled..]).await.map_err(|e| SyncError::Source(e.to_string()))?;
+        let n = reader
+            .read(&mut buf[filled..])
+            .await
+            .map_err(|e| SyncError::Source(e.to_string()))?;
         if n == 0 {
             break;
         }
@@ -76,11 +84,19 @@ struct Counter<'a> {
 impl Counter<'_> {
     fn add(&self, phase: Phase, n: u64) {
         let done = self.done.fetch_add(n, Ordering::Relaxed) + n;
-        (self.progress)(Progress { phase, done, total: self.total });
+        (self.progress)(Progress {
+            phase,
+            done,
+            total: self.total,
+        });
     }
 
     fn report(&self, phase: Phase) {
-        (self.progress)(Progress { phase, done: self.done.load(Ordering::Relaxed), total: self.total });
+        (self.progress)(Progress {
+            phase,
+            done: self.done.load(Ordering::Relaxed),
+            total: self.total,
+        });
     }
 }
 
@@ -91,7 +107,11 @@ pub(super) async fn upload(
     cancel: &CancelFlag,
 ) -> Result<LargeFileRef> {
     let chunk_size = store.config.chunk_size;
-    let counter = Counter { done: AtomicU64::new(0), total: source.len_hint(), progress };
+    let counter = Counter {
+        done: AtomicU64::new(0),
+        total: source.len_hint(),
+        progress,
+    };
     counter.report(Phase::Hashing);
 
     // Sequential read, up to `parallelism` chunks sealing/uploading at once,
@@ -121,16 +141,33 @@ pub(super) async fn upload(
     let size = entries.iter().map(|c| c.size).sum();
     let ids: Vec<String> = entries.iter().map(|c| c.id.clone()).collect();
     let file_id = crypto::file_id(store.keys, &ids);
-    let manifest = ManifestV2 { version: FORMAT_VERSION, size, file_id: file_id.clone(), chunk_size, codec: CODEC_ZSTD.into(), chunks: entries };
+    let manifest = ManifestV2 {
+        version: FORMAT_VERSION,
+        size,
+        file_id: file_id.clone(),
+        chunk_size,
+        codec: CODEC_ZSTD.into(),
+        chunks: entries,
+    };
     manifest.validate()?;
     let (manifest_id, sealed) = crypto::seal_manifest(store.keys, store.vault_id, &manifest)?;
     let key = manifest_key(&manifest_id);
     with_retry(cancel, || store.storage.put_if_absent(&key, &sealed)).await?;
-    Ok(LargeFileRef { version: FORMAT_VERSION, manifest_id, size, file_id })
+    Ok(LargeFileRef {
+        version: FORMAT_VERSION,
+        manifest_id,
+        size,
+        file_id,
+    })
 }
 
 /// Hash, skip when present, otherwise seal and store. Returns the manifest entry.
-async fn upload_chunk(store: &LargeFileStore<'_>, plain: Vec<u8>, counter: &Counter<'_>, cancel: &CancelFlag) -> Result<ChunkEntry> {
+async fn upload_chunk(
+    store: &LargeFileStore<'_>,
+    plain: Vec<u8>,
+    counter: &Counter<'_>,
+    cancel: &CancelFlag,
+) -> Result<ChunkEntry> {
     cancel.check()?;
     let size = plain.len() as u64;
     let id = crypto::chunk_id(store.keys, &plain);
@@ -154,14 +191,31 @@ pub(super) async fn download(
 ) -> Result<()> {
     let manifest = store.read_manifest(reference).await?;
     let chunk_size = manifest.chunk_size;
-    let staged = if store.config.resume { sink.staged_len(&reference.manifest_id).await? } else { 0 };
+    let staged = if store.config.resume {
+        sink.staged_len(&reference.manifest_id).await?
+    } else {
+        0
+    };
     let start = ((staged / chunk_size) as usize).min(manifest.chunks.len());
     let offset = start as u64 * chunk_size;
 
-    let counter = Counter { done: AtomicU64::new(offset), total: Some(manifest.size), progress };
+    let counter = Counter {
+        done: AtomicU64::new(offset),
+        total: Some(manifest.size),
+        progress,
+    };
     counter.report(Phase::Downloading);
-    let mut writer = sink.open_staging(&reference.manifest_id, offset, manifest.size).await?;
-    let result = write_chunks(store, &manifest.chunks[start..], writer.as_mut(), &counter, cancel).await;
+    let mut writer = sink
+        .open_staging(&reference.manifest_id, offset, manifest.size)
+        .await?;
+    let result = write_chunks(
+        store,
+        &manifest.chunks[start..],
+        writer.as_mut(),
+        &counter,
+        cancel,
+    )
+    .await;
     // Settle in-flight writes so the staged length is stable before discard/resume.
     let _ = writer.shutdown().await;
     drop(writer);
@@ -194,18 +248,33 @@ async fn write_chunks(
                 None => break,
             }
         }
-        let Some(plain) = in_flight.next().await else { break };
+        let Some(plain) = in_flight.next().await else {
+            break;
+        };
         let plain = plain?;
-        writer.write_all(&plain).await.map_err(|e| SyncError::Disk(e.to_string()))?;
+        writer
+            .write_all(&plain)
+            .await
+            .map_err(|e| SyncError::Disk(e.to_string()))?;
         counter.add(Phase::Downloading, plain.len() as u64);
     }
-    writer.flush().await.map_err(|e| SyncError::Disk(e.to_string()))?;
-    writer.shutdown().await.map_err(|e| SyncError::Disk(e.to_string()))
+    writer
+        .flush()
+        .await
+        .map_err(|e| SyncError::Disk(e.to_string()))?;
+    writer
+        .shutdown()
+        .await
+        .map_err(|e| SyncError::Disk(e.to_string()))
 }
 
 /// GET with retry, then AEAD + id + size checks. A missing chunk is not retried:
 /// the uploader may still be publishing it, the caller comes back next cycle.
-async fn fetch_chunk(store: &LargeFileStore<'_>, entry: &ChunkEntry, cancel: &CancelFlag) -> Result<Vec<u8>> {
+async fn fetch_chunk(
+    store: &LargeFileStore<'_>,
+    entry: &ChunkEntry,
+    cancel: &CancelFlag,
+) -> Result<Vec<u8>> {
     let key = chunk_key(&entry.id);
     let bytes = with_retry(cancel, || store.storage.get(&key))
         .await?
@@ -225,11 +294,15 @@ pub(super) async fn verify(
         cancel.check()?;
         let plain = read_chunk(reader.as_mut(), manifest.chunk_size as usize).await?;
         if plain.len() as u64 != entry.size || crypto::chunk_id(store.keys, &plain) != entry.id {
-            return Err(SyncError::Integrity(format!("source differs from stored file at chunk {i}")));
+            return Err(SyncError::Integrity(format!(
+                "source differs from stored file at chunk {i}"
+            )));
         }
     }
     if !read_chunk(reader.as_mut(), 1).await?.is_empty() {
-        return Err(SyncError::Integrity("source is longer than stored file".into()));
+        return Err(SyncError::Integrity(
+            "source is longer than stored file".into(),
+        ));
     }
     Ok(())
 }

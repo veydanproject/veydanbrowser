@@ -30,30 +30,31 @@ mod crud;
 mod files;
 mod filter;
 mod folders;
+mod history;
+mod index;
 mod links;
 mod lock;
+mod merge;
+mod models;
 mod nav;
 #[cfg(desktop)]
 mod quick_capture;
-mod smart_views;
-mod templates;
-mod history;
-mod index;
-mod merge;
-mod models;
 mod settings;
+mod smart_views;
 mod tags;
+mod templates;
 #[cfg(desktop)]
 mod transfer;
 #[cfg(desktop)]
 mod window;
 
-pub use attachments::{
-    allow_asset_dir, note_attachment_add, note_attachment_add_from_path, note_attachment_delete, note_attachment_fetch,
-    note_attachment_list, note_attachment_open, note_attachment_read, note_attachment_save, note_attachments_gc,
-};
 #[cfg(desktop)]
 pub use attachments::clipboard_file_paths;
+pub use attachments::{
+    allow_asset_dir, note_attachment_add, note_attachment_add_from_path, note_attachment_delete,
+    note_attachment_fetch, note_attachment_list, note_attachment_open, note_attachment_read,
+    note_attachment_save, note_attachments_gc,
+};
 #[cfg(desktop)]
 pub use capture::handle_capture;
 pub use crud::{
@@ -72,9 +73,8 @@ pub use lock::{
 pub use nav::note_nav;
 #[cfg(desktop)]
 pub use quick_capture::{
-    open_quick_capture, quick_capture_shortcut_get, quick_capture_shortcut_set, reapply_quick_capture_shortcut,
-    register_quick_capture_shortcut,
-    show_quick_capture,
+    open_quick_capture, quick_capture_shortcut_get, quick_capture_shortcut_set,
+    reapply_quick_capture_shortcut, register_quick_capture_shortcut, show_quick_capture,
 };
 pub use settings::*;
 pub use smart_views::{
@@ -88,10 +88,12 @@ pub use window::note_open_window;
 
 // Internals the sync module builds on (file format, index, tag links).
 pub(crate) use attachments::{attachments_dir_for, is_staging_name, safe_file_name};
-pub(crate) use settings::load_attachment_policy;
 pub(crate) use crud::{insert_note, update_note, NewNote};
-pub(crate) use files::{effective_docs_dir, parse_note_file, resolve_note_abs_path, write_note_file};
+pub(crate) use files::{
+    effective_docs_dir, parse_note_file, resolve_note_abs_path, write_note_file,
+};
 pub(crate) use history::{history_content_by_id, history_snapshot_by};
+pub(crate) use settings::load_attachment_policy;
 // Legacy mobile DB upgrade converts plain-text history into the compressed form.
 #[cfg(mobile)]
 pub(crate) use files::compute_hash;

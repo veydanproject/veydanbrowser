@@ -27,9 +27,7 @@ pub async fn clear_catalog(state: &AppState) -> CmdResult<()> {
     let _ = sqlx::query("DELETE FROM ssh_connections")
         .execute(&state.db)
         .await;
-    let _ = sqlx::query("DELETE FROM ssh_keys")
-        .execute(&state.db)
-        .await;
+    let _ = sqlx::query("DELETE FROM ssh_keys").execute(&state.db).await;
 
     // Notes graph
     let _ = sqlx::query("DELETE FROM note_links")
@@ -47,12 +45,16 @@ pub async fn clear_catalog(state: &AppState) -> CmdResult<()> {
     let _ = sqlx::query("DELETE FROM note_history")
         .execute(&state.db)
         .await;
-    let _ = sqlx::query("DELETE FROM notes_fts").execute(&state.db).await;
+    let _ = sqlx::query("DELETE FROM notes_fts")
+        .execute(&state.db)
+        .await;
     let _ = sqlx::query("DELETE FROM notes").execute(&state.db).await;
     let _ = sqlx::query("DELETE FROM note_smart_views")
         .execute(&state.db)
         .await;
-    let _ = sqlx::query("DELETE FROM note_tags").execute(&state.db).await;
+    let _ = sqlx::query("DELETE FROM note_tags")
+        .execute(&state.db)
+        .await;
     let _ = sqlx::query("DELETE FROM note_folders")
         .execute(&state.db)
         .await;
@@ -65,11 +67,10 @@ pub async fn clear_catalog(state: &AppState) -> CmdResult<()> {
         .await;
 
     // Profiles then proxies (proxy_id FK is soft)
-    let profile_paths: Vec<(String,)> =
-        sqlx::query_as("SELECT profile_path FROM profiles")
-            .fetch_all(&state.db)
-            .await
-            .unwrap_or_default();
+    let profile_paths: Vec<(String,)> = sqlx::query_as("SELECT profile_path FROM profiles")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
     let _ = sqlx::query("DELETE FROM profiles").execute(&state.db).await;
     let _ = sqlx::query("DELETE FROM proxies").execute(&state.db).await;
 
