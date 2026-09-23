@@ -11,12 +11,15 @@ pub struct DemoPack {
     pub proxies: Vec<DemoProxy>,
     pub profiles: Vec<DemoProfile>,
     pub totp: Vec<DemoTotp>,
+    #[cfg(desktop)]
     pub ssh_keys: Vec<DemoSshKey>,
+    #[cfg(desktop)]
     pub ssh_connections: Vec<DemoSshConn>,
     pub folders: Vec<DemoFolder>,
     pub tags: Vec<DemoTag>,
     pub notes: Vec<DemoNote>,
     pub smart_views: Vec<DemoSmartView>,
+    #[cfg(desktop)]
     pub capture_rules: Vec<DemoCapture>,
 }
 
@@ -76,6 +79,7 @@ pub struct DemoTotp {
     pub tags: &'static [&'static str],
 }
 
+#[cfg(desktop)]
 #[derive(Clone)]
 pub struct DemoSshKey {
     pub id: &'static str,
@@ -83,6 +87,7 @@ pub struct DemoSshKey {
     pub algorithm: &'static str,
 }
 
+#[cfg(desktop)]
 #[derive(Clone)]
 pub struct DemoSshConn {
     pub id: &'static str,
@@ -142,6 +147,7 @@ pub struct DemoSmartView {
     pub kind: SmartKind,
 }
 
+#[cfg(desktop)]
 #[derive(Clone)]
 pub struct DemoCapture {
     pub domain: &'static str,
@@ -183,12 +189,15 @@ pub fn pack(locale: &str) -> DemoPack {
         proxies: proxies(),
         profiles: profiles(ru),
         totp: totp_entries(),
+        #[cfg(desktop)]
         ssh_keys: ssh_keys(),
+        #[cfg(desktop)]
         ssh_connections: ssh_connections(),
         folders: folders(ru),
         tags: tags(),
         notes: notes(ru),
         smart_views: smart_views(ru),
+        #[cfg(desktop)]
         capture_rules: capture_rules(),
     }
 }
@@ -690,6 +699,7 @@ fn totp_entries() -> Vec<DemoTotp> {
     ]
 }
 
+#[cfg(desktop)]
 fn ssh_keys() -> Vec<DemoSshKey> {
     vec![
         DemoSshKey {
@@ -705,6 +715,7 @@ fn ssh_keys() -> Vec<DemoSshKey> {
     ]
 }
 
+#[cfg(desktop)]
 fn ssh_connections() -> Vec<DemoSshConn> {
     vec![
         DemoSshConn {
@@ -965,6 +976,7 @@ fn smart_views(ru: bool) -> Vec<DemoSmartView> {
     ]
 }
 
+#[cfg(desktop)]
 fn capture_rules() -> Vec<DemoCapture> {
     vec![
         DemoCapture {

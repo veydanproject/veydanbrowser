@@ -7250,7 +7250,7 @@ dependencies = [
 
 [[package]]
 name = "veydanbrowser"
-version = "2.0.5"
+version = "2.0.6"
 dependencies = [
  "age",
  "anyhow",

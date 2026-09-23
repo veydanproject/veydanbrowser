@@ -11,10 +11,14 @@ const platform = process.env.TAURI_ENV_PLATFORM ?? "unknown";
 const isAndroid = platform === "android";
 const port = isAndroid ? 1430 : 1420;
 const hmrPort = isAndroid ? 1431 : host ? 1421 : 1420;
+// Separate optimizer caches. A shared node_modules/.vite lets Android dev
+// poison desktop CSS (raw .svelte files get served as stylesheets).
+const cacheDir = isAndroid ? "node_modules/.vite-android" : "node_modules/.vite-desktop";
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
+  cacheDir,
   define: {
     __TAURI_PLATFORM__: JSON.stringify(platform),
   },

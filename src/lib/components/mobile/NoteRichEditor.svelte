@@ -6,6 +6,7 @@
   import { onMount } from 'svelte';
   import { Editor } from '@tiptap/core';
   import { noteExtensions, WIKI_MARK, unclosedWikiAt, type ResolveSrc } from '$lib/tiptap-ext';
+  import type { EditAction } from '$lib/markdown-edit';
   import { portal } from '$lib/portal';
 
   interface Props {
@@ -240,6 +241,44 @@
 
   export function insertMarkdown(md: string) {
     editor?.chain().focus().insertContent(md, { contentType: 'markdown' }).run();
+  }
+
+  /** Toolbar formatting; `link` is handled by the page via linkHref/setLink. */
+  export function runAction(action: EditAction) {
+    if (!editor) return;
+    const c = editor.chain().focus();
+    switch (action) {
+      case 'h1': case 'h2': case 'h3': c.toggleHeading({ level: Number(action[1]) as 1 | 2 | 3 }).run(); break;
+      case 'bold': c.toggleBold().run(); break;
+      case 'italic': c.toggleItalic().run(); break;
+      case 'strike': c.toggleStrike().run(); break;
+      case 'code': c.toggleCode().run(); break;
+      case 'ul': c.toggleBulletList().run(); break;
+      case 'ol': c.toggleOrderedList().run(); break;
+      case 'task': c.toggleTaskList().run(); break;
+      case 'quote': c.toggleBlockquote().run(); break;
+      case 'codeblock': c.toggleCodeBlock().run(); break;
+      case 'hr': c.setHorizontalRule().run(); break;
+      case 'link': break;
+    }
+  }
+
+  /** Href of the link at the caret, or the selected text when it is a URL. */
+  export function linkHref(): string {
+    if (!editor) return '';
+    const { from, to, empty } = editor.state.selection;
+    const sel = empty ? '' : editor.state.doc.textBetween(from, to, ' ');
+    return editor.getAttributes('link').href ?? (/^https?:\/\/\S+$/i.test(sel) ? sel : '');
+  }
+
+  /** Apply or clear the link on the selection; inserts the URL as text when nothing is selected. */
+  export function setLink(href: string) {
+    if (!editor) return;
+    const chain = editor.chain().focus().extendMarkRange('link');
+    if (!href) chain.unsetLink().run();
+    else if (editor.state.selection.empty && !editor.isActive('link')) {
+      chain.insertContent({ type: 'text', text: href, marks: [{ type: 'link', attrs: { href } }] }).run();
+    } else chain.setLink({ href }).run();
   }
 
   /** Plain text at the caret, e.g. `@@` to start a wiki link. */

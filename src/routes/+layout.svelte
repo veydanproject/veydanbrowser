@@ -4,14 +4,15 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { isMobile } from '$lib/platform';
-  import DesktopShell from '$lib/components/desktop/DesktopShell.svelte';
-  import MobileShell from '$lib/components/mobile/MobileShell.svelte';
 
   let { children }: { children: Snippet } = $props();
+
+  // Only this platform's shell is fetched, so its CSS cannot leak into the other UI.
+  const shell = isMobile
+    ? import('$lib/components/mobile/MobileShell.svelte')
+    : import('$lib/components/desktop/DesktopShell.svelte');
 </script>
 
-{#if isMobile}
-  <MobileShell>{@render children()}</MobileShell>
-{:else}
-  <DesktopShell>{@render children()}</DesktopShell>
-{/if}
+{#await shell then { default: Shell }}
+  <Shell>{@render children()}</Shell>
+{/await}

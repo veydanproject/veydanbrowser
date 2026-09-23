@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
-  import { onDestroy, onMount, untrack } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { goto, replaceState } from '$app/navigation';
   import { page } from '$app/state';
   import Icon from '$lib/Icon.svelte';
@@ -17,6 +17,8 @@
   import { fmtDateTime, fmtSize, loadEditorMode, saveEditorMode, type EditorMode } from '$lib/mobile/notes-editor';
   import { onKeyboard } from '$lib/mobile/keyboard';
   import NoteRichEditor from '$lib/components/mobile/NoteRichEditor.svelte';
+  import NoteFormatBar from '$lib/components/mobile/NoteFormatBar.svelte';
+  import { applyAction, type EditAction } from '$lib/markdown-edit';
   import WikiLinkSheet from '$lib/components/mobile/WikiLinkSheet.svelte';
   import NoteActionsSheet from '$lib/components/mobile/NoteActionsSheet.svelte';
   import NoteHistorySheet from '$lib/components/mobile/NoteHistorySheet.svelte';
@@ -69,6 +71,9 @@
   let wikiOpen = $state(false);
   let wikiStart = 0;
   let busy = $state(false);
+  let linkOpen = $state(false);
+  let linkHref = $state('');
+  let linkInput = $state<HTMLInputElement>();
 
   let rich = $state<NoteRichEditor>();
   let body = $state<HTMLTextAreaElement>();
@@ -403,8 +408,10 @@
     return thumbs[decoded.slice(prefix.length)] ?? src;
   }
 
-  function toggleMode() {
-    mode = mode === 'rich' ? 'md' : 'rich';
+  function setMode(next: EditorMode) {
+    if (next === mode) return;
+    mode = next;
+    linkOpen = false;
     wikiQuery = '';
     wikiOpen = false;
     saveEditorMode(mode);
@@ -413,6 +420,40 @@
   function onRichChange(md: string) {
     content = md;
     onEdit();
+  }
+
+  /** Format bar tap: TipTap command in Visual, text transform in Markdown. */
+  function runAction(action: EditAction) {
+    if (mode === 'rich') {
+      if (action === 'link') return openLink();
+      rich?.runAction(action);
+      return;
+    }
+    const ta = body;
+    if (!ta) return;
+    const r = applyAction(content, ta.selectionStart, ta.selectionEnd, action);
+    content = r.text;
+    onEdit();
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(r.selStart, r.selEnd);
+    });
+  }
+
+  function openLink() {
+    linkHref = rich?.linkHref() ?? '';
+    linkOpen = true;
+    tick().then(() => linkInput?.focus());
+  }
+
+  function applyLink(e: SubmitEvent) {
+    e.preventDefault();
+    rich?.setLink(linkHref.trim());
+    linkOpen = false;
+  }
+
+  function closeLink() {
+    linkOpen = false;
   }
 
   /** Track an unclosed `@@` before the caret in source mode. */
@@ -769,25 +810,30 @@
         <Icon name="pencil" size={14} />
       </button>
     {/if}
-    <div class="acts">
-      <button type="button" class="act" class:on={pinned} disabled={isNew} onclick={() => setFlags({ pinned: !pinned })} aria-label={pinned ? $t('notes_unpin') : $t('notes_pin')}>
-        <Icon name="pin" size={14} />
-      </button>
-      {#if status !== 'idle'}
-        <span
-          class="act save"
-          class:ok={status === 'saved'}
-          class:busy={status === 'saving' || status === 'dirty'}
-          class:bad={status === 'failed'}
-          class:spin={status === 'saving'}
-          title={status === 'saved' ? $t('notes_saved') : status === 'failed' ? error : $t('notes_saving')}
-        >
-          <Icon name={status === 'saved' ? 'check-circle' : status === 'failed' ? 'alert-triangle' : status === 'saving' ? 'loader' : 'circle'} size={14} />
-        </span>
+    <div class="acts-col">
+      <div class="acts">
+        <button type="button" class="act" class:on={pinned} disabled={isNew} onclick={() => setFlags({ pinned: !pinned })} aria-label={pinned ? $t('notes_unpin') : $t('notes_pin')}>
+          <Icon name="pin" size={14} />
+        </button>
+        {#if status !== 'idle'}
+          <span
+            class="act save"
+            class:ok={status === 'saved'}
+            class:busy={status === 'saving' || status === 'dirty'}
+            class:bad={status === 'failed'}
+            class:spin={status === 'saving'}
+            title={status === 'saved' ? $t('notes_saved') : status === 'failed' ? error : $t('notes_saving')}
+          >
+            <Icon name={status === 'saved' ? 'check-circle' : status === 'failed' ? 'alert-triangle' : status === 'saving' ? 'loader' : 'circle'} size={14} />
+          </span>
+        {/if}
+        <button type="button" class="act" onclick={() => (sheet = 'actions')} aria-label={$t('notes_actions')}>
+          <Icon name="more-vertical" size={14} />
+        </button>
+      </div>
+      {#if updatedAt}
+        <span class="when">{fmtDateTime(updatedAt, $locale)}</span>
       {/if}
-      <button type="button" class="act" onclick={() => (sheet = 'actions')} aria-label={$t('notes_actions')}>
-        <Icon name="more-vertical" size={14} />
-      </button>
     </div>
   </div>
   <div class="meta">
@@ -809,8 +855,22 @@
         <Icon name="plus" size={14} />
       </button>
     </div>
-    {#if updatedAt}
-      <span class="when">{fmtDateTime(updatedAt, $locale)}</span>
+    <NoteFormatBar {mode} disabled={!ready} onaction={runAction} onmode={setMode} />
+    {#if linkOpen}
+      <form class="link-form" onsubmit={applyLink}>
+        <input
+          bind:this={linkInput}
+          bind:value={linkHref}
+          type="text"
+          inputmode="url"
+          autocapitalize="off"
+          autocomplete="off"
+          placeholder="https://"
+          aria-label={$t('note_tb_link')}
+        />
+        <button type="submit" class="btn btn-primary">{$t('common_done')}</button>
+        <button type="button" class="btn btn-ghost" onclick={closeLink}>{$t('common_cancel')}</button>
+      </form>
     {/if}
     {#if hasConflict}
       <div class="conflict-banner">
@@ -862,9 +922,6 @@
 <div class="toolbar" class:hide={wikiOpen}>
   <button type="button" onclick={() => (sheet = 'attach')} aria-label={$t('notes_attach')}>
     <Icon name="paperclip" size={22} />
-  </button>
-  <button type="button" class:on={mode === 'md'} onclick={toggleMode} aria-label={$t('notes_mode')}>
-    <Icon name="type" size={22} />
   </button>
   <button type="button" disabled={isNew} onclick={() => (sheet = 'links')} aria-label={$t('notes_links')}>
     <Icon name="link" size={22} />
@@ -1042,6 +1099,7 @@
   }
   .crumb-edit:focus { box-shadow: none; }
   .m-header { padding-right: 6px; }
+  .acts-col { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
   .acts { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
   .act {
     display: inline-flex;
@@ -1061,7 +1119,10 @@
   .save.busy { color: var(--warn-text); }
   .save.bad { color: var(--danger-text); }
   .save.spin :global(svg) { animation: spin 1s linear infinite; }
-  .when { display: block; margin-top: 2px; font-size: 11px; color: var(--text-3); }
+  .when { font-size: 10px; line-height: 1; color: var(--text-3); white-space: nowrap; }
+  .link-form { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+  .link-form input { flex: 1; min-width: 0; min-height: 36px; padding: 0 var(--sp-3); border: 1px solid var(--border); border-radius: 8px; background: var(--m-field); }
+  .link-form .btn { min-height: 36px; padding: 0 var(--sp-3); flex-shrink: 0; }
   .body {
     border: 0;
     background: transparent;
