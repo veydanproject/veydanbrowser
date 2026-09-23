@@ -465,6 +465,9 @@ const translations = {
     totp_error_secret: 'Secret is required',
     totp_error_invalid: 'Invalid secret or URI',
     totp_profile_badge: 'Profile',
+    totp_edit: 'Edit',
+    totp_edit_title: 'Edit TOTP',
+    totp_not_found: 'Entry not found',
 
     // Notes panel
     notes_title: 'Notes',
@@ -1559,6 +1562,9 @@ const translations = {
     totp_error_secret: 'Введите секрет',
     totp_error_invalid: 'Неверный секрет или URI',
     totp_profile_badge: 'Профиль',
+    totp_edit: 'Изменить',
+    totp_edit_title: 'Изменить TOTP',
+    totp_not_found: 'Запись не найдена',
 
     // Notes panel
     notes_title: 'Заметки',

@@ -4,11 +4,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { notesStore } from '$lib/store/notes.svelte';
+  import { totpStore } from '$lib/store/totp.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { api, isNotesWindow } from '$lib/api';
   import type { NoteCreateInput } from '$lib/types';
   import { toNoteFilter, contextBindings, templateNotes, type ActiveFilter } from '$lib/notes-filter';
+  import { totpMatchesFilter } from '$lib/totp-tags';
+  import TotpNoteCodes from '$lib/components/TotpNoteCodes.svelte';
   import TemplateSelect from '$lib/components/notes/TemplateSelect.svelte';
   import NoteLockGate from '$lib/components/notes/NoteLockGate.svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
@@ -78,6 +81,7 @@
 
   onMount(() => {
     notesStore.ensureLoaded();
+    totpStore.ensureLoaded();
     notesStore.refreshTrash();
     workspacesStore.ensureLoaded();
     profilesStore.ensureLoaded();
@@ -88,6 +92,9 @@
   });
 
   const isTrash = $derived(activeFilter.type === 'trash');
+  const matchedTotp = $derived(
+    totpStore.list.filter((entry) => totpMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
+  );
 
   // Filtering happens on the backend (notesStore.view); only the 1-char
   // search (too short for FTS) and trash search are applied locally.
@@ -323,6 +330,10 @@
         </div>
       </div>
       <div class="list-scroll">
+        {#if matchedTotp.length}
+          <TotpNoteCodes entries={matchedTotp} />
+        {/if}
+        {#if displayList.length > 0 || matchedTotp.length === 0}
         <NotesList
           notes={displayList}
           activeId={notesStore.activeNoteId}
@@ -334,6 +345,7 @@
           {folderName}
           {folderColor}
         />
+        {/if}
       </div>
     </div>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

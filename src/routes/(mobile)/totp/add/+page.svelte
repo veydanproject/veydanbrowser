@@ -8,6 +8,7 @@
   import type { TotpPreview } from '$lib/types';
   import { api, formatError } from '$lib/mobile/api';
   import { t } from '$lib/mobile/i18n';
+  import TotpLabelField from '$lib/components/mobile/TotpLabelField.svelte';
 
   type Mode = 'manual' | 'uri';
   let mode = $state<Mode>('manual');
@@ -26,6 +27,7 @@
   if (scanned) mode = 'uri';
   let preview = $state<TotpPreview | null>(null);
 
+  let tags = $state<string[]>([]);
   let error = $state('');
   let saving = $state(false);
 
@@ -52,8 +54,8 @@
     try {
       await api.totp.add(
         mode === 'manual'
-          ? { name: name.trim(), issuer: issuer.trim() || null, secret, algorithm, digits, period, tags: [] }
-          : { name: name.trim(), issuer: issuer.trim() || null, uri: uri.trim(), tags: [] },
+          ? { name: name.trim(), issuer: issuer.trim() || null, secret, algorithm, digits, period, tags }
+          : { name: name.trim(), issuer: issuer.trim() || null, uri: uri.trim(), tags },
       );
       goto('/totp', { replaceState: true });
     } catch (e) {
@@ -110,6 +112,8 @@
     <label for="issuer">{$t('totp_field_issuer')}</label>
     <input id="issuer" bind:value={issuer} placeholder={$t('totp_field_issuer_placeholder')} autocomplete="off" />
   </div>
+
+  <TotpLabelField {tags} onchange={(next) => (tags = next)} />
 
   {#if mode === 'manual'}
     <div class="m-field">

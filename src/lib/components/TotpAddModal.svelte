@@ -2,57 +2,93 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { t } from '$lib/i18n';
   import { api } from '$lib/api';
   import { totpStore } from '$lib/store/totp.svelte';
+  import { notesStore } from '$lib/store/notes.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
-  import type { TotpPreview } from '$lib/types';
+  import type { TotpEntry, TotpPreview } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
+  import ChipMark from '$lib/components/notes/ChipMark.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import { formatError } from '$lib/utils';
+  import { isSystemTag, mergeTags, systemTags, userLabels } from '$lib/totp-tags';
 
   interface Props {
     initialTags?: string[];
+    /** Set to edit name, issuer, and tags. Secret stays unchanged. */
+    entry?: TotpEntry | null;
     onclose: () => void;
     onadded?: () => void;
   }
 
-  let { initialTags = [], onclose, onadded }: Props = $props();
+  const TAG_COLORS = [
+    '#8b7bff', '#60a5fa', '#2dd4bf', '#f472b6',
+    '#f5c451', '#34d399', '#f26d6d', '#f97316',
+  ];
+
+  let { initialTags = [], entry = null, onclose, onadded }: Props = $props();
+  const editing = $derived(entry !== null);
 
   let tab = $state<'manual' | 'qr'>('manual');
 
-  // Form fields
+  // Form fields. Seeded once so a parent re-render does not wipe what the user typed.
   let name = $state('');
   let issuer = $state('');
   let secret = $state('');
   let algorithm = $state('SHA1');
   let digits = $state(6);
   let period = $state(30);
-  let labelInput = $state('');
-  let userLabels = $state<string[]>([]);
+  let query = $state('');
+  let suggest = $state(false);
+  let pickedColor = $state(TAG_COLORS[0]);
+  let labelNames = $state<string[]>([]);
+  let extraBindings = $state<string[]>([]);
+  let seeded = false;
 
-  // System tags (profile:*, workspace:*) — read-only context, set from initialTags
-  // User labels — free-form labels like "banking", "work"
   $effect.pre(() => {
-    userLabels = initialTags.filter((t) => !t.startsWith('profile:') && !t.startsWith('workspace:'));
+    if (seeded) return;
+    const source = entry?.tags ?? initialTags;
+    name = entry?.name ?? '';
+    issuer = entry?.issuer ?? '';
+    labelNames = userLabels(source);
+    extraBindings = entry ? systemTags(entry.tags) : [];
+    seeded = true;
   });
 
-  // Resolved names for display
-  const systemBindings = $derived(
-    initialTags
-      .filter((t) => t.startsWith('profile:') || t.startsWith('workspace:'))
-      .map((tag) => {
-        if (tag.startsWith('profile:')) {
-          const id = tag.slice('profile:'.length);
-          const p = profilesStore.list.find((x) => x.id === id);
-          return { tag, kind: 'profile' as const, label: p?.name ?? id };
-        } else {
-          const id = tag.slice('workspace:'.length);
-          const ws = workspacesStore.list.find((x) => x.id === id);
-          return { tag, kind: 'workspace' as const, label: ws?.name ?? id };
-        }
-      })
+  const lockedBindings = $derived(entry ? [] : initialTags.filter(isSystemTag));
+
+  onMount(() => {
+    notesStore.ensureLoaded();
+    profilesStore.ensureLoaded();
+    workspacesStore.ensureLoaded();
+  });
+
+  const chosenBindings = $derived(new Set([...lockedBindings, ...extraBindings]));
+  const q = $derived(query.trim().toLowerCase());
+  const tagHits = $derived(
+    notesStore.allTags
+      .filter((tag) => !labelNames.includes(tag.name) && tag.name.toLowerCase().includes(q))
+      .slice(0, 6),
+  );
+  const profileHits = $derived(
+    q
+      ? profilesStore.list
+          .filter((profile) => !chosenBindings.has(`profile:${profile.id}`) && profile.name.toLowerCase().includes(q))
+          .slice(0, 4)
+      : [],
+  );
+  const workspaceHits = $derived(
+    q
+      ? workspacesStore.list
+          .filter((ws) => !chosenBindings.has(`workspace:${ws.id}`) && ws.name.toLowerCase().includes(q))
+          .slice(0, 4)
+      : [],
+  );
+  const canCreate = $derived(
+    q.length > 0 && !notesStore.allTags.some((tag) => tag.name.toLowerCase() === q),
   );
 
   // QR state
@@ -64,16 +100,52 @@
 
   let saving = $state(false);
   let error = $state('');
-  let labelsExpanded = $state(false);
 
-  function addLabel() {
-    const v = labelInput.trim();
-    if (v && !userLabels.includes(v)) userLabels = [...userLabels, v];
-    labelInput = '';
+  function bindingLabel(tag: string): string {
+    const id = tag.slice(tag.indexOf(':') + 1);
+    if (tag.startsWith('profile:')) return profilesStore.list.find((profile) => profile.id === id)?.name ?? id;
+    return workspacesStore.list.find((ws) => ws.id === id)?.name ?? id;
+  }
+
+  function labelColor(name: string): string | undefined {
+    return notesStore.allTags.find((tag) => tag.name === name)?.color;
+  }
+
+  function addLabelName(name: string) {
+    const value = name.trim();
+    if (!value || isSystemTag(value) || labelNames.includes(value)) return;
+    labelNames = [...labelNames, value];
+    query = '';
+  }
+
+  function addBinding(tag: string) {
+    if (!isSystemTag(tag) || chosenBindings.has(tag)) return;
+    extraBindings = [...extraBindings, tag];
+    query = '';
   }
 
   function removeLabel(label: string) {
-    userLabels = userLabels.filter((l) => l !== label);
+    labelNames = labelNames.filter((item) => item !== label);
+  }
+
+  function removeBinding(tag: string) {
+    extraBindings = extraBindings.filter((item) => item !== tag);
+  }
+
+  async function commitQuery() {
+    const value = query.trim();
+    if (!value) return;
+    const existing = notesStore.allTags.find((tag) => tag.name.toLowerCase() === value.toLowerCase());
+    if (existing) {
+      addLabelName(existing.name);
+      return;
+    }
+    try {
+      const created = await notesStore.createTag(value, pickedColor);
+      addLabelName(created.name);
+    } catch (err) {
+      error = formatError(err);
+    }
   }
 
   async function handleQrFile(e: Event) {
@@ -120,21 +192,19 @@
   async function save() {
     error = '';
     if (!name.trim()) { error = $t('totp_error_name'); return; }
-    if (tab === 'manual' && !secret.trim()) { error = $t('totp_error_secret'); return; }
-    if (tab === 'qr' && !qrUri) { error = $t('totp_error_secret'); return; }
+    if (!editing && tab === 'manual' && !secret.trim()) { error = $t('totp_error_secret'); return; }
+    if (!editing && tab === 'qr' && !qrUri) { error = $t('totp_error_secret'); return; }
 
-    // Combine system bindings + user labels into final tags array
-    const finalTags = [
-      ...systemBindings.map((b) => b.tag),
-      ...userLabels,
-    ];
+    const tags = mergeTags(lockedBindings, extraBindings, labelNames);
 
     saving = true;
     try {
-      if (tab === 'qr') {
-        await api.totp.add({ name: name.trim(), issuer: issuer.trim() || null, uri: qrUri, tags: finalTags });
+      if (entry) {
+        await api.totp.update(entry.id, { name: name.trim(), issuer: issuer.trim() || null, tags });
+      } else if (tab === 'qr') {
+        await api.totp.add({ name: name.trim(), issuer: issuer.trim() || null, uri: qrUri, tags });
       } else {
-        await api.totp.add({ name: name.trim(), issuer: issuer.trim() || null, secret: secret.trim(), algorithm, digits, period, tags: finalTags });
+        await api.totp.add({ name: name.trim(), issuer: issuer.trim() || null, secret: secret.trim(), algorithm, digits, period, tags });
       }
       await totpStore.refresh();
       onadded?.();
@@ -147,8 +217,9 @@
   }
 </script>
 
-<Dialog open title={$t('totp_add_title')} width="460px" {onclose}>
+<Dialog open title={editing ? $t('totp_edit_title') : $t('totp_add_title')} width="460px" {onclose}>
 
+    {#if !editing}
     <div class="tab-bar">
       <button class="tab" class:active={tab === 'manual'} onclick={() => { tab = 'manual'; qrPreview = null; qrUri = ''; qrError = ''; }}>
         <Icon name="edit" size={13} /> {$t('totp_tab_manual')}
@@ -157,27 +228,10 @@
         <Icon name="scan" size={13} /> {$t('totp_tab_qr')}
       </button>
     </div>
+    {/if}
 
     <div class="totp-form">
-      <!-- Context binding (read-only) -->
-      {#if systemBindings.length > 0}
-        <div class="context-section">
-          <span class="context-label">
-            <Icon name="link" size={11} />
-            Привязка
-          </span>
-          <div class="context-chips">
-            {#each systemBindings as binding (binding.tag)}
-              <span class="context-chip context-chip--{binding.kind}">
-                <Icon name={binding.kind === 'profile' ? 'monitor' : 'folder-open'} size={11} />
-                {binding.kind === 'profile' ? 'Профиль' : 'Воркспейс'}: {binding.label}
-              </span>
-            {/each}
-          </div>
-        </div>
-      {/if}
-
-      {#if tab === 'qr'}
+      {#if !editing && tab === 'qr'}
         <div class="qr-section">
           <p class="hint">{$t('totp_qr_hint')}</p>
           <button class="btn-ghost" onclick={() => fileInput?.click()} disabled={qrLoading}>
@@ -207,7 +261,7 @@
         <input id="totp-issuer" type="text" bind:value={issuer} placeholder={$t('totp_field_issuer_placeholder')} />
       </div>
 
-      {#if tab === 'manual'}
+      {#if !editing && tab === 'manual'}
         <div class="form-group">
           <div class="label-row">
             <label for="totp-secret">{$t('totp_field_secret')}</label>
@@ -223,6 +277,7 @@
         </div>
       {/if}
 
+      {#if !editing}
       <div class="form-row">
         <div class="form-group">
           <div class="label-row">
@@ -274,46 +329,86 @@
           </select>
         </div>
       </div>
-
-      <!-- User labels (collapsible, optional) -->
-      {#if userLabels.length > 0 || labelsExpanded}
-        <div class="form-group">
-          <div class="label-row">
-            <label for="totp-label-input">Метки <span class="optional">(необязательно)</span></label>
-            <span class="tooltip-wrap">
-              <span class="tooltip-trigger">?</span>
-              <span class="tooltip-box">
-                Свободные метки для фильтрации: banking, work, personal…
-                Привязка к профилю и воркспейсу задаётся автоматически.
-              </span>
-            </span>
-          </div>
-          <div class="label-input-row">
-            <input
-              id="totp-label-input"
-              type="text"
-              bind:value={labelInput}
-              placeholder="banking"
-              onkeydown={(e) => e.key === 'Enter' && (e.preventDefault(), addLabel())}
-            />
-            <button class="btn-ghost btn-sm" onclick={addLabel}>+</button>
-          </div>
-          {#if userLabels.length > 0}
-            <div class="label-chips">
-              {#each userLabels as label (label)}
-                <span class="label-chip">
-                  {label}
-                  <button onclick={() => removeLabel(label)} aria-label="remove">×</button>
-                </span>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {:else}
-        <button class="add-label-link" onclick={() => (labelsExpanded = true)}>
-          + Добавить метку
-        </button>
       {/if}
+
+      <div class="form-group">
+        <label for="totp-label-input">{$t('totp_field_tags')}</label>
+        {#if lockedBindings.length > 0 || extraBindings.length > 0 || labelNames.length > 0}
+          <div class="label-chips">
+            {#each lockedBindings as tag (tag)}
+              <span class="context-chip context-chip--{tag.startsWith('profile:') ? 'profile' : 'workspace'}">
+                <ChipMark kind={tag.startsWith('profile:') ? 'profile' : 'workspace'} />
+                {bindingLabel(tag)}
+              </span>
+            {/each}
+            {#each extraBindings as tag (tag)}
+              <span class="context-chip context-chip--{tag.startsWith('profile:') ? 'profile' : 'workspace'}">
+                <ChipMark kind={tag.startsWith('profile:') ? 'profile' : 'workspace'} />
+                {bindingLabel(tag)}
+                <button type="button" onclick={() => removeBinding(tag)} aria-label="remove">×</button>
+              </span>
+            {/each}
+            {#each labelNames as label (label)}
+              <span class="label-chip" style:color={labelColor(label)} style:border-color={labelColor(label)}>
+                <ChipMark kind="tag" />
+                {label}
+                <button type="button" onclick={() => removeLabel(label)} aria-label="remove">×</button>
+              </span>
+            {/each}
+          </div>
+        {/if}
+        <input
+          id="totp-label-input"
+          type="text"
+          bind:value={query}
+          placeholder={$t('notes_tags_placeholder')}
+          onfocus={() => (suggest = true)}
+          onblur={() => (suggest = false)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); void commitQuery(); }
+          }}
+        />
+        {#if suggest && (tagHits.length > 0 || profileHits.length > 0 || workspaceHits.length > 0 || canCreate)}
+          <!-- mousedown keeps the field focused so the list is not dismissed before the click -->
+          <div class="pick" role="presentation" onmousedown={(e) => e.preventDefault()}>
+            {#each tagHits as tag (tag.id)}
+              <button type="button" class="pick-item" onclick={() => addLabelName(tag.name)}>
+                <span class="dot" style:background={tag.color}></span>
+                {tag.name}
+              </button>
+            {/each}
+            {#each profileHits as profile (profile.id)}
+              <button type="button" class="pick-item" onclick={() => addBinding(`profile:${profile.id}`)}>
+                <ChipMark kind="profile" />
+                {profile.name}
+              </button>
+            {/each}
+            {#each workspaceHits as ws (ws.id)}
+              <button type="button" class="pick-item" onclick={() => addBinding(`workspace:${ws.id}`)}>
+                <span class="dot" style:background={ws.color}></span>
+                {ws.name}
+              </button>
+            {/each}
+            {#if canCreate}
+              <div class="color-row">
+                {#each TAG_COLORS as color (color)}
+                  <button
+                    type="button"
+                    class="swatch"
+                    class:active={pickedColor === color}
+                    style:background={color}
+                    aria-label={color}
+                    onclick={() => (pickedColor = color)}
+                  ></button>
+                {/each}
+              </div>
+              <button type="button" class="pick-item create" onclick={() => commitQuery()}>
+                {$t('notes_tags_add')}
+              </button>
+            {/if}
+          </div>
+        {/if}
+      </div>
 
       {#if error}
         <div class="error-msg">{error}</div>
@@ -336,34 +431,6 @@
 
   .totp-form {
     display: flex; flex-direction: column; gap: var(--sp-3);
-  }
-
-  /* Context binding section */
-  .context-section {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--sp-2);
-    padding: 0.6rem var(--sp-3);
-    background: var(--accent-tint);
-    border: 1px solid var(--accent-tint-border);
-    border-radius: var(--radius-md);
-  }
-
-  .context-label {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-1);
-    font-size: var(--fs-2xs);
-    color: var(--accent-text);
-    font-weight: var(--fw-bold);
-    white-space: nowrap;
-    padding-top: 0.15rem;
-  }
-
-  .context-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
   }
 
   .context-chip {
@@ -401,8 +468,6 @@
     font-size: var(--fs-2xs); text-transform: uppercase;
     letter-spacing: 0.04em; color: var(--text-dim); font-weight: var(--fw-bold);
   }
-
-  .optional { text-transform: none; font-weight: 400; opacity: 0.7; }
 
   /* Tooltip */
   .tooltip-wrap {
@@ -467,19 +532,6 @@
 
   .tooltip-wrap:hover .tooltip-box { display: block; }
 
-  /* "Add label" link */
-  .add-label-link {
-    background: none;
-    border: none;
-    padding: 0;
-    font-size: var(--fs-sm);
-    color: var(--text-2);
-    cursor: pointer;
-    text-align: left;
-    transition: color 0.15s;
-  }
-  .add-label-link:hover { color: var(--accent-text-3); }
-
   .form-group input, .form-group select {
     background: var(--surface-3); border: 1px solid var(--border);
     border-radius: var(--radius); color: var(--text);
@@ -493,9 +545,6 @@
   }
 
   .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--sp-3); }
-
-  /* Labels */
-  .label-input-row { display: flex; gap: 0.4rem; }
 
   .label-chips {
     display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.3rem;
@@ -514,6 +563,65 @@
     color: var(--text-2); padding: 0; font-size: var(--fs-base); line-height: 1;
   }
   .label-chip button:hover { color: var(--danger-text); }
+
+  .context-chip button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: inherit;
+    padding: 0;
+    font-size: var(--fs-base);
+    line-height: 1;
+  }
+
+  .pick {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-top: 0.35rem;
+    padding: 0.35rem;
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  .pick-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-sm);
+    padding: 0.35rem 0.45rem;
+    cursor: pointer;
+  }
+  .pick-item:hover { background: var(--surface-hover); }
+  .pick-item.create { color: var(--accent-text); font-weight: var(--fw-semibold); }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .color-row { display: flex; gap: 0.35rem; padding: 0.25rem 0.45rem; }
+  .swatch {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    padding: 0;
+    cursor: pointer;
+  }
+  .swatch.active { border-color: var(--text); }
 
   /* QR */
   .qr-section {
@@ -556,5 +664,4 @@
   }
   .btn-ghost:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--border-2); color: var(--text); }
   .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-sm { padding: 0.35rem 0.65rem; font-size: var(--fs-sm); }
 </style>

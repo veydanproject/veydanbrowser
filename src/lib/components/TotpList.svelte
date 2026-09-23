@@ -10,6 +10,7 @@
   import type { TotpEntry, TotpCode } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import Modal from '$lib/Modal.svelte';
+  import TotpAddModal from './TotpAddModal.svelte';
 
   interface Props {
     entries: TotpEntry[];
@@ -25,6 +26,7 @@
   let copyTimer: ReturnType<typeof setTimeout>;
   let clipClearTimer: ReturnType<typeof setTimeout>;
   let deleteModal = $state<{ open: boolean; id: string; name: string }>({ open: false, id: '', name: '' });
+  let editing = $state<TotpEntry | null>(null);
 
   // Countdown ring
   const RADIUS = 10;
@@ -76,7 +78,8 @@
     if (!code) return;
     try {
       await navigator.clipboard.writeText(code.code);
-      copiedId = entry.id;
+      copiedId = '';
+      requestAnimationFrame(() => (copiedId = entry.id));
       clearTimeout(copyTimer);
       copyTimer = setTimeout(() => (copiedId = ''), 2000);
 
@@ -158,7 +161,11 @@
               />
             {/if}
           </svg>
-          <span class="code-value" style={code ? `color: ${ringColor(code.seconds_left)}` : ''}>
+          <span
+            class="code-value"
+            class:copied={copiedId === entry.id}
+            style:color={copiedId === entry.id ? 'var(--success-text)' : code ? ringColor(code.seconds_left) : undefined}
+          >
             {code ? formatCode(code.code) : '••• •••'}
           </span>
         </div>
@@ -174,6 +181,13 @@
             <Icon name={copiedId === entry.id ? 'check' : 'copy'} size={13} />
           </button>
           <button
+            class="icon-btn"
+            onclick={() => (editing = entry)}
+            title={$t('totp_edit')}
+          >
+            <Icon name="pencil" size={13} />
+          </button>
+          <button
             class="icon-btn danger-soft"
             onclick={() => (deleteModal = { open: true, id: entry.id, name: entry.name })}
             title="Delete"
@@ -184,6 +198,10 @@
       </div>
     {/each}
   </div>
+{/if}
+
+{#if editing}
+  <TotpAddModal entry={editing} onclose={() => (editing = null)} />
 {/if}
 
 <Modal
@@ -266,6 +284,15 @@
     letter-spacing: 0.08em;
     min-width: 5.5ch;
     text-align: center;
+  }
+
+  .code-value.copied { animation: code-pop 0.4s ease; }
+  .icon-btn.success { animation: code-pop 0.35s ease; }
+
+  @keyframes code-pop {
+    0% { transform: scale(1); }
+    40% { transform: scale(1.14); }
+    100% { transform: scale(1); }
   }
 
   .entry-actions {

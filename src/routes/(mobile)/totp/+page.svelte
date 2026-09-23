@@ -3,9 +3,11 @@
 
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { goto } from '$app/navigation';
   import Icon from '$lib/Icon.svelte';
   import type { TotpEntry, TotpCode } from '$lib/types';
   import { api, formatError, onSyncChanged } from '$lib/mobile/api';
+  import { userLabels } from '$lib/totp-tags';
   import { t } from '$lib/mobile/i18n';
   import { NAV_COLORS } from '$lib/mobile/nav-colors';
   import { longpress } from '$lib/mobile/longpress';
@@ -13,6 +15,9 @@
 
   let entries = $state<TotpEntry[]>([]);
   let codes = $state<Map<string, TotpCode>>(new Map());
+  let profileNames = $state<Map<string, string>>(new Map());
+  let workspaceNames = $state<Map<string, string>>(new Map());
+  let tagColors = $state<Map<string, string>>(new Map());
   let error = $state('');
   let toast = $state('');
   let menu = $state<TotpEntry | null>(null);
@@ -57,6 +62,31 @@
     } catch (e) {
       error = formatError(e);
     }
+    try {
+      const nav = await api.notes.nav();
+      profileNames = new Map(nav.all_profiles.map((profile) => [profile.id, profile.name]));
+      workspaceNames = new Map(nav.all_workspaces.map((ws) => [ws.id, ws.name]));
+      tagColors = new Map(nav.tags.map((tag) => [tag.name, tag.color]));
+    } catch {
+      /* names are optional; the codes still list */
+    }
+  }
+
+  function entryChips(entry: TotpEntry): { key: string; label: string; ws: boolean; color?: string }[] {
+    const chips: { key: string; label: string; ws: boolean; color?: string }[] = [];
+    for (const tag of entry.tags) {
+      if (tag.startsWith('profile:')) {
+        const label = profileNames.get(tag.slice('profile:'.length));
+        if (label) chips.push({ key: tag, label, ws: false });
+      } else if (tag.startsWith('workspace:')) {
+        const label = workspaceNames.get(tag.slice('workspace:'.length));
+        if (label) chips.push({ key: tag, label, ws: true });
+      }
+    }
+    for (const label of userLabels(entry.tags)) {
+      chips.push({ key: label, label, ws: false, color: tagColors.get(label) });
+    }
+    return chips;
   }
 
   async function refreshCodes() {
@@ -138,6 +168,13 @@
           <span class="meta">
             <span class="name">{label(entry)}</span>
             {#if entry.issuer}<span class="account">{entry.name}</span>{/if}
+            {#if entryChips(entry).length}
+              <span class="tagline">
+                {#each entryChips(entry) as chip (chip.key)}
+                  <span class="m-chip small" class:ws={chip.ws} style:--chip={chip.color}>{chip.label}</span>
+                {/each}
+              </span>
+            {/if}
           </span>
           <span class="code">{code ? formatCode(code.code) : '••• •••'}</span>
           <svg class="ring" viewBox="0 0 28 28" width="24" height="24">
@@ -166,6 +203,9 @@
     <button type="button" class="m-row" onclick={() => { if (menu) copy(menu); menu = null; }}>
       <Icon name="copy" size={20} /><span class="m-row-label">{$t('pwgen_btn_copy')}</span>
     </button>
+    <button type="button" class="m-row" onclick={() => { const id = menu?.id; menu = null; if (id) goto(`/totp/${id}`); }}>
+      <Icon name="pencil" size={20} /><span class="m-row-label">{$t('totp_edit')}</span>
+    </button>
     <button type="button" class="m-row" onclick={remove}>
       <Icon name="trash-2" size={20} /><span class="m-row-label danger">{$t('totp_delete')}</span>
     </button>
@@ -189,6 +229,7 @@
   .meta { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: 1px; }
   .name { font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .account { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tagline { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
   .code {
     font-family: var(--font-mono);
     font-size: 20px;
