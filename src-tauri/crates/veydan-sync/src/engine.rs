@@ -217,6 +217,50 @@ impl Engine {
         Ok(())
     }
 
+    /// Highest seq reachable from the snapshot without a gap or a chain break.
+    async fn own_log_tip(&self) -> Result<(u64, String)> {
+        let mut seq = 0u64;
+        let mut hash = String::new();
+        if let Some(snap) = self.read_snapshot(&self.device_id).await? {
+            seq = snap.up_to_seq;
+            hash = snap.head_hash;
+        }
+        let prefix = format!("devices/{}/log/", self.device_id);
+        let keys = self.storage.list(&prefix).await?;
+        let mut seqs: Vec<u64> = keys.iter().filter_map(|k| seq_from_key(k)).filter(|s| *s > seq).collect();
+        seqs.sort_unstable();
+        seqs.dedup();
+        for s in seqs {
+            if s != seq + 1 {
+                break;
+            }
+            let Some(bytes) = self.storage.get(&chunk_key(&self.device_id, s)).await? else { break };
+            let chunk = match self.open_chunk(&self.device_id, s, &bytes) {
+                Ok(c) => c,
+                Err(_) => break,
+            };
+            if chunk.seq != s || chunk.prev_hash != hash {
+                break;
+            }
+            hash = sha256_hex(&bytes);
+            seq = s;
+        }
+        Ok((seq, hash))
+    }
+
+    /// Step the local cursor back when it is ahead of the stored chain.
+    /// The next push then continues from a head peers can follow.
+    pub async fn rewind_own_log(&self, state: &mut LocalState) -> Result<Option<String>> {
+        let (seq, hash) = self.own_log_tip().await?;
+        if state.own_seq <= seq {
+            return Ok(None);
+        }
+        let from = state.own_seq;
+        state.own_seq = seq;
+        state.own_head_hash = hash;
+        Ok(Some(format!("own log rewound from {from} to {seq}")))
+    }
+
     pub async fn own_chunk_count(&self) -> Result<usize> {
         Ok(self.storage.list(&format!("devices/{}/log/", self.device_id)).await?.len())
     }

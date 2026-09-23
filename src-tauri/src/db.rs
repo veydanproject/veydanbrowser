@@ -42,49 +42,105 @@ mod legacy_mobile {
     use anyhow::Result;
     use sqlx::{Pool, Sqlite};
 
-    pub async fn detect(pool: &Pool<Sqlite>) -> Result<bool> {
-        let (has_notes,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'notes'")
+    async fn table_exists(pool: &Pool<Sqlite>, name: &str) -> Result<bool> {
+        let (n,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
+                .bind(name)
                 .fetch_one(pool)
                 .await?;
-        if has_notes == 0 {
+        Ok(n != 0)
+    }
+
+    async fn column_exists(pool: &Pool<Sqlite>, table: &str, column: &str) -> Result<bool> {
+        let n: i64 = match table {
+            "notes" => {
+                let (n,): (i64,) =
+                    sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = ?")
+                        .bind(column)
+                        .fetch_one(pool)
+                        .await?;
+                n
+            }
+            "profiles" => {
+                let (n,): (i64,) =
+                    sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('profiles') WHERE name = ?")
+                        .bind(column)
+                        .fetch_one(pool)
+                        .await?;
+                n
+            }
+            "note_history" => {
+                let (n,): (i64,) =
+                    sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('note_history') WHERE name = ?")
+                        .bind(column)
+                        .fetch_one(pool)
+                        .await?;
+                n
+            }
+            _ => 0,
+        };
+        Ok(n != 0)
+    }
+
+    pub async fn detect(pool: &Pool<Sqlite>) -> Result<bool> {
+        if table_exists(pool, "legacy_profiles").await? || table_exists(pool, "legacy_note_history").await? {
+            return Ok(true);
+        }
+        if !table_exists(pool, "notes").await? {
             return Ok(false);
         }
-        let (has_fts_rowid,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('notes') WHERE name = 'fts_rowid'")
-                .fetch_one(pool)
-                .await?;
-        Ok(has_fts_rowid == 0)
+        if !column_exists(pool, "notes", "fts_rowid").await? {
+            return Ok(true);
+        }
+        Ok(table_exists(pool, "profiles").await? && !column_exists(pool, "profiles", "status").await?)
     }
 
     /// Before the shared migrations: widen `notes`, park tables whose shape differs.
+    /// Each step is skipped when a previous attempt already did it.
     pub async fn prepare(pool: &Pool<Sqlite>) -> Result<()> {
-        for (col, def) in [
-            ("scope", "TEXT NOT NULL DEFAULT 'global'"),
-            ("workspace_id", "TEXT NULL"),
-            ("profile_id", "TEXT NULL"),
-            ("version_base", "TEXT NULL"),
-            ("fts_rowid", "INTEGER NULL"),
-            ("file_mtime", "TEXT NULL"),
-        ] {
-            add_column_if_not_exists(pool, "notes", col, def).await?;
+        if table_exists(pool, "notes").await? {
+            for (col, def) in [
+                ("scope", "TEXT NOT NULL DEFAULT 'global'"),
+                ("workspace_id", "TEXT NULL"),
+                ("profile_id", "TEXT NULL"),
+                ("version_base", "TEXT NULL"),
+                ("fts_rowid", "INTEGER NULL"),
+                ("file_mtime", "TEXT NULL"),
+            ] {
+                add_column_if_not_exists(pool, "notes", col, def).await?;
+            }
         }
-        add_column_if_not_exists(pool, "sync_note_state", "conflict", "INTEGER NOT NULL DEFAULT 0").await?;
-        sqlx::query("ALTER TABLE profiles RENAME TO legacy_profiles").execute(pool).await?;
-        sqlx::query("ALTER TABLE note_history RENAME TO legacy_note_history").execute(pool).await?;
+        if table_exists(pool, "sync_note_state").await? {
+            add_column_if_not_exists(pool, "sync_note_state", "conflict", "INTEGER NOT NULL DEFAULT 0").await?;
+        }
+        if table_exists(pool, "profiles").await? && !column_exists(pool, "profiles", "status").await? {
+            sqlx::query("ALTER TABLE profiles RENAME TO legacy_profiles").execute(pool).await?;
+        }
+        if table_exists(pool, "note_history").await? && !column_exists(pool, "note_history", "content_hash").await? {
+            sqlx::query("ALTER TABLE note_history RENAME TO legacy_note_history").execute(pool).await?;
+        }
         Ok(())
     }
 
     /// After the shared migrations: move parked rows into the new tables.
     pub async fn finish(pool: &Pool<Sqlite>) -> Result<()> {
-        sqlx::query(
-            "INSERT OR IGNORE INTO profiles (id, name, profile_path, workspace_id, created_at, updated_at)
-             SELECT id, name, '', workspace_id, created_at, created_at FROM legacy_profiles",
-        )
-        .execute(pool)
-        .await?;
-        sqlx::query("DROP TABLE legacy_profiles").execute(pool).await?;
+        if table_exists(pool, "legacy_profiles").await? {
+            sqlx::query(
+                "INSERT OR IGNORE INTO profiles (id, name, profile_path, workspace_id, created_at, updated_at)
+                 SELECT l.id, l.name, '',
+                        CASE WHEN EXISTS(SELECT 1 FROM workspaces w WHERE w.id = l.workspace_id)
+                             THEN l.workspace_id ELSE NULL END,
+                        l.created_at, l.created_at
+                 FROM legacy_profiles l",
+            )
+            .execute(pool)
+            .await?;
+            sqlx::query("DROP TABLE legacy_profiles").execute(pool).await?;
+        }
 
+        if !table_exists(pool, "legacy_note_history").await? {
+            return Ok(());
+        }
         let rows: Vec<(String, String, i64, String, String, String, Option<String>, String)> = sqlx::query_as(
             "SELECT id, note_id, revision, version_type, title, content, device, created_at
              FROM legacy_note_history ORDER BY note_id, revision",
@@ -681,9 +737,12 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     }
 
     // Assign orphaned profile records to Default workspace
-    sqlx::query("UPDATE profiles SET workspace_id = 'default' WHERE workspace_id IS NULL")
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE profiles SET workspace_id = 'default'
+         WHERE workspace_id IS NULL AND EXISTS (SELECT 1 FROM workspaces WHERE id = 'default')",
+    )
+    .execute(pool)
+    .await?;
     // Keep workspace_id on proxies for the migration step below; orphans get 'default'
     sqlx::query("UPDATE proxies SET workspace_id = 'default' WHERE workspace_id IS NULL")
         .execute(pool)

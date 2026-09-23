@@ -146,7 +146,7 @@
     if (!workspace) return;
     notesSaving = true;
     try {
-      const updated = await api.workspaces.update(workspaceId, { notes: notesValue || null });
+      const updated = await api.workspaces.update(workspaceId, { notes: notesValue });
       workspace = updated;
     } catch (e) { error = formatError(e); }
     finally { notesSaving = false; }

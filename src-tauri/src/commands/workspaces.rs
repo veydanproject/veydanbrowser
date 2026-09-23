@@ -75,7 +75,7 @@ pub async fn workspace_update(
             description = COALESCE(?, description),
             color = COALESCE(?, color),
             icon = COALESCE(?, icon),
-            notes = ?,
+            notes = CASE WHEN ? IS NULL THEN notes WHEN ? = '' THEN NULL ELSE ? END,
             updated_at = ?
         WHERE id = ?",
     )
@@ -83,6 +83,8 @@ pub async fn workspace_update(
     .bind(&req.description)
     .bind(&req.color)
     .bind(&req.icon)
+    .bind(&req.notes)
+    .bind(&req.notes)
     .bind(&req.notes)
     .bind(&now)
     .bind(&id)

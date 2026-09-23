@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 import { api } from '$lib/api';
+import { hasErrorCode } from '$lib/utils';
 import type {
   Note, NoteCreateInput, NoteFilter, NoteFolder, NoteListItem, NoteSmartView, NoteTag,
   NoteUpdateInput, SaveStatus, SmartViewInput,
@@ -30,8 +31,12 @@ class NotesStore {
   activeNote = $state<Note | null>(null);
   saveStatus = $state<SaveStatus>('saved');
   externalChange = $state(false);
-  // Timestamp of our own last save — suppresses false watcher events
-  private _ownSaveTs = 0;
+  /** Hash of the body last loaded or saved. Sent back so a stale buffer cannot overwrite the file. */
+  private _baseHash: string | null = null;
+  /** Body that `_baseHash` belongs to. Watcher echoes match this; a different body is external. */
+  private _knownBody: string | null = null;
+  private _saveInFlight = false;
+  private _remoteWhileSaving = false;
 
   // Filter/navigation state
   filter = $state<NoteFilter>({ archived: false });
@@ -153,8 +158,6 @@ class NotesStore {
   }
 
   async addNoteBinding(noteId: string, binding: string): Promise<void> {
-    // Binding changes rewrite the note file; keep the watcher from flagging it as external.
-    this._ownSaveTs = Date.now();
     await api.notes.noteAddBinding(noteId, binding);
     await this.refresh();
     if (this.activeNoteId === noteId && this.activeNote && !this.activeNote.bindings.includes(binding)) {
@@ -163,7 +166,6 @@ class NotesStore {
   }
 
   async removeNoteBinding(noteId: string, binding: string): Promise<void> {
-    this._ownSaveTs = Date.now();
     await api.notes.noteRemoveBinding(noteId, binding);
     await this.refresh();
     if (this.activeNoteId === noteId && this.activeNote) {
@@ -191,6 +193,8 @@ class NotesStore {
     const pendingContent = this._pendingContent;
     const pendingTitle = this._pendingTitle;
     const prevId = this.activeNoteId;
+    const prevHash = this._baseHash;
+    const blocked = this.externalChange;
     this._pendingContent = null;
     this._pendingTitle = null;
     this._stopDraftInterval();
@@ -199,12 +203,16 @@ class NotesStore {
     this.activeNoteId = id;
     this.externalChange = false;
     this.saveStatus = 'saved';
+    this._baseHash = null;
+    this._knownBody = null;
 
-    // Save previous note in background (don't block the switch)
-    if ((pendingContent !== null || pendingTitle !== null) && prevId) {
-      this._ownSaveTs = Date.now();
-      const input: Record<string, unknown> = {};
-      if (pendingContent !== null) input.content = pendingContent;
+    // Save previous note in background (don't block the switch). A conflict leaves the file as-is.
+    if (!blocked && (pendingContent !== null || pendingTitle !== null) && prevId) {
+      const input: NoteUpdateInput = {};
+      if (pendingContent !== null) {
+        input.content = pendingContent;
+        if (prevHash) input.base_hash = prevHash;
+      }
       if (pendingTitle !== null) input.title = pendingTitle;
       void api.notes.update(prevId, input).then((u) => this._patchListItem(u)).catch(() => {});
     }
@@ -215,6 +223,7 @@ class NotesStore {
       // Guard against race: another note may have been opened while loading
       if (this.activeNoteId === id) {
         this.activeNote = loaded;
+        this._rememberBody(loaded);
       }
     } catch (e) {
       console.error('[notes] Failed to load note:', id, e);
@@ -232,6 +241,8 @@ class NotesStore {
     this.activeNoteId = null;
     this.activeNote = null;
     this._pendingContent = null;
+    this._baseHash = null;
+    this._knownBody = null;
     this.externalChange = false;
     this.saveStatus = 'saved';
   }
@@ -244,15 +255,18 @@ class NotesStore {
     if (!this.activeNoteId) return;
     this._pendingContent = content;
     this.saveStatus = 'unsaved';
+    if (this.externalChange) return;
     this._scheduleAutosave();
     this._startDraftInterval();
   }
 
   onTitleChange(title: string) {
     if (!this.activeNoteId || !this.activeNote) return;
-    this.activeNote.title = title;
     this._pendingTitle = title;
     this.saveStatus = 'unsaved';
+    // Mutating the note retriggers the editor effect and would replace the body.
+    if (this.externalChange) return;
+    this.activeNote.title = title;
     this._scheduleAutosave();
   }
 
@@ -265,38 +279,60 @@ class NotesStore {
   }
 
   private async _doAutosave() {
+    if (this.externalChange) return;
     if (!this.activeNoteId || !this.activeNote) return;
     const content = this._pendingContent;
     const title = this._pendingTitle;
     if (content === null && title === null) return;
     const noteId = this.activeNoteId;
+    const base = this._baseHash;
     this.saveStatus = 'saving';
-    this._ownSaveTs = Date.now();
     // Clear pending + stop the draft ticker BEFORE awaiting. The backend save
     // deletes the .draft file; if the 1s interval fired during the await it would
     // re-create it afterwards, leaving a stale draft and a false "draft found" banner.
     this._pendingContent = null;
     this._pendingTitle = null;
     this._stopDraftInterval();
+    this._saveInFlight = true;
     try {
-      const input: Record<string, unknown> = {};
-      if (content !== null) input.content = content;
+      const input: NoteUpdateInput = {};
+      if (content !== null) {
+        input.content = content;
+        if (base) input.base_hash = base;
+      }
       if (title !== null) input.title = title;
       const updated = await api.notes.update(noteId, input);
       // Another note may have been opened while awaiting — don't clobber it.
       if (this.activeNoteId === noteId) {
         this.activeNote = updated;
+        this._rememberBody(updated);
         this.saveStatus = 'saved';
       }
       this._patchListItem(updated);
-    } catch {
-      // Restore pending edits so a later autosave retries (unless newer edits arrived).
-      if (this.activeNoteId === noteId) {
-        if (content !== null && this._pendingContent === null) this._pendingContent = content;
-        if (title !== null && this._pendingTitle === null) this._pendingTitle = title;
-        this.saveStatus = 'failed';
+    } catch (e) {
+      if (this.activeNoteId !== noteId) return;
+      if (content !== null && this._pendingContent === null) this._pendingContent = content;
+      if (title !== null && this._pendingTitle === null) this._pendingTitle = title;
+      if (hasErrorCode(e, 'conflict_changed')) {
+        this.externalChange = true;
+        this.saveStatus = 'external';
+        return;
+      }
+      this.saveStatus = 'failed';
+    } finally {
+      this._saveInFlight = false;
+      if (this._remoteWhileSaving) {
+        this._remoteWhileSaving = false;
+        const id = this.activeNoteId;
+        if (id) void this._handleExternal(id);
       }
     }
+  }
+
+  /** Remember the body a later watcher event must match to count as our own save. */
+  private _rememberBody(note: Note) {
+    this._baseHash = note.content_hash;
+    this._knownBody = note.content;
   }
 
   /** Patch a saved note into `list`/`view` in place, keeping list-only fields (e.g. preview). */
@@ -358,27 +394,7 @@ class NotesStore {
     if (!isTauri) return;
     const { listen } = await import('@tauri-apps/api/event');
     const unlisten = await listen<string>('notes://external-change', (event) => {
-      const changedId = event.payload;
-      // Ignore events caused by our own save (within 2s)
-      if (changedId === this.activeNoteId && Date.now() - this._ownSaveTs < 2000) {
-        return;
-      }
-      if (changedId === this.activeNoteId) {
-        if (this._pendingContent !== null) {
-          this.saveStatus = 'external';
-          this.externalChange = true;
-        } else {
-          // No unsaved changes — silently refresh
-          void api.notes.get(changedId).then((note) => {
-            if (this.activeNoteId === changedId) {
-              this.activeNote = note;
-              this.saveStatus = 'saved';
-            }
-          });
-        }
-      }
-      // Always update list entry
-      void this.refresh();
+      void this._handleExternal(event.payload);
     });
     // Browser extension asked to show a note; the page resets its filter and opens it
     const unlistenOpen = await listen<string>('notes://open', (event) => {
@@ -388,6 +404,54 @@ class NotesStore {
       unlisten();
       unlistenOpen();
     };
+  }
+
+  /** Own save echoes match the remembered body. Anything else pauses autosave. */
+  private async _handleExternal(changedId: string) {
+    if (changedId !== this.activeNoteId) {
+      void this.refresh();
+      return;
+    }
+    if (this._saveInFlight) {
+      this._remoteWhileSaving = true;
+      void this.refresh();
+      return;
+    }
+    let disk: Note | null = null;
+    try {
+      disk = await api.notes.get(changedId);
+    } catch {
+      disk = null;
+    }
+    if (this.activeNoteId !== changedId) return;
+    if (this._saveInFlight) {
+      this._remoteWhileSaving = true;
+      return;
+    }
+    const diskBody = disk?.content ?? '';
+    const sameBody = diskBody === (this._knownBody ?? '');
+    if (disk && sameBody) {
+      this._baseHash = disk.content_hash;
+      void this.refresh();
+      return;
+    }
+    if (this._autosaveTimer) {
+      clearTimeout(this._autosaveTimer);
+      this._autosaveTimer = null;
+    }
+    if (this._pendingContent !== null || this._pendingTitle !== null) {
+      this.externalChange = true;
+      this.saveStatus = 'external';
+    } else if (disk) {
+      this.activeNote = disk;
+      this._rememberBody(disk);
+      this.externalChange = false;
+      this.saveStatus = 'saved';
+    } else {
+      this.externalChange = true;
+      this.saveStatus = 'external';
+    }
+    void this.refresh();
   }
 
   stopWatcher() {
@@ -456,7 +520,6 @@ class NotesStore {
   }
 
   async setTags(id: string, tagNames: string[]) {
-    this._ownSaveTs = Date.now();
     await api.notes.setTags(id, tagNames);
     await Promise.all([this.refresh(), this.refreshTags()]);
     if (this.activeNoteId === id && this.activeNote) {
@@ -467,17 +530,60 @@ class NotesStore {
 
   async acceptExternalChange() {
     if (!this.activeNoteId) return;
+    if (this._autosaveTimer) { clearTimeout(this._autosaveTimer); this._autosaveTimer = null; }
     try {
-      this.activeNote = await api.notes.get(this.activeNoteId);
+      const loaded = await api.notes.get(this.activeNoteId);
+      if (this.activeNoteId !== loaded.id) return;
+      this.activeNote = loaded;
+      this._rememberBody(loaded);
       this.externalChange = false;
       this.saveStatus = 'saved';
       this._pendingContent = null;
+      this._pendingTitle = null;
     } catch {}
   }
 
+  /** Write the editor buffer on top of the body just read from disk. */
   async discardExternalChange() {
-    this.externalChange = false;
-    this.saveStatus = 'unsaved';
+    if (!this.activeNoteId) return;
+    const noteId = this.activeNoteId;
+    const content = this._pendingContent;
+    const title = this._pendingTitle;
+    if (this._autosaveTimer) { clearTimeout(this._autosaveTimer); this._autosaveTimer = null; }
+    try {
+      const disk = await api.notes.get(noteId);
+      if (this.activeNoteId !== noteId) return;
+      if (content === null && title === null) {
+        this.activeNote = disk;
+        this._rememberBody(disk);
+        this.externalChange = false;
+        this.saveStatus = 'saved';
+        return;
+      }
+      const input: NoteUpdateInput = {};
+      if (content !== null) {
+        input.content = content;
+        if (disk.content_hash) input.base_hash = disk.content_hash;
+      }
+      if (title !== null) input.title = title;
+      const updated = await api.notes.update(noteId, input);
+      if (this.activeNoteId !== noteId) return;
+      this.activeNote = updated;
+      this._rememberBody(updated);
+      this._pendingContent = null;
+      this._pendingTitle = null;
+      this.externalChange = false;
+      this.saveStatus = 'saved';
+      this._patchListItem(updated);
+    } catch (e) {
+      if (this.activeNoteId !== noteId) return;
+      if (hasErrorCode(e, 'conflict_changed')) {
+        this.externalChange = true;
+        this.saveStatus = 'external';
+        return;
+      }
+      this.saveStatus = 'failed';
+    }
   }
 
   async recoverDraft(id: string) {
@@ -514,6 +620,8 @@ class NotesStore {
     this.activeNote = null;
     this._pendingContent = null;
     this._pendingTitle = null;
+    this._baseHash = null;
+    this._knownBody = null;
     this.saveStatus = 'saved';
     this.externalChange = false;
   }

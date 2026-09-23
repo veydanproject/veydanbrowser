@@ -119,6 +119,13 @@
   async function gc() {
     gcBusy = true;
     try {
+      const orphans = await api.notes.attachmentsGc(false);
+      if (orphans.length === 0) {
+        gcResult = $t('note_att_gc_done', { n: '0' });
+        return;
+      }
+      const names = orphans.map((o) => o.name).join('\n');
+      if (!confirm(`${$t('note_att_gc')}\n\n${names}`)) return;
       const removed = await api.notes.attachmentsGc(true);
       gcResult = $t('note_att_gc_done', { n: String(removed.length) });
       onchanged();

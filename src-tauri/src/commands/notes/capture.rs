@@ -222,7 +222,7 @@ async fn append_to_note(req: &CaptureRequest, state: &AppState) -> Result<(Strin
     }
     content.push_str(&capture_block(req, &now));
 
-    let input = NoteUpdateInput { title: None, content: Some(content), pinned: None };
+    let input = NoteUpdateInput { title: None, content: Some(content), pinned: None, base_hash: None };
     update_note(&row.id, input, state).await.map_err(|e| e.to_string())?;
 
     // Merge page bindings so the note shows up for this url/domain too

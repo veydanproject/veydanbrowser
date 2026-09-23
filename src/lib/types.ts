@@ -370,6 +370,8 @@ export interface NoteUpdateInput {
   title?: string;
   content?: string;
   pinned?: boolean;
+  /** Hash of the body this editor loaded. Sent with content so a stale buffer is rejected. */
+  base_hash?: string | null;
 }
 
 /** List filter; also the persisted condition set of a smart view */

@@ -11,9 +11,11 @@
     type NavChild, type Note, type NoteAttachment, type NoteChip, type NoteListItem, type NoteTag,
   } from '$lib/mobile/api';
   import { locale, t } from '$lib/mobile/i18n';
+  import { hasErrorCode } from '$lib/utils';
   import { api as shared, DEFAULT_ATTACHMENT_POLICY, type AttachmentTransfer } from '$lib/api';
   import { onAttachmentTransfer } from '$lib/attachmentTransfer';
   import { AttachmentUrls, attachmentHref } from '$lib/mobile/markdown';
+  import { markdownDestination, repairAttachmentLinks } from '$lib/markdown';
   import { fmtDateTime, fmtSize, loadEditorMode, saveEditorMode, type EditorMode } from '$lib/mobile/notes-editor';
   import { onKeyboard } from '$lib/mobile/keyboard';
   import NoteRichEditor from '$lib/components/mobile/NoteRichEditor.svelte';
@@ -104,8 +106,12 @@
 
   let saveTimer: ReturnType<typeof setTimeout>;
   let saving: Promise<void> | null = null;
-  /** Ignore the watcher echo of our own write. */
-  let ownSaveAt = 0;
+  /** Hash and body last loaded or saved. A watcher event that still matches them is our echo. */
+  let baseHash = $state<string | null>(null);
+  let knownBody = $state('');
+  let externalChange = $state(false);
+  let saveInFlight = false;
+  let remoteDuringSave = false;
   const CARET_GAP = 16;
 
   /** Keep the caret line inside the area above the keyboard. */
@@ -250,7 +256,9 @@
 
   function applyNote(n: Note) {
     title = n.title;
-    content = n.content;
+    content = repairAttachmentLinks(n.content);
+    knownBody = n.content;
+    baseHash = n.contentHash;
     tags = n.tags;
     chips = n.chips;
     pinned = n.pinned;
@@ -328,6 +336,69 @@
     }).catch(() => {});
   }
 
+  /** Own write echoes match the remembered body. A different body pauses autosave. */
+  async function onRemoteNote() {
+    if (id === 'new') return;
+    if (saveInFlight) {
+      remoteDuringSave = true;
+      return;
+    }
+    let disk: Note;
+    try {
+      disk = await api.notes.get(id);
+    } catch {
+      return;
+    }
+    if (saveInFlight) {
+      remoteDuringSave = true;
+      return;
+    }
+    if (disk.content === knownBody) {
+      baseHash = disk.contentHash;
+      return;
+    }
+    clearTimeout(saveTimer);
+    if (status === 'dirty' || status === 'saving' || externalChange) {
+      externalChange = true;
+      return;
+    }
+    applyNote(disk);
+    status = 'saved';
+    void refreshConflict();
+  }
+
+  async function acceptExternal() {
+    clearTimeout(saveTimer);
+    externalChange = false;
+    status = 'saved';
+    await load();
+  }
+
+  /** Write the editor buffer on top of the body just read from disk. */
+  async function keepMine() {
+    clearTimeout(saveTimer);
+    if (id === 'new') return;
+    const body = content;
+    try {
+      const disk = await api.notes.get(id);
+      const n = await api.notes.update(id, { title, content: body, tags, base_hash: disk.contentHash });
+      baseHash = n.contentHash;
+      knownBody = body;
+      updatedAt = n.updated_at;
+      chips = n.chips;
+      externalChange = false;
+      status = 'saved';
+    } catch (e) {
+      if (hasErrorCode(e, 'conflict_changed')) {
+        externalChange = true;
+        status = 'dirty';
+        return;
+      }
+      error = formatError(e);
+      status = 'failed';
+    }
+  }
+
   async function refreshConflict() {
     if (id === 'new') return;
     try {
@@ -355,9 +426,8 @@
     });
     loadCatalogs();
     const unRemote = onNoteRemote((changedId) => {
-      if (changedId !== id || status === 'dirty' || status === 'saving') return;
-      if (Date.now() - ownSaveAt < 2000) return;
-      void load().then(() => refreshConflict());
+      if (changedId !== id) return;
+      void onRemoteNote();
     });
     const unTransfer = onAttachmentTransfer((all) => {
       transfers = new Map([...all].filter(([, x]) => x.note_id === id));
@@ -402,6 +472,9 @@
     ready = next === 'new';
     status = 'idle';
     hasConflict = false;
+    externalChange = false;
+    baseHash = null;
+    knownBody = '';
     fetchOffer = [];
     await load();
     await refreshConflict();
@@ -676,7 +749,8 @@
   }
 
   function insertAttachment(a: NoteAttachment) {
-    insertText(a.is_image ? `![${a.name}](${attachmentHref(a.rel_path)})` : `[${a.name}](${attachmentHref(a.rel_path)})`);
+    const href = markdownDestination(attachmentHref(a.rel_path));
+    insertText(a.is_image ? `![${a.name}](${href})` : `[${a.name}](${href})`);
   }
 
   async function saveAttachment(a: NoteAttachment) {
@@ -702,11 +776,13 @@
   function onEdit() {
     status = 'dirty';
     clearTimeout(saveTimer);
+    if (externalChange) return;
     saveTimer = setTimeout(save, 700);
   }
 
   async function save() {
     clearTimeout(saveTimer);
+    if (externalChange) return;
     if (status !== 'dirty') return saving ?? undefined;
     if (saving) {
       // Let the in-flight write finish, then persist the latest state.
@@ -715,6 +791,7 @@
     }
     status = 'saving';
     saving = (async () => {
+      saveInFlight = true;
       try {
         if (id === 'new') {
           if (!title.trim() && !content.trim()) {
@@ -731,19 +808,33 @@
           chips = fresh.chips;
           createdAt = fresh.created_at;
           updatedAt = fresh.updated_at;
+          baseHash = fresh.contentHash;
+          knownBody = fresh.content;
           replaceState(`/notes/${id}`, {});
         } else {
-          const n = await api.notes.update(id, { title, content, tags });
+          const body = content;
+          const n = await api.notes.update(id, { title, content: body, tags, base_hash: baseHash ?? undefined });
+          knownBody = body;
+          baseHash = n.contentHash;
           updatedAt = n.updated_at;
           chips = n.chips;
         }
-        ownSaveAt = Date.now();
         status = 'saved';
       } catch (e) {
+        if (hasErrorCode(e, 'conflict_changed')) {
+          externalChange = true;
+          status = 'dirty';
+          return;
+        }
         error = formatError(e);
         status = 'failed';
       } finally {
         saving = null;
+        saveInFlight = false;
+        if (remoteDuringSave) {
+          remoteDuringSave = false;
+          void onRemoteNote();
+        }
       }
     })();
     return saving;
@@ -911,6 +1002,14 @@
         <button type="submit" class="btn btn-primary">{$t('common_done')}</button>
         <button type="button" class="btn btn-ghost" onclick={closeLink}>{$t('common_cancel')}</button>
       </form>
+    {/if}
+    {#if externalChange}
+      <div class="conflict-banner">
+        <Icon name="alert-triangle" size={16} />
+        <span>{$t('note_external_change')}</span>
+        <button type="button" class="btn btn-ghost" onclick={acceptExternal}>{$t('note_external_accept')}</button>
+        <button type="button" class="btn btn-primary" onclick={keepMine}>{$t('note_external_keep')}</button>
+      </div>
     {/if}
     {#if hasConflict}
       <div class="conflict-banner">

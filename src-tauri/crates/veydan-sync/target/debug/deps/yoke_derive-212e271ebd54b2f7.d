@@ -1,0 +1,7 @@
+/home/user/projects/veydan/veydanbrowser/src-tauri/crates/veydan-sync/target/debug/deps/yoke_derive-212e271ebd54b2f7.d: /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.3/src/lib.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.3/src/lifetimes.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.3/src/visitor.rs
+
+/home/user/projects/veydan/veydanbrowser/src-tauri/crates/veydan-sync/target/debug/deps/libyoke_derive-212e271ebd54b2f7.so: /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.3/src/lib.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.3/src/lifetimes.rs /home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.3/src/visitor.rs
+
+/home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.3/src/lib.rs:
+/home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.3/src/lifetimes.rs:
+/home/user/projects/veydan/veydanbrowser/.toolchains/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/yoke-derive-0.8.3/src/visitor.rs:

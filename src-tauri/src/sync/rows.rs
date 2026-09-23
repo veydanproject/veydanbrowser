@@ -267,6 +267,12 @@ fn supported(entity: &str) -> bool {
     cfg!(desktop) || MOBILE_ENTITIES.contains(&entity)
 }
 
+/// Mobile mirrors profiles and workspaces from the desktop. It must not publish them:
+/// a legacy upgrade fills the extra columns with defaults, and those would win by LWW.
+fn pushable(entity: &str) -> bool {
+    !(cfg!(mobile) && matches!(entity, "profile" | "workspace"))
+}
+
 fn in_scope(entity: &str, scope: RowScope) -> bool {
     if !supported(entity) {
         return false;
@@ -376,7 +382,7 @@ pub async fn collect_local_changes(state: &AppState, clock: &mut HlcClock, scope
     let db = &state.db;
     let mut out = LocalChanges { ops: Vec::new(), states: Vec::new() };
 
-    for spec in SPECS.iter().filter(|s| in_scope(s.entity, scope)) {
+    for spec in SPECS.iter().filter(|s| in_scope(s.entity, scope) && pushable(s.entity)) {
         let mut states = load_row_states(db, spec.entity).await?;
         for (id, payload) in read_rows(db, spec).await? {
             let hash = payload_hash(&payload);

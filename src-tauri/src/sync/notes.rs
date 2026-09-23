@@ -623,7 +623,7 @@ pub async fn resolve_conflict(state: &AppState, note_id: &str, token: &str, cont
     if conflict_token(&st, &local) != token {
         return Err(AppError::conflict_changed(format!("note {note_id}")));
     }
-    update_note(note_id, NoteUpdateInput { title: None, content: Some(content), pinned: None }, state).await?;
+    update_note(note_id, NoteUpdateInput { title: None, content: Some(content), pinned: None, base_hash: None }, state).await?;
     st.conflict = false;
     st.conflict_ancestor_id.clear();
     st.conflict_local_id.clear();

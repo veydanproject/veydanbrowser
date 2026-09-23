@@ -69,11 +69,13 @@ pub async fn note_get(
     let folder_ids = fetch_note_folder_ids(&id, &state.db).await?;
     let file_path = resolve_note_abs_path(&state.app_data_dir, &row.file_path);
 
-    let content = if file_path.exists() {
+    // Hash the file body, not the indexed column: an external edit may not be reindexed yet.
+    let (content, content_hash) = if file_path.exists() {
         let (_, _, body) = read_note_file(&file_path)?;
-        Some(body)
+        let hash = compute_hash(&body);
+        (Some(body), Some(hash))
     } else {
-        None
+        (None, row.content_hash)
     };
 
     let has_draft = draft_file_path(&state.app_data_dir, &id).exists();
@@ -95,7 +97,7 @@ pub async fn note_get(
         doc_status: row.doc_status,
         created_at: row.created_at,
         updated_at: row.updated_at,
-        content_hash: row.content_hash,
+        content_hash,
         content,
         has_draft,
     })
@@ -269,6 +271,14 @@ pub(crate) async fn update_note(id: &str, input: NoteUpdateInput, state: &AppSta
     };
 
     let old_content = old_body.clone();
+    // Reject a stale editor buffer. Callers that omit base_hash (capture, pin) still overwrite.
+    if input.content.is_some() {
+        if let Some(base) = input.base_hash.as_deref() {
+            if compute_hash(&old_content) != base {
+                return Err(AppError::conflict_changed(format!("note {id}")));
+            }
+        }
+    }
     let content = input.content.unwrap_or(old_body);
     let content_hash = compute_hash(&content);
     let preview = make_preview(&content);

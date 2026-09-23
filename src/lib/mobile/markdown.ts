@@ -57,10 +57,7 @@ function mimeOf(name: string): string {
   return map[ext] ?? mediaMimeOf(name) ?? 'application/octet-stream';
 }
 
-/** Markdown link target for an attachment, path segments percent-encoded. */
-export function attachmentHref(relPath: string): string {
-  return relPath.split('/').map(encodeURIComponent).join('/');
-}
+export { attachmentHref } from '$lib/markdown';
 
 /** Sanitized HTML with attachment images resolved to blob URLs. */
 export async function renderMarkdown(md: string, noteId: string, urls: AttachmentUrls): Promise<string> {

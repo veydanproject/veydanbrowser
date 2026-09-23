@@ -27,7 +27,7 @@
   import WikiLinkPicker from './WikiLinkPicker.svelte';
   import { WIKI_MARK, unclosedWikiAt, wikiMarkup } from '$lib/tiptap-ext';
   import { applyAction, shiftIndent, continueList, type EditAction, type EditResult } from '$lib/markdown-edit';
-  import { wordCount } from '$lib/markdown';
+  import { attachmentHref, markdownDestination, wordCount } from '$lib/markdown';
   import { pasteHasHiddenFiles } from '$lib/notes-files';
   import { t, locale } from '$lib/i18n';
   import { relTime, formatError, formatBytes, hasErrorCode } from '$lib/utils';
@@ -268,7 +268,7 @@
 
   /** Insert a Markdown link to the attachment at the cursor. */
   function insertAttachmentLink(a: NoteAttachment) {
-    const rel = a.rel_path.split('/').map(encodeURIComponent).join('/');
+    const rel = markdownDestination(attachmentHref(a.rel_path));
     const link = `${a.is_image ? '!' : ''}[${a.name}](${rel})`;
     if (mode === 'rich') { richEditor?.insertMarkdown(link); return; }
     const pos = textareaEl?.selectionStart ?? contentValue.length;

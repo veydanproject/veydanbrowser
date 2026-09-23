@@ -117,6 +117,9 @@ pub struct NoteUpdateInput {
     pub title: Option<String>,
     pub content: Option<String>,
     pub pinned: Option<bool>,
+    /// Hash of the body the editor last loaded. Checked only together with `content`.
+    #[serde(default)]
+    pub base_hash: Option<String>,
 }
 
 /// List filter; also the persisted condition set of a smart view.

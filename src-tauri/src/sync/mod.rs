@@ -603,7 +603,11 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
         leases.states
     };
     emit_progress(app, "push", 22, 0, 0, "");
+    let mut warnings: Vec<String> = Vec::new();
     if !ops.is_empty() {
+        if let Some(w) = engine.rewind_own_log(&mut local).await.map_err(AppError::other)? {
+            warnings.push(w);
+        }
         if let Err(e) = engine.push(&mut local, ops).await {
             return Err(push_error(db, e).await);
         }
@@ -664,7 +668,7 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     rows::finish_apply(app, &notes_rows_out).await;
     rows::finish_apply(app, &rows_outcome).await;
 
-    let mut warnings: Vec<String> = pulled.errors.into_iter().map(|(peer, e)| format!("{peer}: {e}")).collect();
+    warnings.extend(pulled.errors.into_iter().map(|(peer, e)| format!("{peer}: {e}")));
     warnings.extend(attachments.errors.iter().map(|e| format!("attachment upload: {e}")));
     let files_retry = profile_files_phase(app, state, &engine, &cfg, &pulled.ops, &mut local, &mut clock, &mut warnings).await?;
 

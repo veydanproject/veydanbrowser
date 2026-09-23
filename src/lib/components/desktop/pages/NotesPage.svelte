@@ -182,6 +182,10 @@
     return workspacesStore.list.find((w) => w.id === id)?.name ?? id;
   }
 
+  function workspaceColor(id: string): string {
+    return workspacesStore.list.find((w) => w.id === id)?.color ?? 'var(--success)';
+  }
+
   function profileName(id: string): string {
     return profilesStore.list.find((p) => p.id === id)?.name ?? id;
   }
@@ -325,6 +329,7 @@
           onselect={handleSelectNote}
           oncreate={() => (showCreate = true)}
           {workspaceName}
+          {workspaceColor}
           {profileName}
           {folderName}
           {folderColor}

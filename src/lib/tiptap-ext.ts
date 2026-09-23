@@ -6,6 +6,7 @@
 import { Node, mergeAttributes, nodeInputRule, type Extensions, type JSONContent } from '@tiptap/core';
 import { StarterKit } from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
+import { markdownDestination } from '$lib/markdown';
 import { HardBreak } from '@tiptap/extension-hard-break';
 import { Paragraph } from '@tiptap/extension-paragraph';
 import { Image, type ImageOptions } from '@tiptap/extension-image';
@@ -147,7 +148,8 @@ export const NoteImage = Image.extend<ImageOptions & { resolveSrc: ResolveSrc }>
     if (width > 0) {
       return `<img src="${escAttr(src)}" alt="${escAttr(alt)}" width="${Math.round(width)}">`;
     }
-    return title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
+    const dest = markdownDestination(src);
+    return title ? `![${alt}](${dest} "${title}")` : `![${alt}](${dest})`;
   },
 });
 

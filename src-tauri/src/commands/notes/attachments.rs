@@ -227,17 +227,60 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Names of attachments referenced from the note body (`attachments/{id}/{name}`).
-fn referenced_names(body: &str, note_id: &str) -> Vec<String> {
-    let prefix = format!("attachments/{note_id}/");
-    let mut names = Vec::new();
-    for (idx, _) in body.match_indices(&prefix) {
-        let rest = &body[idx + prefix.len()..];
-        let end = rest.find(|c: char| c == ')' || c == ' ' || c == '"' || c == '\'' || c == '\n' || c == '>' || c == ']').unwrap_or(rest.len());
-        let name = percent_decode(&rest[..end]);
-        if !name.is_empty() { names.push(name); }
+fn is_link_boundary(c: char) -> bool {
+    matches!(c, ')' | ' ' | '"' | '\'' | '\n' | '>' | ']')
+}
+
+/// `encodeURIComponent`, which leaves `'` `(` `)` raw.
+fn encode_uri_component(name: &str) -> String {
+    encode_path_name(name, true)
+}
+
+/// Same encoding, but `'` `(` `)` are percent-encoded so the link can end after the name.
+fn encode_attachment_name(name: &str) -> String {
+    encode_path_name(name, false)
+}
+
+fn encode_path_name(name: &str, keep_parens: bool) -> String {
+    let mut out = String::new();
+    for ch in name.chars() {
+        let plain = ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '!' | '~' | '*')
+            || (keep_parens && matches!(ch, '\'' | '(' | ')'));
+        if plain {
+            out.push(ch);
+            continue;
+        }
+        let mut buf = [0; 4];
+        for b in ch.encode_utf8(&mut buf).bytes() {
+            out.push_str(&format!("%{b:02X}"));
+        }
     }
-    names
+    out
+}
+
+/// True when `name` appears as a whole path segment after `attachments/{id}/`.
+fn body_references(body: &str, note_id: &str, name: &str) -> bool {
+    let prefix = format!("attachments/{note_id}/");
+    let needles = [
+        format!("{prefix}{name}"),
+        format!("{prefix}{}", encode_uri_component(name)),
+        format!("{prefix}{}", encode_attachment_name(name)),
+    ];
+    needles.iter().any(|needle| contains_bounded(body, needle))
+}
+
+fn contains_bounded(body: &str, needle: &str) -> bool {
+    let mut start = 0;
+    while let Some(rel) = body[start..].find(needle) {
+        let at = start + rel;
+        let after = at + needle.len();
+        let boundary = body[after..].chars().next();
+        if boundary.map(is_link_boundary).unwrap_or(true) {
+            return true;
+        }
+        start = at + 1;
+    }
+    false
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -442,11 +485,10 @@ pub async fn note_attachments_gc(
         let dir = attachments_dir_for(&note_file, &row.id);
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         let body = read_note_file(&note_file).map(|(_, _, b)| b).unwrap_or_default();
-        let used = referenced_names(&body, &row.id);
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()) else { continue };
-            if used.contains(&name) || is_staging_name(&name) { continue; }
+            if body_references(&body, &row.id, &name) || is_staging_name(&name) { continue; }
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             if delete {
                 let _ = std::fs::remove_file(&path);

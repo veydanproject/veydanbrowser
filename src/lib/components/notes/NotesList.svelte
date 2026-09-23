@@ -12,12 +12,13 @@
     onselect: (id: string) => void;
     oncreate: () => void;
     workspaceName?: (id: string) => string;
+    workspaceColor?: (id: string) => string;
     profileName?: (id: string) => string;
     folderName?: (id: string) => string;
     folderColor?: (id: string) => string;
   }
 
-  let { notes, activeId, onselect, oncreate, workspaceName, profileName, folderName, folderColor }: Props = $props();
+  let { notes, activeId, onselect, oncreate, workspaceName, workspaceColor, profileName, folderName, folderColor }: Props = $props();
 
   function scopeLabel(n: NoteListItem): string {
     // Folders first — original context
@@ -43,7 +44,7 @@
     for (const b of n.bindings) {
       if (b.startsWith('workspace:')) {
         const name = workspaceName?.(b.slice('workspace:'.length));
-        if (name) chips.push({ label: name, color: 'var(--success)' });
+        if (name) chips.push({ label: name, color: workspaceColor?.(b.slice('workspace:'.length)) ?? 'var(--success)' });
       } else if (b.startsWith('profile:')) {
         const name = profileName?.(b.slice('profile:'.length));
         if (name) chips.push({ label: name, color: 'var(--accent)' });

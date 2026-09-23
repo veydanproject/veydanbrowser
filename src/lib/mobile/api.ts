@@ -68,6 +68,7 @@ export interface NoteListItem {
 
 export interface Note extends Omit<NoteListItem, 'preview'> {
   content: string;
+  contentHash: string | null;
 }
 
 export interface NoteUpdateInput {
@@ -76,6 +77,7 @@ export interface NoteUpdateInput {
   pinned?: boolean;
   archived?: boolean;
   tags?: string[];
+  base_hash?: string | null;
 }
 
 export interface NoteTextMatch {
@@ -161,7 +163,7 @@ function toItem(d: SharedNoteListItem, nav: NoteNav): NoteListItem {
 
 function toNote(d: SharedNote, nav: NoteNav): Note {
   const { preview: _preview, ...item } = toItem(d, nav);
-  return { ...item, content: d.content ?? '' };
+  return { ...item, content: d.content ?? '', contentHash: d.content_hash };
 }
 
 function toTag(t: { id: string; name: string; color: string; count?: number }): NoteTag {
@@ -275,7 +277,12 @@ export const api = {
     update: async (id: string, input: NoteUpdateInput): Promise<Note> => {
       if (input.tags) await shared.notes.setTags(id, input.tags);
       if (input.title !== undefined || input.content !== undefined || input.pinned !== undefined) {
-        await shared.notes.update(id, { title: input.title, content: input.content, pinned: input.pinned });
+        await shared.notes.update(id, {
+          title: input.title,
+          content: input.content,
+          pinned: input.pinned,
+          base_hash: input.base_hash,
+        });
       }
       if (input.archived === true) await shared.notes.archive(id);
       else if (input.archived === false) await shared.notes.restore(id);
