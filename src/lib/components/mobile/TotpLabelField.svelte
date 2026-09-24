@@ -8,6 +8,7 @@
   import NoteLabelSheet from '$lib/components/mobile/NoteLabelSheet.svelte';
   import { api, formatError, type NavChild, type NoteTag } from '$lib/mobile/api';
   import { t } from '$lib/mobile/i18n';
+  import { parseBinding } from '$lib/bindings';
   import { isSystemTag, mergeTags, systemTags, userLabels } from '$lib/totp-tags';
 
   interface Props {
@@ -25,6 +26,24 @@
 
   const labels = $derived(userLabels(tags));
   const bindings = $derived(systemTags(tags));
+  let boundNames = $state<Map<string, string>>(new Map());
+
+  $effect(() => {
+    const missing = bindings.filter((tag) => {
+      const parsed = parseBinding(tag);
+      return parsed && parsed.kind !== 'profile' && parsed.kind !== 'workspace' && !boundNames.has(tag);
+    });
+    if (missing.length === 0) return;
+    let cancelled = false;
+    api.notes.bindingSummaries(missing).then((list) => {
+      if (cancelled) return;
+      const next = new Map(boundNames);
+      for (const item of list) next.set(item.binding, item.name);
+      for (const tag of missing) if (!next.has(tag)) next.set(tag, tag.slice(tag.indexOf(':') + 1));
+      boundNames = next;
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  });
 
   onMount(() => {
     api.notes.tags().then((list) => (allTags = list)).catch(() => {});
@@ -34,10 +53,16 @@
     }).catch(() => {});
   });
 
+  function bindingKind(tag: string): string {
+    return parseBinding(tag)?.kind ?? 'workspace';
+  }
+
   function bindingName(tag: string): string {
-    const id = tag.slice(tag.indexOf(':') + 1);
-    const list = tag.startsWith('profile:') ? profiles : workspaces;
-    return list.find((item) => item.id === id)?.name ?? id;
+    const parsed = parseBinding(tag);
+    if (!parsed) return tag;
+    if (parsed.kind === 'profile') return profiles.find((item) => item.id === parsed.value)?.name ?? parsed.value;
+    if (parsed.kind === 'workspace') return workspaces.find((item) => item.id === parsed.value)?.name ?? parsed.value;
+    return boundNames.get(tag) ?? parsed.value;
   }
 
   function tagColor(name: string): string | undefined {
@@ -88,7 +113,7 @@
         class:ws={binding.startsWith('workspace:')}
         onclick={() => remove(binding)}
       >
-        <ChipMark kind={binding.startsWith('profile:') ? 'profile' : 'workspace'} />
+        <ChipMark kind={bindingKind(binding)} />
         {bindingName(binding)}
       </button>
     {/each}

@@ -14,6 +14,8 @@
   import ChipMark from '$lib/components/notes/ChipMark.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import { formatError } from '$lib/utils';
+  import { isEntityKind, parseBinding } from '$lib/bindings';
+  import { ENTITY_DEFS, entitySummary } from '$lib/notes-context';
   import { isSystemTag, mergeTags, systemTags, userLabels } from '$lib/totp-tags';
 
   interface Props {
@@ -62,8 +64,7 @@
 
   onMount(() => {
     notesStore.ensureLoaded();
-    profilesStore.ensureLoaded();
-    workspacesStore.ensureLoaded();
+    for (const def of Object.values(ENTITY_DEFS)) void def.ensureLoaded();
   });
 
   const chosenBindings = $derived(new Set([...lockedBindings, ...extraBindings]));
@@ -101,10 +102,15 @@
   let saving = $state(false);
   let error = $state('');
 
+  function bindingKind(tag: string): string {
+    return parseBinding(tag)?.kind ?? 'workspace';
+  }
+
   function bindingLabel(tag: string): string {
-    const id = tag.slice(tag.indexOf(':') + 1);
-    if (tag.startsWith('profile:')) return profilesStore.list.find((profile) => profile.id === id)?.name ?? id;
-    return workspacesStore.list.find((ws) => ws.id === id)?.name ?? id;
+    const parsed = parseBinding(tag);
+    if (!parsed) return tag;
+    if (isEntityKind(parsed.kind)) return entitySummary(parsed.kind, parsed.value)?.name ?? parsed.value;
+    return parsed.value;
   }
 
   function labelColor(name: string): string | undefined {
@@ -132,19 +138,68 @@
     extraBindings = extraBindings.filter((item) => item !== tag);
   }
 
-  async function commitQuery() {
-    const value = query.trim();
-    if (!value) return;
+  let pendingCommit: Promise<void> | null = null;
+
+  function uniqueNamed(list: { id: string; name: string }[], value: string) {
+    const hits = list.filter((item) => item.name.toLowerCase() === value.toLowerCase());
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  /** Turn one typed token into a label or a profile/workspace binding. */
+  async function addToken(value: string) {
+    if (isSystemTag(value)) {
+      addBinding(value);
+      return;
+    }
     const existing = notesStore.allTags.find((tag) => tag.name.toLowerCase() === value.toLowerCase());
     if (existing) {
       addLabelName(existing.name);
       return;
     }
+    const profile = uniqueNamed(profilesStore.list, value);
+    if (profile) {
+      addBinding(`profile:${profile.id}`);
+      return;
+    }
+    const workspace = uniqueNamed(workspacesStore.list, value);
+    if (workspace) {
+      addBinding(`workspace:${workspace.id}`);
+      return;
+    }
+    const created = await notesStore.createTag(value, pickedColor);
+    addLabelName(created.name);
+  }
+
+  /** Apply the tag field. Empty input succeeds. */
+  async function commitQuery(): Promise<boolean> {
+    if (pendingCommit) {
+      try {
+        await pendingCommit;
+      } catch {
+        return false;
+      }
+      return !error;
+    }
+    const parts = query.split(',').map((part) => part.trim()).filter(Boolean);
+    if (parts.length === 0) return true;
+    query = '';
+    const job = (async () => {
+      await Promise.all([
+        notesStore.ensureLoaded(),
+        profilesStore.ensureLoaded(),
+        workspacesStore.ensureLoaded(),
+      ]);
+      for (const part of parts) await addToken(part);
+    })();
+    pendingCommit = job;
     try {
-      const created = await notesStore.createTag(value, pickedColor);
-      addLabelName(created.name);
+      await job;
+      return true;
     } catch (err) {
       error = formatError(err);
+      return false;
+    } finally {
+      if (pendingCommit === job) pendingCommit = null;
     }
   }
 
@@ -195,10 +250,10 @@
     if (!editing && tab === 'manual' && !secret.trim()) { error = $t('totp_error_secret'); return; }
     if (!editing && tab === 'qr' && !qrUri) { error = $t('totp_error_secret'); return; }
 
-    const tags = mergeTags(lockedBindings, extraBindings, labelNames);
-
     saving = true;
     try {
+      if (!(await commitQuery())) return;
+      const tags = mergeTags(lockedBindings, extraBindings, labelNames);
       if (entry) {
         await api.totp.update(entry.id, { name: name.trim(), issuer: issuer.trim() || null, tags });
       } else if (tab === 'qr') {
@@ -336,14 +391,14 @@
         {#if lockedBindings.length > 0 || extraBindings.length > 0 || labelNames.length > 0}
           <div class="label-chips">
             {#each lockedBindings as tag (tag)}
-              <span class="context-chip context-chip--{tag.startsWith('profile:') ? 'profile' : 'workspace'}">
-                <ChipMark kind={tag.startsWith('profile:') ? 'profile' : 'workspace'} />
+              <span class="context-chip" class:context-chip--profile={bindingKind(tag) === 'profile'} class:context-chip--workspace={bindingKind(tag) !== 'profile'}>
+                <ChipMark kind={bindingKind(tag)} />
                 {bindingLabel(tag)}
               </span>
             {/each}
             {#each extraBindings as tag (tag)}
-              <span class="context-chip context-chip--{tag.startsWith('profile:') ? 'profile' : 'workspace'}">
-                <ChipMark kind={tag.startsWith('profile:') ? 'profile' : 'workspace'} />
+              <span class="context-chip" class:context-chip--profile={bindingKind(tag) === 'profile'} class:context-chip--workspace={bindingKind(tag) !== 'profile'}>
+                <ChipMark kind={bindingKind(tag)} />
                 {bindingLabel(tag)}
                 <button type="button" onclick={() => removeBinding(tag)} aria-label="remove">×</button>
               </span>
@@ -365,7 +420,7 @@
           onfocus={() => (suggest = true)}
           onblur={() => (suggest = false)}
           onkeydown={(e) => {
-            if (e.key === 'Enter') { e.preventDefault(); void commitQuery(); }
+            if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); void commitQuery(); }
           }}
         />
         {#if suggest && (tagHits.length > 0 || profileHits.length > 0 || workspaceHits.length > 0 || canCreate)}

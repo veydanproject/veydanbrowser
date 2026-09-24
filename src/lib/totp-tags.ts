@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-import { binding, isScopeBinding } from '$lib/bindings';
+import { binding, parseBinding } from '$lib/bindings';
 
-/** Profile and workspace bindings share the tags array with free labels. */
+/** `kind:value` bindings share the tags array with free labels. */
 export function isSystemTag(tag: string): boolean {
-  return isScopeBinding(tag);
+  const parsed = parseBinding(tag);
+  return !!parsed && parsed.value.length > 0;
 }
 
 /** Free labels. These are the ones that can show up under a note tag. */
@@ -13,7 +14,7 @@ export function userLabels(tags: string[]): string[] {
   return tags.filter((tag) => !isSystemTag(tag));
 }
 
-/** `profile:{id}` and `workspace:{id}` bindings. */
+/** Profile, workspace, proxy, SSH and other `kind:value` bindings. */
 export function systemTags(tags: string[]): string[] {
   return tags.filter(isSystemTag);
 }

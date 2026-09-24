@@ -11,6 +11,7 @@
   import Icon from '$lib/Icon.svelte';
   import Modal from '$lib/Modal.svelte';
   import TotpAddModal from './TotpAddModal.svelte';
+  import { userLabels } from '$lib/totp-tags';
 
   interface Props {
     entries: TotpEntry[];
@@ -131,6 +132,7 @@
     {#each entries as entry (entry.id)}
       {@const code = codes.get(entry.id)}
       {@const pname = showProfileBadge ? profileName(entry.tags) : null}
+      {@const labels = userLabels(entry.tags)}
       <div class="entry">
         <div class="entry-info">
           <div class="entry-name">
@@ -141,6 +143,13 @@
           </div>
           {#if entry.issuer}
             <div class="entry-issuer">{entry.issuer}</div>
+          {/if}
+          {#if labels.length > 0}
+            <div class="entry-labels">
+              {#each labels as label (label)}
+                <span class="label-badge">{label}</span>
+              {/each}
+            </div>
           {/if}
         </div>
 
@@ -254,6 +263,21 @@
     font-size: var(--fs-xs);
     color: var(--text-2);
     margin-top: 0.1rem;
+  }
+
+  .entry-labels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+  }
+
+  .label-badge {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-2);
+    font-size: var(--fs-2xs);
+    padding: 0.05rem 0.35rem;
   }
 
   .profile-badge {
