@@ -344,7 +344,9 @@ jobs:
             return 1
           }
 
-          VERSION="$(cat VERSION)"
+          # publish has no checkout; verify-version already matched this to VERSION
+          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${VERSION%%-*}"
           jq -n \
             --arg version "$VERSION" \
             --arg notes "See the assets below to download and install this version." \
