@@ -173,6 +173,9 @@ jobs:
           # latest.json must deterministically point at the NSIS installer
           # (targets "all" builds both NSIS and MSI on Windows).
           updaterJsonPreferNsis: true
+          # Parallel jobs delete and re-upload the same latest.json; a 404
+          # on that asset is retried after a short pause.
+          retryAttempts: 5
           args: ${{ matrix.args }}
 
   # Same SDK/NDK pins as scripts/android/android-env.sh
