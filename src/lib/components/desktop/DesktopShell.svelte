@@ -21,6 +21,8 @@
   import TotpGenerator from '$lib/components/TotpGenerator.svelte';
   import SSHSessionBar from '$lib/components/ssh/SSHSessionBar.svelte';
   import SSHTerminal from '$lib/components/ssh/SSHTerminal.svelte';
+  import CommandPalette from '$lib/components/desktop/CommandPalette.svelte';
+  import { registerNotesCommands } from '$lib/commands-notes';
   import { sshStore } from '$lib/store/ssh.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
   import { updaterStore } from '$lib/store/updater.svelte';
@@ -115,7 +117,7 @@
   }
 
   function handleKeyBack(e: KeyboardEvent) {
-    if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+    if (e.ctrlKey && e.shiftKey && e.code === 'KeyD') {
       e.preventDefault();
       inspectorApp.toggle();
       return;
@@ -134,6 +136,7 @@
   }
 
   onMount(() => {
+    registerNotesCommands();
     const unsub = theme.subscribe((val) => {
       document.body.dataset.theme = val;
     });
@@ -349,6 +352,7 @@
       {/each}
     </div>
     <SSHSessionBar />
+    <CommandPalette />
     {#if runningProfiles.length > 0}
       <div class="dock">
         <span class="dock-label">

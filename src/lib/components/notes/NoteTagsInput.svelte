@@ -2,11 +2,13 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
-  import type { NoteTag, NoteTagInfo, NoteFolder, Workspace, Profile } from '$lib/types';
+  import type { NoteTag, NoteTagInfo, NoteFolder } from '$lib/types';
   import { api } from '$lib/api';
   import Icon from '$lib/Icon.svelte';
-  import { t } from '$lib/i18n';
+  import { t, type TranslationKey } from '$lib/i18n';
   import ChipMark from './ChipMark.svelte';
+  import { binding, ENTITY_KINDS } from '$lib/bindings';
+  import { ENTITY_DEFS, searchEntities, type EntitySummary } from '$lib/notes-context';
 
   interface ContextChip {
     kind: string;
@@ -23,13 +25,11 @@
     folders?: NoteFolder[];
     activeFolderIds?: string[];
     onaddFolder?: (folderId: string) => void;
-    workspaces?: Workspace[];
-    profiles?: Profile[];
     activeBindings?: string[];
     onaddBinding?: (binding: string) => void;
   }
 
-  let { selectedTags, allTags, onchange, contextChips = [], folders = [], activeFolderIds = [], onaddFolder, workspaces = [], profiles = [], activeBindings = [], onaddBinding }: Props = $props();
+  let { selectedTags, allTags, onchange, contextChips = [], folders = [], activeFolderIds = [], onaddFolder, activeBindings = [], onaddBinding }: Props = $props();
 
   const TAG_COLORS = [
     '#8b7bff', '#60a5fa', '#2dd4bf', '#f472b6',
@@ -58,21 +58,18 @@
       : []
   );
 
-  const workspaceSuggestions = $derived(
-    inputValue.trim().length > 0
-      ? workspaces
-          .filter(w => !activeBindings.includes(`workspace:${w.id}`) && w.name.toLowerCase().includes(inputValue.toLowerCase()))
-          .slice(0, 3)
-      : []
-  );
-
-  const profileSuggestions = $derived(
-    inputValue.trim().length > 0
-      ? profiles
-          .filter(p => !activeBindings.includes(`profile:${p.id}`) && p.name.toLowerCase().includes(inputValue.toLowerCase()))
-          .slice(0, 3)
-      : []
-  );
+  /** Veydan entities of every kind matching the input, as `kind:id` bindings not yet on the note. */
+  const entitySuggestions = $derived.by(() => {
+    if (inputValue.trim().length === 0) return [];
+    const out: { binding: string; kindLabel: TranslationKey; entity: EntitySummary }[] = [];
+    for (const kind of ENTITY_KINDS) {
+      for (const entity of searchEntities(kind, inputValue, 3)) {
+        const b = binding(kind, entity.id);
+        if (!activeBindings.includes(b)) out.push({ binding: b, kindLabel: ENTITY_DEFS[kind].label, entity });
+      }
+    }
+    return out;
+  });
 
   const isNew = $derived(
     inputValue.trim().length > 0 && !allTags.some((t) => t.name === inputValue.trim())
@@ -144,7 +141,7 @@
   </div>
 
   <div class="add-wrap">
-    <button class="add-btn" onclick={openPopup} title={$t('notes_tags_add')}>
+    <button class="add-btn" onclick={openPopup} title={$t('notes_label_title')}>
       <Icon name="plus" size={12} />
     </button>
 
@@ -155,11 +152,14 @@
           bind:value={inputValue}
           type="text"
           class="popup-input"
-          placeholder={$t('notes_tags_placeholder')}
+          placeholder={$t('notes_label_placeholder')}
           onkeydown={onKeydown}
         />
+        {#if !inputValue.trim()}
+          <div class="hint">{$t('notes_label_hint')}</div>
+        {/if}
 
-        {#if suggestions.length > 0 || folderSuggestions.length > 0 || workspaceSuggestions.length > 0 || profileSuggestions.length > 0}
+        {#if suggestions.length > 0 || folderSuggestions.length > 0 || entitySuggestions.length > 0}
           <div class="suggestions">
             {#each suggestions as s (s.id)}
               <button class="sug-item" onmousedown={(e) => { e.preventDefault(); void addTag(s.name); }}>
@@ -174,18 +174,11 @@
                 <span class="sug-folder-label">папка</span>
               </button>
             {/each}
-            {#each workspaceSuggestions as w (w.id)}
-              <button class="sug-item" onmousedown={(e) => { e.preventDefault(); onaddBinding?.(`workspace:${w.id}`); close(); }}>
-                <span class="sug-dot" style="background:{w.color}"></span>
-                {w.name}
-                <span class="sug-folder-label">воркспейс</span>
-              </button>
-            {/each}
-            {#each profileSuggestions as p (p.id)}
-              <button class="sug-item" onmousedown={(e) => { e.preventDefault(); onaddBinding?.(`profile:${p.id}`); close(); }}>
-                <span class="sug-dot" style="background:var(--accent)"></span>
-                {p.name}
-                <span class="sug-folder-label">профиль</span>
+            {#each entitySuggestions as s (s.binding)}
+              <button class="sug-item" onmousedown={(e) => { e.preventDefault(); onaddBinding?.(s.binding); close(); }}>
+                <span class="sug-dot" style="background:{s.entity.color}"></span>
+                {s.entity.name}
+                <span class="sug-folder-label">{$t(s.kindLabel)}</span>
               </button>
             {/each}
           </div>
@@ -322,6 +315,7 @@
     outline: none;
   }
   .popup-input:focus { border-color: var(--accent); }
+  .hint { font-size: var(--fs-2xs); color: var(--text-3); padding: 0 0.1rem; }
 
   .suggestions {
     display: flex;

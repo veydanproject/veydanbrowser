@@ -6,6 +6,7 @@
 //! Query kinds: `list_notes`, `search_notes`, `open_note`.
 
 use super::attachments::store_attachment;
+use super::binding::BindingKind;
 use super::crud::{current_docs_dir, fts_match_query, insert_note, update_note, NewNote};
 use super::files::{read_note_file, resolve_note_abs_path};
 use super::folders::persist_bindings;
@@ -46,16 +47,16 @@ fn rule_matches(rule: &CaptureRule, domain: &str) -> bool {
 }
 
 fn page_bindings(req: &CaptureRequest, workspace_id: Option<&str>) -> Vec<String> {
-    let mut b = vec![format!("profile:{}", req.profile_id)];
+    let mut b = vec![BindingKind::Profile.with(&req.profile_id)];
     if let Some(w) = workspace_id {
-        b.push(format!("workspace:{w}"));
+        b.push(BindingKind::Workspace.with(w));
     }
     let url = canonical_url(&req.url);
     if !url.is_empty() {
-        b.push(format!("url:{url}"));
+        b.push(BindingKind::Url.with(&url));
     }
     if let Some(d) = domain_of(&req.url) {
-        b.push(format!("domain:{d}"));
+        b.push(BindingKind::Domain.with(&d));
     }
     b
 }
@@ -230,7 +231,7 @@ async fn append_to_note(
                 .await
                 .ok_or_else(|| format!("Note {id} not found"))?,
         ),
-        None => notes_with_binding(&format!("profile:{}", req.profile_id), 1, state)
+        None => notes_with_binding(&BindingKind::Profile.with(&req.profile_id), 1, state)
             .await
             .pop(),
     };
@@ -291,18 +292,18 @@ async fn list_notes(req: &CaptureRequest, state: &AppState) -> Vec<NoteRef> {
     let url = canonical_url(&req.url);
     if !url.is_empty() {
         push(
-            notes_with_binding(&format!("url:{url}"), 50, state).await,
+            notes_with_binding(&BindingKind::Url.with(&url), 50, state).await,
             "url",
         );
     }
     if let Some(d) = domain_of(&req.url) {
         push(
-            notes_with_binding(&format!("domain:{d}"), 50, state).await,
+            notes_with_binding(&BindingKind::Domain.with(&d), 50, state).await,
             "domain",
         );
     }
     push(
-        notes_with_binding(&format!("profile:{}", req.profile_id), 20, state).await,
+        notes_with_binding(&BindingKind::Profile.with(&req.profile_id), 20, state).await,
         "profile",
     );
     out

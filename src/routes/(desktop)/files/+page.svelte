@@ -29,7 +29,7 @@
     } else if (e.key === 'F5') {
       e.preventDefault();
       filesStore.copyToOtherPanel(filesStore.activePanel);
-    } else if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
+    } else if (e.code === 'KeyA' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       filesStore.selectAll(filesStore.activePanel);
     }

@@ -95,6 +95,8 @@
     'columns':       '<rect width="7" height="18" x="3" y="3" rx="1"/><rect width="7" height="18" x="14" y="3" rx="1"/>',
     'sidebar':       '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
     'arrow-up':      '<path d="m5 12 7-7 7 7M12 19V5"/>',
+    'arrow-down':    '<path d="M12 5v14m7-7-7 7-7-7"/>',
+    'table':         '<path d="M12 3v18M3 9h18M3 15h18"/><rect width="18" height="18" x="3" y="3" rx="2"/>',
     'diff':          '<path d="M12 3v14M5 10l7-7 7 7M5 21h14"/>',
     'bold':          '<path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/>',
     'italic':        '<line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x2="5" y1="20" y2="20"/><line x1="15" x2="9" y1="4" y2="20"/>',

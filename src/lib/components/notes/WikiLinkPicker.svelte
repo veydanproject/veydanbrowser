@@ -5,6 +5,8 @@
   import type { NoteListItem } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/i18n';
+  import { binding, ENTITY_KINDS, isEntityKind, type EntityKind } from '$lib/bindings';
+  import { ENTITY_DEFS, searchEntities } from '$lib/notes-context';
 
   interface Props {
     query: string;
@@ -12,68 +14,90 @@
     excludeId?: string | null;
     /** Highlighted row; moved by arrow keys via `handleKeydown` */
     index?: number;
-    onpick: (title: string) => void;
+    /** `target` is a note title, or `kind:id` with `label` for an entity mention */
+    onpick: (target: string, label?: string | null) => void;
   }
 
   let { query, notes, excludeId = null, index = $bindable(0), onpick }: Props = $props();
 
   const MAX = 8;
 
-  const matches = $derived.by(() => {
+  interface Row {
+    /** Unique per row: note id, entity binding or `create` */
+    key: string;
+    target: string;
+    label: string | null;
+    icon: string;
+    text: string;
+    create?: boolean;
+  }
+
+  /** `kind:rest` when the query starts with an entity kind prefix. */
+  const entityQuery = $derived.by((): { kind: EntityKind; rest: string } | null => {
+    const i = query.indexOf(':');
+    if (i < 0) return null;
+    const kind = query.slice(0, i).trim().toLowerCase();
+    return isEntityKind(kind) ? { kind, rest: query.slice(i + 1) } : null;
+  });
+
+  const rows = $derived.by((): Row[] => {
+    if (entityQuery) {
+      const def = ENTITY_DEFS[entityQuery.kind];
+      return searchEntities(entityQuery.kind, entityQuery.rest, MAX).map((e) => {
+        const target = binding(entityQuery.kind, e.id);
+        return { key: target, target, label: e.name, icon: def.icon, text: e.name };
+      });
+    }
     const q = query.trim().toLowerCase();
     const live = notes.filter((n) => n.id !== excludeId && !n.deleted);
     const list = q ? live.filter((n) => n.title.toLowerCase().includes(q)) : live;
-    return list
+    const out: Row[] = list
       .sort((a, b) => {
         const as = a.title.toLowerCase().startsWith(q) ? 0 : 1;
         const bs = b.title.toLowerCase().startsWith(q) ? 0 : 1;
         return as - bs || b.updated_at.localeCompare(a.updated_at);
       })
-      .slice(0, MAX);
+      .slice(0, MAX)
+      .map((n) => ({ key: n.id, target: n.title, label: null, icon: 'file-text', text: n.title }));
+    if (q && !out.some((r) => r.text.toLowerCase() === q)) {
+      out.push({ key: 'create', target: query.trim(), label: null, icon: 'plus', text: $t('note_link_create', { title: query.trim() }), create: true });
+    }
+    return out;
   });
 
-  const canCreate = $derived(
-    query.trim().length > 0 && !matches.some((n) => n.title.toLowerCase() === query.trim().toLowerCase())
-  );
-
-  /** Rows in display order: existing notes, then "create" */
-  function pickAt(i: number): string | null {
-    if (i < matches.length) return matches[i].title;
-    if (canCreate && i === matches.length) return query.trim();
-    return null;
-  }
-
-  const rowCount = () => matches.length + (canCreate ? 1 : 0);
+  /** Kind prefixes offered while nothing has been typed yet. */
+  const kindHints = $derived(query.trim().length === 0 ? ENTITY_KINDS : []);
 
   /** Arrow navigation and Enter/Tab pick; returns true when the key was consumed. */
   export function handleKeydown(e: KeyboardEvent): boolean {
-    const count = rowCount();
+    const count = rows.length;
     if (!count) return false;
     if (e.key === 'ArrowDown') { e.preventDefault(); index = (index + 1) % count; return true; }
     if (e.key === 'ArrowUp') { e.preventDefault(); index = (index - 1 + count) % count; return true; }
     if (e.key === 'Enter' || e.key === 'Tab') {
-      const title = pickAt(index);
-      if (title) { e.preventDefault(); onpick(title); return true; }
+      const row = rows[index];
+      if (row) { e.preventDefault(); onpick(row.target, row.label); return true; }
     }
     return false;
   }
 </script>
 
 <div class="picker" role="listbox">
-  {#each matches as n, i (n.id)}
-    <button class="row" class:active={i === index} role="option" aria-selected={i === index} onmousedown={(e) => { e.preventDefault(); onpick(n.title); }}>
-      <Icon name="file-text" size={12} />
-      <span class="title">{n.title}</span>
+  {#each rows as row, i (row.key)}
+    <button class="row" class:create={row.create} class:active={i === index} role="option" aria-selected={i === index} onmousedown={(e) => { e.preventDefault(); onpick(row.target, row.label); }}>
+      <Icon name={row.icon} size={12} />
+      <span class="title">{row.text}</span>
     </button>
   {/each}
-  {#if canCreate}
-    <button class="row create" class:active={index === matches.length} role="option" aria-selected={index === matches.length} onmousedown={(e) => { e.preventDefault(); onpick(query.trim()); }}>
-      <Icon name="plus" size={12} />
-      <span class="title">{$t('note_link_create', { title: query.trim() })}</span>
-    </button>
+  {#if rows.length === 0}
+    <div class="row empty">{entityQuery ? $t('ctx_no_entities') : $t('note_link_type_to_search')}</div>
   {/if}
-  {#if matches.length === 0 && !canCreate}
-    <div class="row empty">{$t('note_link_type_to_search')}</div>
+  {#if kindHints.length > 0}
+    <div class="hints">
+      {#each kindHints as kind (kind)}
+        <span class="hint"><Icon name={ENTITY_DEFS[kind].icon} size={10} />{kind}:</span>
+      {/each}
+    </div>
   {/if}
 </div>
 
@@ -86,7 +110,7 @@
     min-width: 240px;
     max-width: 360px;
     padding: 0.25rem;
-    background: var(--surface-1);
+    background: var(--bg-2);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
@@ -109,4 +133,6 @@
   .row.create { color: var(--accent); }
   .row.empty { color: var(--text-3); cursor: default; }
   .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hints { display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0.3rem 0.5rem 0.15rem; border-top: 1px solid var(--border); }
+  .hint { display: inline-flex; align-items: center; gap: 0.2rem; font-size: var(--fs-2xs); color: var(--text-3); font-family: var(--font-mono, monospace); }
 </style>

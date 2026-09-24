@@ -7,7 +7,8 @@
   import { convertFileSrc } from '@tauri-apps/api/core';
   import { api, downloadNoteAttachment } from '$lib/api';
   import { pasteHasHiddenFiles } from '$lib/notes-files';
-  import { noteExtensions, WIKI_MARK, unclosedWikiAt } from '$lib/tiptap-ext';
+  import { noteExtensions, unclosedMarkAt, unclosedWikiAt, TPL_CLOSE, TPL_OPEN } from '$lib/tiptap-ext';
+  import PlaceholderPicker from './PlaceholderPicker.svelte';
   import type { EditAction } from '$lib/markdown-edit';
   import type { NoteListItem } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
@@ -25,6 +26,10 @@
     excludeId?: string | null;
     onchange: (md: string) => void;
     onwikilink: (target: string) => void;
+    /** Text inserted for a picked `{{placeholder}}`: the markup in templates, the value elsewhere */
+    placeholderText: (name: string) => string;
+    /** Value shown in the picker next to each placeholder; omitted inside templates */
+    placeholderPreview?: (name: string) => string;
     onfiles: (files: File[]) => void;
     /** Pasted files the webview hides from JS; parent reads them from the OS clipboard */
     onclipboardfiles: () => void;
@@ -34,7 +39,7 @@
 
   let {
     content, baseDir, noteId, readonly = false, placeholder = '', notes, excludeId = null,
-    onchange, onwikilink, onfiles, onclipboardfiles, onhotkey,
+    onchange, onwikilink, placeholderText, placeholderPreview, onfiles, onclipboardfiles, onhotkey,
   }: Props = $props();
 
   let hostEl: HTMLElement | null = $state(null);
@@ -115,6 +120,10 @@
     if (wikiOpen) {
       if (e.key === 'Escape') { wikiOpen = false; return true; }
       if (wikiPicker?.handleKeydown(e)) return true;
+    }
+    if (tplOpen) {
+      if (e.key === 'Escape') { tplOpen = false; return true; }
+      if (tplPicker?.handleKeydown(e)) return true;
     }
     return onhotkey?.(e) ?? false;
   }
@@ -236,33 +245,72 @@
     editor?.commands.focus();
   }
 
-  // ── Wiki links: `@@` autocomplete in the current text block ─────────────────
+  // ── Wiki links: `[[` autocomplete in the current text block ─────────────────
   let wikiOpen = $state(false);
   let wikiQuery = $state('');
   let wikiIndex = $state(0);
   let wikiFrom = 0;
   let wikiPicker: WikiLinkPicker | null = $state(null);
 
-  /** Track an unclosed `@@` before the caret inside the current text block. */
-  function updateWikiState() {
-    if (!editor || readonly) return;
+  // ── Template placeholders: `{{` autocomplete in the current text block ─────
+  let tplOpen = $state(false);
+  let tplQuery = $state('');
+  let tplIndex = $state(0);
+  let tplFrom = 0;
+  let tplPicker: PlaceholderPicker | null = $state(null);
+
+  /** Text of the current block before the caret, or null when not in a collapsed text selection. */
+  function textBeforeCaret(): { before: string; caretPos: number } | null {
+    if (!editor || readonly) return null;
     const { $from: caret, empty } = editor.state.selection;
-    if (!empty || !caret.parent.isTextblock) { wikiOpen = false; return; }
-    const before = caret.parent.textBetween(0, caret.parentOffset, undefined, '\ufffc');
-    const open = unclosedWikiAt(before);
-    if (open < 0) { wikiOpen = false; return; }
-    wikiFrom = caret.pos - (before.length - open);
-    wikiQuery = before.slice(open + WIKI_MARK.length);
-    wikiIndex = 0;
-    wikiOpen = true;
+    if (!empty || !caret.parent.isTextblock) return null;
+    return { before: caret.parent.textBetween(0, caret.parentOffset, undefined, '\ufffc'), caretPos: caret.pos };
   }
 
-  /** Replace the partial `@@query` with a wiki link node. */
-  function pickWikiLink(title: string) {
+  /** Track an unclosed `[[` (or legacy `@@`) and `{{` before the caret inside the current text block. */
+  function updateWikiState() {
+    const ctx = textBeforeCaret();
+    if (!ctx) { wikiOpen = false; tplOpen = false; return; }
+    const { before, caretPos } = ctx;
+    const open = unclosedWikiAt(before);
+    if (open) {
+      wikiFrom = caretPos - (before.length - open.start);
+      wikiQuery = before.slice(open.start + open.mark.length);
+      wikiIndex = 0;
+      wikiOpen = true;
+    } else {
+      wikiOpen = false;
+    }
+    const tpl = unclosedMarkAt(before, TPL_OPEN, TPL_CLOSE);
+    if (tpl >= 0 && !wikiOpen) {
+      tplFrom = caretPos - (before.length - tpl);
+      tplQuery = before.slice(tpl + TPL_OPEN.length);
+      tplIndex = 0;
+      tplOpen = true;
+    } else {
+      tplOpen = false;
+    }
+  }
+
+  /** Replace the partial `{{query` with the placeholder markup or its value as plain text. */
+  function pickPlaceholder(name: string) {
+    if (!editor) return;
+    const to = editor.state.selection.from;
+    editor.chain().focus().insertContentAt({ from: tplFrom, to }, { type: 'text', text: placeholderText(name) }).run();
+    tplOpen = false;
+  }
+
+  /** Plain text at the caret, e.g. `[[` to start a wiki link. */
+  export function insertText(text: string) {
+    editor?.chain().focus().insertContent(text).run();
+  }
+
+  /** Replace the partial `[[query` with a wiki link node. */
+  function pickWikiLink(target: string, label?: string | null) {
     if (!editor) return;
     const to = editor.state.selection.from;
     editor.chain().focus()
-      .insertContentAt({ from: wikiFrom, to }, [{ type: 'wikiLink', attrs: { target: title } }, { type: 'text', text: ' ' }])
+      .insertContentAt({ from: wikiFrom, to }, [{ type: 'wikiLink', attrs: { target, label: label ?? null } }, { type: 'text', text: ' ' }])
       .run();
     wikiOpen = false;
   }
@@ -326,6 +374,8 @@
   {/if}
   {#if wikiOpen}
     <WikiLinkPicker bind:this={wikiPicker} bind:index={wikiIndex} query={wikiQuery} {notes} {excludeId} onpick={pickWikiLink} />
+  {:else if tplOpen}
+    <PlaceholderPicker bind:this={tplPicker} bind:index={tplIndex} query={tplQuery} preview={placeholderPreview} onpick={pickPlaceholder} />
   {/if}
   {#if imgOpen}
     <div class="img-bar" style="left: {imgPos.x}px; top: {imgPos.y}px">
@@ -451,6 +501,14 @@
     padding: 0 0.15em;
     border-radius: 3px;
     background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  /* Entity mention `[[kind:id|Name]]`: chip look, opens the context card */
+  .host :global(a.wiki-entity) {
+    padding: 0 0.4em;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    color: var(--text);
+    background: var(--surface-2);
   }
   .host :global(code) {
     font-family: var(--font-mono);

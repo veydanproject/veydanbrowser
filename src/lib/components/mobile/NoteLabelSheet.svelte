@@ -3,9 +3,17 @@
 
 <script lang="ts">
   import Icon from '$lib/Icon.svelte';
-  import type { NavChild, NoteTag } from '$lib/mobile/api';
-  import { t } from '$lib/mobile/i18n';
+  import { api, type BindingSummary, type NavChild, type NoteTag } from '$lib/mobile/api';
+  import { t, type MobileKey } from '$lib/mobile/i18n';
   import BottomSheet from './BottomSheet.svelte';
+
+  /** Entity kinds looked up in the backend; workspace/profile come from nav props. */
+  const ENTITY_SEARCH = ['proxy', 'ssh', 'totp'] as const;
+  const ENTITY_LABEL: Record<(typeof ENTITY_SEARCH)[number], MobileKey> = {
+    proxy: 'notes_context_kind_proxy',
+    ssh: 'notes_context_kind_ssh',
+    totp: 'notes_context_kind_totp',
+  };
 
   interface Props {
     open: boolean;
@@ -57,7 +65,24 @@
     q ? profiles.filter((p) => !bindings.includes(`profile:${p.id}`) && p.name.toLowerCase().includes(q)) : [],
   );
   const canCreate = $derived(query.trim().length > 0 && !tags.some((t) => t.name === query.trim()));
-  const hasHits = $derived(tagHits.length + folderHits.length + workspaceHits.length + profileHits.length > 0);
+
+  // Proxy / SSH / TOTP hits come from the backend, debounced
+  let entityHits = $state<BindingSummary[]>([]);
+  let entityTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const term = q;
+    if (entityTimer) clearTimeout(entityTimer);
+    if (!term) { entityHits = []; return; }
+    entityTimer = setTimeout(async () => {
+      const lists = await Promise.all(ENTITY_SEARCH.map((kind) => api.notes.entitySearch(kind, term).catch(() => [])));
+      if (term !== q) return;
+      entityHits = lists.flat().filter((s) => !bindings.includes(s.binding)).slice(0, 12);
+    }, 200);
+  });
+
+  const hasHits = $derived(
+    tagHits.length + folderHits.length + workspaceHits.length + profileHits.length + entityHits.length > 0,
+  );
 
   function submitTag() {
     const name = query.trim().replace(/^#/, '');
@@ -73,17 +98,20 @@
   }
 </script>
 
-<BottomSheet {open} title={$t('notes_tags_add')} {onclose}>
+<BottomSheet {open} title={$t('notes_label_title')} {onclose}>
   <div class="find">
     <Icon name="search" size={16} />
     <input
       type="text"
       bind:value={query}
-      placeholder={$t('notes_tags_placeholder')}
+      placeholder={$t('notes_label_placeholder')}
       onkeydown={onKeydown}
       {@attach (el: HTMLInputElement) => el.focus()}
     />
   </div>
+  {#if !q}
+    <p class="hint">{$t('notes_label_hint')}</p>
+  {/if}
 
   {#if hasHits}
     <div class="hits">
@@ -112,6 +140,13 @@
           <span class="dot"></span>
           <span class="name">{p.name}</span>
           <span class="kind">{$t('notes_kind_profile')}</span>
+        </button>
+      {/each}
+      {#each entityHits as s (s.binding)}
+        <button type="button" class="hit" disabled={busy} onpointerdown={(e) => e.preventDefault()} onclick={() => onaddBinding(s.binding)}>
+          <span class="dot muted"></span>
+          <span class="name">{s.name}{#if s.subtitle}<span class="sub"> · {s.subtitle}</span>{/if}</span>
+          <span class="kind">{$t(ENTITY_LABEL[s.kind as (typeof ENTITY_SEARCH)[number]])}</span>
         </button>
       {/each}
     </div>
@@ -155,6 +190,7 @@
     font-size: 15px;
   }
   .find input:focus { border: 0; box-shadow: none; }
+  .hint { margin: var(--sp-3) var(--sp-2) 0; color: var(--text-3); font-size: var(--fs-xs); }
   .hits {
     max-height: min(280px, 42vh);
     overflow-y: auto;
@@ -186,6 +222,8 @@
     flex-shrink: 0;
   }
   .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub { color: var(--text-3); font-size: 13px; }
+  .dot.muted { background: var(--text-3); }
   .kind { color: var(--text-3); font-size: 12px; }
   .colors { display: flex; gap: 8px; padding: var(--sp-2) 0; }
   .swatch {

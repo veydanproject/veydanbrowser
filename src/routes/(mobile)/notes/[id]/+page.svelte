@@ -34,7 +34,11 @@
   import { mediaKindOf } from '$lib/media/kind';
   import type { CaptureFile, MediaItem, MediaKind } from '$lib/media/types';
   import ChipMark from '$lib/components/notes/ChipMark.svelte';
-  import { WIKI_MARK, unclosedWikiAt, wikiMarkup } from '$lib/tiptap-ext';
+  import { extractWikiTargets, unclosedMarkAt, unclosedWikiAt, wikiCloseOf, wikiMarkup, TPL_CLOSE, TPL_OPEN } from '$lib/tiptap-ext';
+  import { isEntityBinding } from '$lib/bindings';
+  import { TEMPLATES_FOLDER } from '$lib/notes-filter';
+  import NoteContextSheet from '$lib/components/mobile/NoteContextSheet.svelte';
+  import PlaceholderSheet from '$lib/components/mobile/PlaceholderSheet.svelte';
 
   // "new" means nothing is stored yet; the note is created on the first edit.
   let id = $state(page.params.id ?? 'new');
@@ -42,6 +46,8 @@
   let content = $state('');
   let tags = $state<string[]>([]);
   let chips = $state<NoteChip[]>([]);
+  /** `kind:value` bindings of the saved note */
+  let bindings = $state<string[]>([]);
   let pinned = $state(false);
   let archived = $state(false);
   let createdAt = $state('');
@@ -53,7 +59,7 @@
   let ready = $state(untrack(() => id) === 'new');
 
   let mode = $state<EditorMode>(loadEditorMode());
-  let sheet = $state<'none' | 'actions' | 'links' | 'history' | 'move' | 'attach' | 'conflict' | 'workspace' | 'labels'>('none');
+  let sheet = $state<'none' | 'actions' | 'links' | 'history' | 'move' | 'attach' | 'conflict' | 'workspace' | 'labels' | 'context'>('none');
   // Unresolved sync conflict on this note; drives the banner.
   let hasConflict = $state(false);
   let allTags = $state<NoteTag[]>([]);
@@ -82,6 +88,7 @@
   let wikiQuery = $state('');
   let wikiOpen = $state(false);
   let wikiStart = 0;
+  let wikiMark = '';
   let busy = $state(false);
   let linkOpen = $state(false);
   let linkHref = $state('');
@@ -254,6 +261,25 @@
       : chips.filter((c) => c.kind !== 'tag'),
   );
 
+  /** Re-read chips and bindings after a metadata change. */
+  async function refreshMeta() {
+    const n = await api.notes.get(id);
+    chips = n.chips;
+    bindings = n.bindings;
+  }
+
+  // ── Context: entity bindings and `[[kind:id]]` mentions ──
+  /** Binding to highlight in the context sheet, e.g. after tapping a mention */
+  let contextFocus = $state<string | null>(null);
+  const mentions = $derived(extractWikiTargets(content).filter(isEntityBinding));
+  const entityBindings = $derived((isNew ? draftBindings : bindings).filter(isEntityBinding));
+  const contextCount = $derived(new Set([...entityBindings, ...mentions]).size);
+
+  function openContext(focus: string | null = null) {
+    contextFocus = focus;
+    sheet = 'context';
+  }
+
   function applyNote(n: Note) {
     title = n.title;
     content = repairAttachmentLinks(n.content);
@@ -261,6 +287,7 @@
     baseHash = n.contentHash;
     tags = n.tags;
     chips = n.chips;
+    bindings = n.bindings;
     pinned = n.pinned;
     archived = n.archived;
     createdAt = n.created_at;
@@ -386,6 +413,7 @@
       knownBody = body;
       updatedAt = n.updated_at;
       chips = n.chips;
+      bindings = n.bindings;
       externalChange = false;
       status = 'saved';
     } catch (e) {
@@ -539,31 +567,68 @@
     linkOpen = false;
   }
 
-  /** Track an unclosed `@@` before the caret in source mode. */
+  /** Track an unclosed `[[` (or legacy `@@`) before the caret in source mode. */
   function updateWikiMd() {
     const pos = body?.selectionStart ?? content.length;
     const before = content.slice(0, pos);
     const open = unclosedWikiAt(before);
-    if (open < 0) {
+    if (!open) {
       wikiOpen = false;
       return;
     }
-    wikiStart = open;
-    wikiQuery = before.slice(open + WIKI_MARK.length);
+    wikiStart = open.start;
+    wikiMark = open.mark;
+    wikiQuery = before.slice(open.start + open.mark.length);
     wikiOpen = true;
   }
 
-  function pickWiki(name: string) {
+  // ── Template placeholders: `{{` in source mode ──
+  let tplOpen = $state(false);
+  let tplQuery = $state('');
+  let tplStart = 0;
+  /** Notes in the Templates folder keep `{{name}}`; elsewhere the value is inserted. */
+  const isTemplateNote = $derived(
+    folderIds.some((fid) => folders.find((f) => f.id === fid)?.name.toLowerCase() === TEMPLATES_FOLDER.toLowerCase()),
+  );
+
+  function updateTplMd() {
+    const pos = body?.selectionStart ?? content.length;
+    const before = content.slice(0, pos);
+    const open = unclosedMarkAt(before, TPL_OPEN, TPL_CLOSE);
+    if (open < 0) { tplOpen = false; return; }
+    tplStart = open;
+    tplQuery = before.slice(open + TPL_OPEN.length);
+    tplOpen = true;
+  }
+
+  function pickPlaceholder(text: string) {
     if (mode === 'rich') {
-      rich?.pickWikiLink(name);
+      rich?.pickPlaceholder(text);
+      tplOpen = false;
+      return;
+    }
+    const pos = body?.selectionStart ?? content.length;
+    const rest = content.slice(pos);
+    const skip = rest.startsWith(TPL_CLOSE) ? TPL_CLOSE.length : 0;
+    content = content.slice(0, tplStart) + text + rest.slice(skip);
+    tplOpen = false;
+    onEdit();
+    const caret = tplStart + text.length;
+    requestAnimationFrame(() => body?.setSelectionRange(caret, caret));
+  }
+
+  function pickWiki(target: string, label?: string | null) {
+    if (mode === 'rich') {
+      rich?.pickWikiLink(target, label);
       wikiQuery = '';
       wikiOpen = false;
       return;
     }
     const pos = body?.selectionStart ?? content.length;
-    const link = wikiMarkup(name);
+    const link = wikiMarkup(target, label);
     const rest = content.slice(pos);
-    const skip = rest.startsWith(WIKI_MARK) ? WIKI_MARK.length : 0;
+    const close = wikiCloseOf(wikiMark);
+    const skip = rest.startsWith(close) ? close.length : 0;
     content = content.slice(0, wikiStart) + link + rest.slice(skip);
     wikiQuery = '';
     wikiOpen = false;
@@ -572,10 +637,11 @@
     requestAnimationFrame(() => body?.setSelectionRange(caret, caret));
   }
 
-  /** Open the linked note; create it when nothing matches. */
+  /** Open the linked note; create it when nothing matches. Entity mentions open the context sheet. */
   async function openWikiLink(target: string) {
     const name = target.trim();
     if (!name) return;
+    if (isEntityBinding(name)) { openContext(name); return; }
     try {
       await save();
       let hit = await api.notes.resolveLink(name);
@@ -634,7 +700,7 @@
     busy = true;
     try {
       await api.notes.addFolder(id, folderId);
-      chips = (await api.notes.get(id)).chips;
+      await refreshMeta();
       sheet = 'none';
     } catch (e) {
       error = formatError(e);
@@ -654,7 +720,7 @@
     busy = true;
     try {
       await api.notes.removeFolder(id, folderId);
-      chips = (await api.notes.get(id)).chips;
+      await refreshMeta();
     } catch (e) {
       error = formatError(e);
     } finally {
@@ -679,7 +745,7 @@
     busy = true;
     try {
       await api.notes.addBinding(id, binding);
-      chips = (await api.notes.get(id)).chips;
+      await refreshMeta();
       sheet = 'none';
     } catch (e) {
       error = formatError(e);
@@ -798,14 +864,15 @@
             status = 'idle';
             return;
           }
-          const bindings = draftBindings;
+          const bindingsToApply = draftBindings;
           const foldersToApply = folderIds;
-          const n = await api.notes.create(title, content, tags, bindings);
+          const n = await api.notes.create(title, content, tags, bindingsToApply);
           id = n.id;
           for (const folderId of foldersToApply) await api.notes.addFolder(id, folderId);
           const fresh = await api.notes.get(id);
           urls = new AttachmentUrls(id);
           chips = fresh.chips;
+          bindings = fresh.bindings;
           createdAt = fresh.created_at;
           updatedAt = fresh.updated_at;
           baseHash = fresh.contentHash;
@@ -818,6 +885,7 @@
           baseHash = n.contentHash;
           updatedAt = n.updated_at;
           chips = n.chips;
+          bindings = n.bindings;
         }
         status = 'saved';
       } catch (e) {
@@ -852,8 +920,10 @@
     }
   }
 
-  async function setWorkspace(wsId: string, on: boolean) {
-    const binding = `workspace:${wsId}`;
+  const setWorkspace = (wsId: string, on: boolean) => setBinding(`workspace:${wsId}`, on);
+
+  /** Add or remove any `kind:value` binding; drafts keep it locally until the first save. */
+  async function setBinding(binding: string, on: boolean) {
     if (id === 'new') {
       if (on) {
         droppedBindings = droppedBindings.filter((b) => b !== binding);
@@ -872,7 +942,7 @@
     try {
       if (on) await api.notes.addBinding(id, binding);
       else await api.notes.removeBinding(id, binding);
-      chips = (await api.notes.get(id)).chips;
+      await refreshMeta();
     } catch (e) {
       error = formatError(e);
     } finally {
@@ -886,6 +956,7 @@
       await api.notes.setFolder(id, folderId);
       const n = await api.notes.get(id);
       chips = n.chips;
+      bindings = n.bindings;
       sheet = 'none';
     } catch (e) {
       error = formatError(e);
@@ -975,6 +1046,8 @@
       {#each shownChips as c (c.kind + c.id)}
         {#if c.kind === 'folder'}
           <button type="button" class="m-chip small" style:--chip={c.color} onclick={() => removeFolder(c.id)}><ChipMark kind="folder" />{c.label}</button>
+        {:else if c.kind === 'proxy' || c.kind === 'ssh' || c.kind === 'totp'}
+          <button type="button" class="m-chip small" style:--chip={c.color} onclick={() => openContext(`${c.kind}:${c.id}`)}><ChipMark kind={c.kind} />{c.label}</button>
         {:else}
           <span class="m-chip small" class:ws={c.kind === 'workspace'} style:--chip={c.color}><ChipMark kind={c.kind} />{c.label}</span>
         {/if}
@@ -1042,15 +1115,16 @@
       onchange={onRichChange}
       onwiki={(q) => { wikiOpen = q !== null; if (q !== null) wikiQuery = q; }}
       onwikilink={openWikiLink}
+      ontpl={(q) => { tplOpen = q !== null; if (q !== null) tplQuery = q; }}
     />
   {:else}
     <textarea
       class="body"
       bind:this={body}
       bind:value={content}
-      oninput={() => { onEdit(); updateWikiMd(); }}
-      onclick={updateWikiMd}
-      onkeyup={updateWikiMd}
+      oninput={() => { onEdit(); updateWikiMd(); updateTplMd(); }}
+      onclick={() => { updateWikiMd(); updateTplMd(); }}
+      onkeyup={() => { updateWikiMd(); updateTplMd(); }}
       placeholder={$t('notes_body_placeholder')}
     ></textarea>
   {/if}
@@ -1058,7 +1132,7 @@
 
 </div>
 
-<div class="toolbar" class:hide={wikiOpen}>
+<div class="toolbar" class:hide={wikiOpen || tplOpen}>
   <button type="button" onclick={() => (sheet = 'attach')} aria-label={$t('notes_attach')}>
     <Icon name="paperclip" size={22} />
   </button>
@@ -1075,6 +1149,10 @@
   <button type="button" disabled={isNew} onclick={() => (sheet = 'links')} aria-label={$t('notes_links')}>
     <Icon name="link" size={22} />
   </button>
+  <button type="button" class="ctx-btn" onclick={() => openContext()} aria-label={$t('notes_context')}>
+    <Icon name="layers" size={22} />
+    {#if contextCount > 0}<span class="ctx-count">{contextCount}</span>{/if}
+  </button>
 </div>
 
 <NoteActionsSheet
@@ -1090,7 +1168,25 @@
   onworkspace={() => (sheet = 'workspace')}
   ondelete={remove}
 />
-<NoteLinksSheet open={sheet === 'links'} noteId={id} onclose={() => (sheet = 'none')} onopen={openNote} />
+<NoteLinksSheet
+  open={sheet === 'links'}
+  noteId={id}
+  onclose={() => (sheet = 'none')}
+  onopen={openNote}
+  oncreate={(target) => { sheet = 'none'; void openWikiLink(target); }}
+/>
+<NoteContextSheet
+  open={sheet === 'context'}
+  noteId={id}
+  bindings={entityBindings}
+  {mentions}
+  focus={contextFocus}
+  {busy}
+  onclose={() => (sheet = 'none')}
+  onopen={openNote}
+  onbind={(b) => addBinding(b)}
+  onunbind={(b) => setBinding(b, false)}
+/>
 <NoteHistorySheet
   open={sheet === 'history'}
   noteId={id}
@@ -1160,6 +1256,15 @@
   excludeId={id}
   onclose={() => { wikiOpen = false; wikiQuery = ''; }}
   onpick={pickWiki}
+/>
+<PlaceholderSheet
+  open={tplOpen && !wikiOpen}
+  query={tplQuery}
+  isTemplate={isTemplateNote}
+  {title}
+  bindings={isNew ? draftBindings : bindings}
+  onclose={() => { tplOpen = false; tplQuery = ''; }}
+  onpick={pickPlaceholder}
 />
 
 <style>
@@ -1319,4 +1424,11 @@
   .toolbar button:active { background: var(--m-seg); }
   .toolbar button:disabled { opacity: 0.35; }
   .toolbar.hide { display: none; }
+  .ctx-btn { position: relative; }
+  .ctx-count {
+    position: absolute; top: 6px; right: 6px;
+    min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 8px; background: var(--accent); color: #fff;
+    font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+  }
 </style>

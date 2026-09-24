@@ -11,7 +11,9 @@ import { pickMediaFiles } from '$lib/media/pick';
 import type { MediaKind } from '$lib/media/types';
 import { capabilities } from '$lib/platform';
 import { formatError } from '$lib/utils';
+import { isEntityBinding, isEntityKind, parseBinding, type EntityKind } from '$lib/bindings';
 import type {
+  BindingSummary,
   ConflictView,
   MergeBlock,
   NavChild,
@@ -30,6 +32,7 @@ import type { SyncConfig, SyncProgress, SyncStatus } from '$lib/api';
 
 export { formatError };
 export type {
+  BindingSummary,
   ConflictView,
   MergeBlock,
   NavChild,
@@ -63,7 +66,11 @@ export interface NoteListItem {
   updated_at: string;
   preview: string;
   tags: string[];
+  /** `kind:value` bindings as stored on the note */
+  bindings: string[];
   chips: NoteChip[];
+  /** Shared item for views that need every field (table) */
+  raw: SharedNoteListItem;
 }
 
 export interface Note extends Omit<NoteListItem, 'preview'> {
@@ -115,14 +122,59 @@ export interface NoteFolder {
 export interface NoteLinks {
   outgoing: NoteListItem[];
   backlinks: NoteListItem[];
+  /** Link targets in the body that match no existing note */
+  unresolved: string[];
 }
 
 // ── Shape adapters ───────────────────────────────────────────────────────────
 
 const PROFILE_COLOR = '#8b7bff';
 const DOMAIN_COLOR = '#888';
+const ENTITY_COLOR: Record<EntityKind, string> = {
+  workspace: '#34d399',
+  profile: PROFILE_COLOR,
+  proxy: '#f5c451',
+  ssh: '#2dd4bf',
+  totp: '#60a5fa',
+};
+const ENTITY_ICON: Record<EntityKind, string> = {
+  workspace: 'layers',
+  profile: 'globe',
+  proxy: 'shield',
+  ssh: 'terminal',
+  totp: 'key',
+};
 
-/** Chips in desktop order: folder, workspace, profile, domain, tag. */
+/** Names of entities seen so far (`note_binding_summaries`); filled before items are shaped. */
+const summaryCache = new Map<string, BindingSummary>();
+
+const needsSummary = (b: string) => isEntityBinding(b) && !summaryCache.has(b);
+
+/** Fetch names for entity bindings not cached yet. */
+async function warmSummaries(items: { bindings?: string[] }[]): Promise<void> {
+  const missing = new Set<string>();
+  for (const it of items) for (const b of it.bindings ?? []) if (needsSummary(b)) missing.add(b);
+  if (missing.size === 0) return;
+  for (const s of await shared.notes.bindingSummaries([...missing])) summaryCache.set(s.binding, s);
+}
+
+/** Cached summary, or null when the entity is unknown or not loaded yet. */
+export function bindingSummary(binding: string): BindingSummary | null {
+  return summaryCache.get(binding) ?? null;
+}
+
+/** Entities bound to a shared list item, for the table's context column. */
+export function entitySummaryFor(item: SharedNoteListItem): { name: string; icon: string; color: string }[] {
+  const out: { name: string; icon: string; color: string }[] = [];
+  for (const b of item.bindings ?? []) {
+    const p = parseBinding(b);
+    const s = summaryCache.get(b);
+    if (p && isEntityKind(p.kind) && s) out.push({ name: s.name, icon: ENTITY_ICON[p.kind], color: ENTITY_COLOR[p.kind] });
+  }
+  return out;
+}
+
+/** Chips in desktop order: folder, workspace, profile, other entities, domain, tag. */
 function chipsFor(item: SharedNoteListItem, nav: NoteNav): NoteChip[] {
   const out: NoteChip[] = [];
   for (const fid of item.folder_ids ?? []) {
@@ -130,17 +182,19 @@ function chipsFor(item: SharedNoteListItem, nav: NoteNav): NoteChip[] {
     if (f) out.push({ kind: 'folder', id: f.id, label: f.name, color: f.color });
   }
   for (const b of item.bindings ?? []) {
-    if (b.startsWith('workspace:')) {
-      const id = b.slice('workspace:'.length);
-      const w = nav.all_workspaces.find((x) => x.id === id);
-      if (w) out.push({ kind: 'workspace', id, label: w.name, color: w.color });
-    } else if (b.startsWith('profile:')) {
-      const id = b.slice('profile:'.length);
-      const p = nav.all_profiles.find((x) => x.id === id);
-      if (p) out.push({ kind: 'profile', id, label: p.name, color: PROFILE_COLOR });
-    } else if (b.startsWith('domain:')) {
-      const domain = b.slice('domain:'.length);
-      if (domain) out.push({ kind: 'domain', id: domain, label: domain, color: DOMAIN_COLOR });
+    const p = parseBinding(b);
+    if (!p) continue;
+    if (p.kind === 'workspace') {
+      const w = nav.all_workspaces.find((x) => x.id === p.value);
+      if (w) out.push({ kind: 'workspace', id: p.value, label: w.name, color: w.color });
+    } else if (p.kind === 'profile') {
+      const pr = nav.all_profiles.find((x) => x.id === p.value);
+      if (pr) out.push({ kind: 'profile', id: p.value, label: pr.name, color: PROFILE_COLOR });
+    } else if (p.kind === 'domain') {
+      if (p.value) out.push({ kind: 'domain', id: p.value, label: p.value, color: DOMAIN_COLOR });
+    } else if (isEntityKind(p.kind)) {
+      const s = summaryCache.get(b);
+      if (s) out.push({ kind: p.kind, id: p.value, label: s.name, color: ENTITY_COLOR[p.kind] });
     }
   }
   for (const t of item.tags ?? []) out.push({ kind: 'tag', id: t.name, label: t.name, color: t.color });
@@ -157,13 +211,21 @@ function toItem(d: SharedNoteListItem, nav: NoteNav): NoteListItem {
     updated_at: d.updated_at,
     preview: d.preview,
     tags: (d.tags ?? []).map((t) => t.name),
+    bindings: d.bindings ?? [],
     chips: chipsFor(d, nav),
+    raw: d,
   };
 }
 
 function toNote(d: SharedNote, nav: NoteNav): Note {
   const { preview: _preview, ...item } = toItem(d, nav);
   return { ...item, content: d.content ?? '', contentHash: d.content_hash };
+}
+
+/** Nav plus entity names for `items`, loaded together. */
+async function shapeContext(items: { bindings?: string[] }[]): Promise<NoteNav> {
+  const [nav] = await Promise.all([shared.notes.nav(), warmSummaries(items)]);
+  return nav;
 }
 
 function toTag(t: { id: string; name: string; color: string; count?: number }): NoteTag {
@@ -260,19 +322,21 @@ export const api = {
   notes: {
     nav: () => shared.notes.nav(),
     list: async (search = '', filter: NoteListFilter = { kind: 'all' }): Promise<NoteListItem[]> => {
-      const [items, nav] = await Promise.all([filterFor(filter).then((f) => shared.notes.list(f)), shared.notes.nav()]);
+      const items = await filterFor(filter).then((f) => shared.notes.list(f));
+      const nav = await shapeContext(items);
       const q = search.trim().toLowerCase();
       return items
         .filter((n) => !q || n.title.toLowerCase().includes(q) || n.preview.toLowerCase().includes(q))
         .map((n) => toItem(n, nav));
     },
     get: async (id: string): Promise<Note> => {
-      const [n, nav] = await Promise.all([shared.notes.get(id), shared.notes.nav()]);
+      const n = await shared.notes.get(id);
+      const nav = await shapeContext([n]);
       return toNote(n, nav);
     },
     create: async (title: string, content = '', tags: string[] = [], bindings: string[] = []): Promise<Note> => {
       const n = await shared.notes.create({ title, content, tag_names: tags, bindings });
-      return toNote(n, await shared.notes.nav());
+      return toNote(n, await shapeContext([n]));
     },
     update: async (id: string, input: NoteUpdateInput): Promise<Note> => {
       if (input.tags) await shared.notes.setTags(id, input.tags);
@@ -286,13 +350,15 @@ export const api = {
       }
       if (input.archived === true) await shared.notes.archive(id);
       else if (input.archived === false) await shared.notes.restore(id);
-      const [n, nav] = await Promise.all([shared.notes.get(id), shared.notes.nav()]);
+      const n = await shared.notes.get(id);
+      const nav = await shapeContext([n]);
       return toNote(n, nav);
     },
     delete: (id: string) => shared.notes.delete(id),
     restore: async (id: string): Promise<Note> => {
       await shared.notes.restore(id);
-      const [n, nav] = await Promise.all([shared.notes.get(id), shared.notes.nav()]);
+      const n = await shared.notes.get(id);
+      const nav = await shapeContext([n]);
       return toNote(n, nav);
     },
     purge: (id: string) => shared.notes.delete(id, true),
@@ -307,7 +373,8 @@ export const api = {
       const q = query.trim().toLowerCase();
       const out: NoteSearchResult = { notes: [], text_matches: [] };
       if (!q) return out;
-      const [items, nav] = await Promise.all([shared.notes.search(query), shared.notes.nav()]);
+      const items = await shared.notes.search(query);
+      const nav = await shapeContext(items);
       for (const d of items) {
         if (d.deleted) continue;
         if (d.title.toLowerCase().includes(q)) {
@@ -345,14 +412,32 @@ export const api = {
     historyGet: (id: string) => shared.notes.historyGet(id),
     historyRestore: async (noteId: string, historyId: string): Promise<Note> => {
       const n = await shared.notes.historyRestore(noteId, historyId);
-      return toNote(n, await shared.notes.nav());
+      return toNote(n, await shapeContext([n]));
     },
     links: async (id: string): Promise<NoteLinks> => {
-      const [l, nav]: [SharedNoteLinks, NoteNav] = await Promise.all([shared.notes.links(id), shared.notes.nav()]);
-      return { outgoing: l.outgoing.map((n) => toItem(n, nav)), backlinks: l.backlinks.map((n) => toItem(n, nav)) };
+      const l: SharedNoteLinks = await shared.notes.links(id);
+      const nav = await shapeContext([...l.outgoing, ...l.backlinks]);
+      return {
+        outgoing: l.outgoing.map((n) => toItem(n, nav)),
+        backlinks: l.backlinks.map((n) => toItem(n, nav)),
+        unresolved: l.unresolved,
+      };
     },
     resolveLink: (target: string) => shared.notes.resolveLink(target),
     syncInfo: (id: string) => shared.notes.syncInfo(id),
+    /** Live notes bound to or mentioning an entity, e.g. `ssh:{id}` */
+    entityNotes: async (binding: string): Promise<NoteListItem[]> => {
+      const items = await shared.notes.entityNotes(binding);
+      const nav = await shapeContext(items);
+      return items.map((n) => toItem(n, nav));
+    },
+    /** Names behind entity bindings; results are cached for chips */
+    bindingSummaries: async (bindings: string[]): Promise<BindingSummary[]> => {
+      await warmSummaries([{ bindings }]);
+      return bindings.map((b) => summaryCache.get(b)).filter((s): s is BindingSummary => !!s);
+    },
+    entitySearch: (kind: string, query: string) => shared.notes.entitySearch(kind, query),
+    placeholderValues: (title: string, bindings: string[]) => shared.notes.placeholderValues(title, bindings),
   },
   attachments: {
     list: (noteId: string) => shared.notes.attachmentList(noteId),

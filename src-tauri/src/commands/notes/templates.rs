@@ -3,12 +3,17 @@
 
 //! Note templates: any note inside the `Templates` folder. Placeholders:
 //! `{{date}}`, `{{time}}`, `{{datetime}}`, `{{title}}`, `{{profile}}`,
-//! `{{workspace}}`, `{{url}}`, `{{domain}}`.
+//! `{{workspace}}`, `{{url}}`, `{{domain}}`, `{{proxy}}`, `{{proxy_type}}`,
+//! `{{proxy_host}}`, `{{proxy_port}}`, `{{proxy_region}}`, `{{ssh}}`,
+//! `{{ssh_host}}`, `{{ssh_port}}`, `{{ssh_user}}`, `{{totp}}`.
+//! Only non-secret fields are ever exposed.
 
+use super::binding::BindingKind;
 use super::files::{read_note_file, resolve_note_abs_path};
-use crate::error::AppError;
+use crate::error::{AppError, CmdResult};
 use crate::AppState;
 use chrono::Local;
+use std::collections::HashMap;
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct TemplateVars {
@@ -17,31 +22,98 @@ pub(crate) struct TemplateVars {
     pub workspace: String,
     pub url: String,
     pub domain: String,
+    pub proxy: String,
+    pub proxy_type: String,
+    pub proxy_host: String,
+    pub proxy_port: String,
+    pub proxy_region: String,
+    pub ssh: String,
+    pub ssh_host: String,
+    pub ssh_port: String,
+    pub ssh_user: String,
+    pub totp: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct ProxyPublic {
+    name: String,
+    proxy_type: String,
+    host: String,
+    port: i64,
+    country: Option<String>,
+    city: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct SshPublic {
+    name: String,
+    host: String,
+    port: i64,
+    username: String,
 }
 
 impl TemplateVars {
-    /// Fill profile/workspace names from bindings.
+    /// Fill entity names and public fields from bindings.
     pub(crate) async fn from_bindings(title: &str, bindings: &[String], state: &AppState) -> Self {
         let mut vars = Self {
             title: title.to_string(),
             ..Default::default()
         };
         for b in bindings {
-            if let Some(id) = b.strip_prefix("profile:") {
-                vars.profile = lookup_name("profiles", id, state).await;
-            } else if let Some(id) = b.strip_prefix("workspace:") {
-                vars.workspace = lookup_name("workspaces", id, state).await;
-            } else if let Some(u) = b.strip_prefix("url:") {
-                vars.url = u.to_string();
-            } else if let Some(d) = b.strip_prefix("domain:") {
-                vars.domain = d.to_string();
+            let Some((kind, value)) = BindingKind::parse(b) else { continue };
+            match kind {
+                BindingKind::Profile => vars.profile = lookup_name(kind, value, state).await,
+                BindingKind::Workspace => vars.workspace = lookup_name(kind, value, state).await,
+                BindingKind::Totp => vars.totp = lookup_name(kind, value, state).await,
+                BindingKind::Url => vars.url = value.to_string(),
+                BindingKind::Domain => vars.domain = value.to_string(),
+                BindingKind::Proxy => {
+                    if let Some(p) = sqlx::query_as::<_, ProxyPublic>(
+                        "SELECT name, proxy_type, host, port, country, city FROM proxies WHERE id = ?",
+                    )
+                    .bind(value)
+                    .fetch_optional(&state.db)
+                    .await
+                    .ok()
+                    .flatten()
+                    {
+                        vars.proxy = p.name;
+                        vars.proxy_type = p.proxy_type;
+                        vars.proxy_host = p.host;
+                        vars.proxy_port = p.port.to_string();
+                        vars.proxy_region = [p.country, p.city]
+                            .into_iter()
+                            .flatten()
+                            .filter(|s| !s.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                    }
+                }
+                BindingKind::Ssh => {
+                    if let Some(s) = sqlx::query_as::<_, SshPublic>(
+                        "SELECT name, host, port, username FROM ssh_connections WHERE id = ?",
+                    )
+                    .bind(value)
+                    .fetch_optional(&state.db)
+                    .await
+                    .ok()
+                    .flatten()
+                    {
+                        vars.ssh = s.name;
+                        vars.ssh_host = s.host;
+                        vars.ssh_port = s.port.to_string();
+                        vars.ssh_user = s.username;
+                    }
+                }
             }
         }
         vars
     }
 }
 
-async fn lookup_name(table: &str, id: &str, state: &AppState) -> String {
+/// `name` column of the entity table behind an entity binding kind.
+pub(crate) async fn lookup_name(kind: BindingKind, id: &str, state: &AppState) -> String {
+    let Some(table) = kind.table() else { return String::new() };
     let sql = format!("SELECT name FROM {table} WHERE id = ?");
     sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql))
         .bind(id)
@@ -52,10 +124,10 @@ async fn lookup_name(table: &str, id: &str, state: &AppState) -> String {
         .unwrap_or_default()
 }
 
-/// Replace `{{name}}` placeholders; unknown ones are left as-is.
-pub(crate) fn render(body: &str, vars: &TemplateVars) -> String {
+/// Current value of every placeholder.
+fn pairs(vars: &TemplateVars) -> [(&'static str, String); 18] {
     let now = Local::now();
-    let pairs = [
+    [
         ("date", now.format("%Y-%m-%d").to_string()),
         ("time", now.format("%H:%M").to_string()),
         ("datetime", now.format("%Y-%m-%d %H:%M").to_string()),
@@ -64,14 +136,39 @@ pub(crate) fn render(body: &str, vars: &TemplateVars) -> String {
         ("workspace", vars.workspace.clone()),
         ("url", vars.url.clone()),
         ("domain", vars.domain.clone()),
-    ];
+        ("proxy", vars.proxy.clone()),
+        ("proxy_type", vars.proxy_type.clone()),
+        ("proxy_host", vars.proxy_host.clone()),
+        ("proxy_port", vars.proxy_port.clone()),
+        ("proxy_region", vars.proxy_region.clone()),
+        ("ssh", vars.ssh.clone()),
+        ("ssh_host", vars.ssh_host.clone()),
+        ("ssh_port", vars.ssh_port.clone()),
+        ("ssh_user", vars.ssh_user.clone()),
+        ("totp", vars.totp.clone()),
+    ]
+}
+
+/// Replace `{{name}}` placeholders; unknown ones are left as-is.
+pub(crate) fn render(body: &str, vars: &TemplateVars) -> String {
     let mut out = body.to_string();
-    for (key, value) in pairs {
+    for (key, value) in pairs(vars) {
         out = out
             .replace(&format!("{{{{{key}}}}}"), &value)
             .replace(&format!("{{{{ {key} }}}}"), &value);
     }
     out
+}
+
+/// Placeholder name -> value for a note with `title` and `bindings`, e.g. to expand `{{date}}` in place.
+#[tauri::command]
+pub async fn note_placeholder_values(
+    title: String,
+    bindings: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<HashMap<String, String>> {
+    let vars = TemplateVars::from_bindings(&title, &bindings, &state).await;
+    Ok(pairs(&vars).into_iter().map(|(k, v)| (k.to_string(), v)).collect())
 }
 
 /// Body of a template note.

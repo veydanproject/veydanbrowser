@@ -450,6 +450,16 @@ export interface NoteNav {
 export interface NoteLinks {
   outgoing: NoteListItem[];
   backlinks: NoteListItem[];
+  /** Link targets in the body that match no existing note */
+  unresolved: string[];
+}
+
+/** Public description of the entity behind a `kind:id` binding */
+export interface BindingSummary {
+  binding: string;
+  kind: string;
+  name: string;
+  subtitle: string;
 }
 
 export interface NoteSyncInfo {

@@ -13,9 +13,11 @@
     noteId: string;
     onclose: () => void;
     onopen: (id: string) => void;
+    /** Create the missing note for an unresolved `[[target]]` and open it */
+    oncreate: (target: string) => void;
   }
 
-  let { open, noteId, onclose, onopen }: Props = $props();
+  let { open, noteId, onclose, onopen, oncreate }: Props = $props();
 
   let links = $state<NoteLinks | null>(null);
   let error = $state('');
@@ -25,7 +27,9 @@
     api.notes.links(noteId).then((l) => (links = l)).catch((e) => (error = formatError(e)));
   });
 
-  const isEmpty = $derived(!!links && links.outgoing.length === 0 && links.backlinks.length === 0);
+  const isEmpty = $derived(
+    !!links && links.outgoing.length === 0 && links.backlinks.length === 0 && links.unresolved.length === 0,
+  );
 </script>
 
 {#snippet group(label: string, items: NoteListItem[])}
@@ -52,6 +56,20 @@
   {:else if links}
     {@render group($t('notes_links_outgoing'), links.outgoing)}
     {@render group($t('notes_links_backlinks'), links.backlinks)}
+    {#if links.unresolved.length}
+      <div>
+        <div class="group">{$t('notes_links_unresolved')}</div>
+        <div class="m-list">
+          {#each links.unresolved as target (target)}
+            <button type="button" class="m-row" onclick={() => oncreate(target)}>
+              <Icon name="plus" size={16} />
+              <span class="m-row-label">{target}</span>
+              <Icon name="chevron-right" size={16} />
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
   {/if}
 </BottomSheet>
 

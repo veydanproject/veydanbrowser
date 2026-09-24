@@ -33,6 +33,9 @@ pub async fn clear_catalog(state: &AppState) -> CmdResult<()> {
     let _ = sqlx::query("DELETE FROM note_links")
         .execute(&state.db)
         .await;
+    let _ = sqlx::query("DELETE FROM note_mentions")
+        .execute(&state.db)
+        .await;
     let _ = sqlx::query("DELETE FROM note_tag_links")
         .execute(&state.db)
         .await;

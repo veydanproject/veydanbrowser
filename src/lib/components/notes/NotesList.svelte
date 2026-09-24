@@ -5,6 +5,8 @@
   import type { NoteListItem } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/i18n';
+  import { isEntityKind, parseBinding } from '$lib/bindings';
+  import { entitySummary } from '$lib/notes-context';
 
   interface Props {
     notes: NoteListItem[];
@@ -42,14 +44,13 @@
       chips.push({ label, color });
     }
     for (const b of n.bindings) {
-      if (b.startsWith('workspace:')) {
-        const name = workspaceName?.(b.slice('workspace:'.length));
-        if (name) chips.push({ label: name, color: workspaceColor?.(b.slice('workspace:'.length)) ?? 'var(--success)' });
-      } else if (b.startsWith('profile:')) {
-        const name = profileName?.(b.slice('profile:'.length));
-        if (name) chips.push({ label: name, color: 'var(--accent)' });
-      } else if (b.startsWith('domain:')) {
-        chips.push({ label: b.slice('domain:'.length), color: 'var(--text-2)' });
+      const parsed = parseBinding(b);
+      if (!parsed) continue;
+      if (isEntityKind(parsed.kind)) {
+        const entity = entitySummary(parsed.kind, parsed.value);
+        if (entity) chips.push({ label: entity.name, color: entity.color });
+      } else if (parsed.kind === 'domain') {
+        chips.push({ label: parsed.value, color: 'var(--text-2)' });
       }
     }
     for (const t of n.tags) chips.push({ label: t.name, color: t.color });

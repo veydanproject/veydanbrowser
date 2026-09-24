@@ -423,6 +423,11 @@ async fn hard_delete(id: &str, state: &AppState) -> Result<(), AppError> {
         .execute(&state.db)
         .await
         .map_err(AppError::db)?;
+    sqlx::query("DELETE FROM note_mentions WHERE note_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
 
     sqlx::query("DELETE FROM notes WHERE id = ?")
         .bind(id)

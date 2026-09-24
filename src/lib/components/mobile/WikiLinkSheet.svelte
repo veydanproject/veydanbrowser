@@ -3,9 +3,10 @@
 
 <script lang="ts">
   import Icon from '$lib/Icon.svelte';
-  import type { NoteListItem } from '$lib/mobile/api';
+  import { api, type BindingSummary, type NoteListItem } from '$lib/mobile/api';
   import { onKeyboard } from '$lib/mobile/keyboard';
   import { t } from '$lib/mobile/i18n';
+  import { ENTITY_KINDS, isEntityKind, type EntityKind } from '$lib/bindings';
   import BottomSheet from './BottomSheet.svelte';
 
   interface Props {
@@ -14,10 +15,19 @@
     notes: NoteListItem[];
     excludeId: string;
     onclose: () => void;
-    onpick: (title: string) => void;
+    /** `target` is a note title, or `kind:id` with `label` for an entity mention */
+    onpick: (target: string, label?: string | null) => void;
   }
 
   let { open, seed, notes, excludeId, onclose, onpick }: Props = $props();
+
+  const ICON: Record<EntityKind, string> = {
+    workspace: 'layers',
+    profile: 'globe',
+    proxy: 'shield',
+    ssh: 'terminal',
+    totp: 'key',
+  };
 
   let query = $state('');
   let expanded = $state(false);
@@ -55,6 +65,25 @@
     query.trim().length > 0 && !matches.some((n) => n.title.toLowerCase() === query.trim().toLowerCase()),
   );
 
+  // `kind:rest` switches the sheet to entity search
+  const entityQuery = $derived.by((): { kind: EntityKind; rest: string } | null => {
+    const i = query.indexOf(':');
+    if (i < 0) return null;
+    const kind = query.slice(0, i).trim().toLowerCase();
+    return isEntityKind(kind) ? { kind, rest: query.slice(i + 1) } : null;
+  });
+  let entityHits = $state<BindingSummary[]>([]);
+  let entityTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const eq = entityQuery;
+    if (entityTimer) clearTimeout(entityTimer);
+    if (!eq) { entityHits = []; return; }
+    entityTimer = setTimeout(async () => {
+      const hits = await api.notes.entitySearch(eq.kind, eq.rest).catch(() => []);
+      if (entityQuery?.kind === eq.kind && entityQuery.rest === eq.rest) entityHits = hits;
+    }, 150);
+  });
+
   function close() {
     expanded = false;
     onclose();
@@ -82,22 +111,44 @@
   </div>
 
   <div class="m-list">
-    {#each matches as n (n.id)}
-      <button type="button" class="m-row" onclick={() => onpick(n.title)}>
-        <Icon name="file-text" size={20} />
-        <span class="m-row-label">{n.title}</span>
-      </button>
-    {/each}
-    {#if canCreate}
-      <button type="button" class="m-row" onclick={() => onpick(query.trim())}>
-        <Icon name="plus" size={20} />
-        <span class="m-row-label">{$t('notes_link_create', { title: query.trim() })}</span>
-      </button>
-    {/if}
-    {#if matches.length === 0 && !canCreate}
-      <div class="m-row"><span class="m-row-label muted">{$t('common_nothing_found')}</span></div>
+    {#if entityQuery}
+      {#each entityHits as s (s.binding)}
+        <button type="button" class="m-row" onclick={() => onpick(s.binding, s.name)}>
+          <Icon name={ICON[entityQuery.kind]} size={20} />
+          <span class="m-row-label">{s.name}{#if s.subtitle}<span class="muted"> · {s.subtitle}</span>{/if}</span>
+        </button>
+      {/each}
+      {#if entityHits.length === 0}
+        <div class="m-row"><span class="m-row-label muted">{$t('notes_wiki_no_entities')}</span></div>
+      {/if}
+    {:else}
+      {#each matches as n (n.id)}
+        <button type="button" class="m-row" onclick={() => onpick(n.title)}>
+          <Icon name="file-text" size={20} />
+          <span class="m-row-label">{n.title}</span>
+        </button>
+      {/each}
+      {#if canCreate}
+        <button type="button" class="m-row" onclick={() => onpick(query.trim())}>
+          <Icon name="plus" size={20} />
+          <span class="m-row-label">{$t('notes_link_create', { title: query.trim() })}</span>
+        </button>
+      {/if}
+      {#if matches.length === 0 && !canCreate}
+        <div class="m-row"><span class="m-row-label muted">{$t('common_nothing_found')}</span></div>
+      {/if}
     {/if}
   </div>
+  {#if !query.trim()}
+    <div class="hints">
+      <span class="muted">{$t('notes_wiki_kind_hint')}</span>
+      {#each ENTITY_KINDS as kind (kind)}
+        <button type="button" class="hint" onclick={() => (query = `${kind}:`)}>
+          <Icon name={ICON[kind]} size={12} />{kind}:
+        </button>
+      {/each}
+    </div>
+  {/if}
 </BottomSheet>
 
 <style>
@@ -140,4 +191,11 @@
   .ico { color: var(--text-3); display: inline-flex; flex-shrink: 0; }
   .ph { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .muted { color: var(--text-3); }
+  .hints { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: var(--sp-3) var(--sp-2) 0; font-size: 13px; }
+  .hint {
+    display: inline-flex; align-items: center; gap: 4px;
+    min-height: 32px; padding: 0 10px;
+    border: 1px solid var(--border); border-radius: 999px;
+    background: transparent; color: var(--text-2); font: inherit; font-size: 13px; font-family: var(--font-mono);
+  }
 </style>

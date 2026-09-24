@@ -3,6 +3,7 @@
 
 import { api } from '$lib/api';
 import { hasErrorCode } from '$lib/utils';
+import type { ActiveFilter } from '$lib/notes-filter';
 import type {
   Note, NoteCreateInput, NoteFilter, NoteFolder, NoteListItem, NoteSmartView, NoteTag,
   NoteUpdateInput, SaveStatus, SmartViewInput,
@@ -10,6 +11,12 @@ import type {
 
 const AUTOSAVE_DELAY_MS = 3000;
 const DRAFT_INTERVAL_MS = 1000;
+
+export type NotesUiRequest =
+  | { kind: 'create' }
+  | { kind: 'search' }
+  | { kind: 'insertLink' }
+  | { kind: 'filter'; filter: ActiveFilter };
 
 class NotesStore {
   /** All live notes (active + archived) for sidebar counts. Trashed notes live in `trash`. */
@@ -26,8 +33,10 @@ class NotesStore {
 
   // Editor state
   activeNoteId = $state<string | null>(null);
-  /** Note id requested from the browser extension popup */
+  /** Note id requested from the browser extension popup or the command palette */
   openRequestId = $state<string | null>(null);
+  /** UI request from the command palette, consumed by the notes page / editor */
+  uiRequest = $state<NotesUiRequest | null>(null);
   activeNote = $state<Note | null>(null);
   saveStatus = $state<SaveStatus>('saved');
   externalChange = $state(false);

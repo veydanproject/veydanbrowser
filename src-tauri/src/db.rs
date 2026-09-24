@@ -469,6 +469,20 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // Entity mentions `[[kind:id]]` in note bodies, rebuilt from the body on save
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS note_mentions (
+            note_id TEXT NOT NULL,
+            binding TEXT NOT NULL,
+            PRIMARY KEY (note_id, binding)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_note_mentions_binding ON note_mentions(binding)")
+        .execute(pool)
+        .await?;
+
     // Saved filters: conditions is a NoteFilter JSON
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS note_smart_views (

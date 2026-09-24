@@ -4,6 +4,7 @@
 //! Navigation tree for the notes screens: counts per section plus the
 //! workspace / profile / folder / tag / smart view / site catalogs, in one call.
 
+use super::binding::BindingKind;
 use super::models::NoteRow;
 use super::tags::{fetch_all_note_folder_ids_map, fetch_all_note_tags_map};
 use crate::error::{AppError, CmdResult};
@@ -107,23 +108,26 @@ pub async fn note_nav(state: tauri::State<'_, AppState>) -> CmdResult<NoteNav> {
             counts.pinned += 1;
         }
         let bindings: Vec<String> = serde_json::from_str(&r.bindings).unwrap_or_default();
-        let has_ws = bindings.iter().any(|b| b.starts_with("workspace:"));
-        let has_pr = bindings.iter().any(|b| b.starts_with("profile:"));
+        let parsed: Vec<(BindingKind, &str)> =
+            bindings.iter().filter_map(|b| BindingKind::parse(b)).collect();
+        let has_ws = parsed.iter().any(|(k, _)| *k == BindingKind::Workspace);
+        let has_pr = parsed.iter().any(|(k, _)| *k == BindingKind::Profile);
         if !has_ws && !has_pr {
             counts.global += 1;
         }
-        for b in &bindings {
-            if let Some(id) = b.strip_prefix("workspace:") {
+        for (kind, value) in &parsed {
+            match kind {
                 // A profile-bound note counts under its profile, not the workspace itself.
-                if !has_pr {
-                    *ws_direct.entry(id.to_string()).or_default() += 1;
+                BindingKind::Workspace if !has_pr => {
+                    *ws_direct.entry(value.to_string()).or_default() += 1;
                 }
-            } else if let Some(id) = b.strip_prefix("profile:") {
-                *pr_count.entry(id.to_string()).or_default() += 1;
-            } else if let Some(d) = b.strip_prefix("domain:") {
-                if !d.is_empty() {
-                    *site_count.entry(d.to_string()).or_default() += 1;
+                BindingKind::Profile => {
+                    *pr_count.entry(value.to_string()).or_default() += 1;
                 }
+                BindingKind::Domain if !value.is_empty() => {
+                    *site_count.entry(value.to_string()).or_default() += 1;
+                }
+                _ => {}
             }
         }
         if let Some(ids) = folders_of.get(&r.id) {

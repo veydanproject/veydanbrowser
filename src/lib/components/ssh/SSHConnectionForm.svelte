@@ -7,6 +7,7 @@
   import type { SshConnection, SshConnectionCreateInput, SshConnectionUpdateInput, SshKey, TotpEntry } from '$lib/types';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/i18n';
+  import EntityNotes from '$lib/components/notes/EntityNotes.svelte';
 
   interface Props {
     connection?: SshConnection | null;
@@ -405,6 +406,9 @@
       {connection ? $t('ssh_btn_save') : $t('ssh_btn_create')}
     </button>
   </div>
+  {#if connection}
+    <EntityNotes kind="ssh" id={connection.id} newTitle={connection.name} />
+  {/if}
 </div>
 
 <style>

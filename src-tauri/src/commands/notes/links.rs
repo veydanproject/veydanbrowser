@@ -1,10 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-//! Wiki links `@@Title@@` / `@@Title|alias@@` / `@@id@@` between notes.
-//! `note_links(from_id, to_id)` is rebuilt from the body on every save;
-//! renaming a note rewrites `@@Old title@@` in the notes that link to it.
+//! Wiki links `[[Title]]` / `[[Title|alias]]` / `[[id]]` between notes;
+//! the legacy `@@Title@@` form is still parsed.
+//! `[[kind:id|Name]]` with an entity binding kind is a mention of a Veydan
+//! object (proxy, ssh, ...) and goes to `note_mentions` instead of `note_links`.
+//! Both tables are rebuilt from the body on every save;
+//! renaming a note rewrites `[[Old title]]` in the notes that link to it.
 
+use super::binding::{is_entity_binding, BindingKind};
 use super::files::{read_note_file, resolve_note_abs_path, row_to_list_item, write_note_file};
 use super::models::{NoteListItem, NoteRow};
 use super::tags::{fetch_all_note_folder_ids_map, fetch_all_note_tags_map};
@@ -14,24 +18,74 @@ use std::collections::HashSet;
 
 type Db = sqlx::Pool<sqlx::Sqlite>;
 
-/// Link targets in the body (text before `|`, trimmed), deduplicated.
-pub(crate) fn extract_targets(content: &str) -> Vec<String> {
+/// Supported (open, close) delimiter pairs; `[[ ]]` is the standard, `@@ @@` legacy.
+const WIKI_MARKS: [(&str, &str); 2] = [("[[", "]]"), ("@@", "@@")];
+
+/// One wiki link occurrence: byte range of the whole markup and its inner text.
+struct WikiSpan<'a> {
+    start: usize,
+    end: usize,
+    /// Byte offset where `inner` begins.
+    inner_start: usize,
+    inner: &'a str,
+}
+
+/// All wiki links in `content`, in document order.
+fn wiki_spans(content: &str) -> Vec<WikiSpan<'_>> {
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    while pos < content.len() {
+        let rest = &content[pos..];
+        // Nearest opening delimiter of either kind
+        let Some((open_at, (open, close))) = WIKI_MARKS
+            .iter()
+            .filter_map(|m| rest.find(m.0).map(|i| (i, *m)))
+            .min_by_key(|(i, _)| *i)
+        else {
+            break;
+        };
+        let after = &rest[open_at + open.len()..];
+        let Some(close_at) = after.find(close) else {
+            pos += open_at + open.len();
+            continue;
+        };
+        let inner = &after[..close_at];
+        let start = pos + open_at;
+        let end = start + open.len() + close_at + close.len();
+        if !inner.contains('\n') {
+            spans.push(WikiSpan { start, end, inner_start: start + open.len(), inner });
+        }
+        pos = end;
+    }
+    spans
+}
+
+/// Target part of a link's inner text (before `|`, trimmed).
+fn inner_target(inner: &str) -> &str {
+    inner.split('|').next().unwrap_or("").trim()
+}
+
+/// Distinct link targets (text before `|`, trimmed) matching `keep`.
+fn distinct_targets(content: &str, keep: impl Fn(&str) -> bool) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    let mut rest = content;
-    while let Some(start) = rest.find("@@") {
-        let after = &rest[start + 2..];
-        let Some(end) = after.find("@@") else { break };
-        let inner = &after[..end];
-        if !inner.contains('\n') {
-            let target = inner.split('|').next().unwrap_or("").trim();
-            if !target.is_empty() && seen.insert(target.to_lowercase()) {
-                out.push(target.to_string());
-            }
+    for span in wiki_spans(content) {
+        let target = inner_target(span.inner);
+        if !target.is_empty() && keep(target) && seen.insert(target.to_lowercase()) {
+            out.push(target.to_string());
         }
-        rest = &after[end + 2..];
     }
     out
+}
+
+/// Note targets in the body, deduplicated; entity mentions are excluded.
+pub(crate) fn extract_targets(content: &str) -> Vec<String> {
+    distinct_targets(content, |t| !is_entity_binding(t))
+}
+
+/// Entity mentions in the body, e.g. `ssh:{id}`, deduplicated.
+pub(crate) fn extract_mentions(content: &str) -> Vec<String> {
+    distinct_targets(content, is_entity_binding)
 }
 
 /// Resolve a target to a live note id: exact id first, then case-insensitive title.
@@ -49,8 +103,21 @@ pub(crate) async fn resolve_target(target: &str, db: &Db) -> Option<String> {
     .flatten()
 }
 
-/// Replace outgoing links of a note with those found in `content`.
+/// Replace outgoing links and entity mentions of a note with those found in `content`.
 pub(crate) async fn reindex_links(note_id: &str, content: &str, db: &Db) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM note_mentions WHERE note_id = ?")
+        .bind(note_id)
+        .execute(db)
+        .await
+        .map_err(AppError::db)?;
+    for binding in extract_mentions(content) {
+        sqlx::query("INSERT OR IGNORE INTO note_mentions (note_id, binding) VALUES (?, ?)")
+            .bind(note_id)
+            .bind(&binding)
+            .execute(db)
+            .await
+            .map_err(AppError::db)?;
+    }
     sqlx::query("DELETE FROM note_links WHERE from_id = ?")
         .bind(note_id)
         .execute(db)
@@ -73,34 +140,26 @@ pub(crate) async fn reindex_links(note_id: &str, content: &str, db: &Db) -> Resu
     Ok(())
 }
 
-/// Rewrite `@@old@@` -> `@@new@@` (any case, with or without alias) in one body.
+/// Rewrite `[[old]]` -> `[[new]]` (any case, with or without alias, both syntaxes) in one body.
 pub(crate) fn rewrite_title_links(body: &str, old_title: &str, new_title: &str) -> String {
     let mut out = String::with_capacity(body.len());
-    let mut rest = body;
-    while let Some(start) = rest.find("@@") {
-        out.push_str(&rest[..start + 2]);
-        let after = &rest[start + 2..];
-        let Some(end) = after.find("@@") else {
-            out.push_str(after);
-            return out;
+    let mut last = 0;
+    for span in wiki_spans(body) {
+        let (target, alias) = match span.inner.find('|') {
+            Some(p) => (&span.inner[..p], Some(&span.inner[p..])),
+            None => (span.inner, None),
         };
-        let inner = &after[..end];
-        let (target, alias) = match inner.find('|') {
-            Some(p) => (&inner[..p], Some(&inner[p..])),
-            None => (inner, None),
-        };
-        if target.trim().eq_ignore_ascii_case(old_title.trim()) {
-            out.push_str(new_title);
-            if let Some(a) = alias {
-                out.push_str(a);
-            }
-        } else {
-            out.push_str(inner);
+        if !target.trim().eq_ignore_ascii_case(old_title.trim()) {
+            continue;
         }
-        out.push_str("@@");
-        rest = &after[end + 2..];
+        out.push_str(&body[last..span.inner_start]);
+        out.push_str(new_title);
+        if let Some(a) = alias {
+            out.push_str(a);
+        }
+        last = span.inner_start + span.inner.len();
     }
-    out.push_str(rest);
+    out.push_str(&body[last..]);
     out
 }
 
@@ -181,9 +240,35 @@ pub struct NoteLinks {
     pub outgoing: Vec<NoteListItem>,
     /// Notes linking to this note.
     pub backlinks: Vec<NoteListItem>,
+    /// Link targets in the body that match no live note.
+    pub unresolved: Vec<String>,
 }
 
-/// Outgoing links and backlinks in one call.
+/// Targets in the note body that do not resolve to an existing note.
+async fn unresolved_targets(id: &str, state: &AppState) -> Result<Vec<String>, AppError> {
+    let Some(file_path) =
+        sqlx::query_scalar::<_, String>("SELECT file_path FROM notes WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(AppError::db)?
+    else {
+        return Ok(vec![]);
+    };
+    let Ok((_, _, body)) = read_note_file(&resolve_note_abs_path(&state.app_data_dir, &file_path))
+    else {
+        return Ok(vec![]);
+    };
+    let mut out = Vec::new();
+    for target in extract_targets(&body) {
+        if resolve_target(&target, &state.db).await.is_none() {
+            out.push(target);
+        }
+    }
+    Ok(out)
+}
+
+/// Outgoing links, backlinks and unresolved targets in one call.
 #[tauri::command]
 pub async fn note_links(id: String, state: tauri::State<'_, AppState>) -> CmdResult<NoteLinks> {
     let outgoing = sqlx::query_as::<_, NoteRow>(
@@ -205,10 +290,11 @@ pub async fn note_links(id: String, state: tauri::State<'_, AppState>) -> CmdRes
     Ok(NoteLinks {
         outgoing: rows_to_items(outgoing, &state).await?,
         backlinks: rows_to_items(backlinks, &state).await?,
+        unresolved: unresolved_targets(&id, &state).await?,
     })
 }
 
-/// Id of the note a `@@target@@` points to, if it exists.
+/// Id of the note a `[[target]]` points to, if it exists.
 #[tauri::command]
 pub async fn note_resolve_link(
     target: String,
@@ -251,8 +337,8 @@ pub async fn note_related(
     };
     let bindings: Vec<String> = serde_json::from_str(&bindings_json).unwrap_or_default();
     let mut ordered: Vec<&String> = Vec::new();
-    for prefix in ["url:", "domain:", "profile:", "workspace:"] {
-        ordered.extend(bindings.iter().filter(|b| b.starts_with(prefix)));
+    for kind in BindingKind::ALL {
+        ordered.extend(bindings.iter().filter(|b| b.starts_with(kind.prefix())));
     }
     if ordered.is_empty() {
         return Ok(vec![]);
@@ -282,9 +368,37 @@ pub async fn note_related(
     rows_to_items(rows, &state).await
 }
 
+/// Live notes bound to or mentioning an entity binding, e.g. `ssh:{id}`.
+#[tauri::command]
+pub async fn note_entity_notes(
+    binding: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<NoteListItem>> {
+    let pattern = format!("%{}%", serde_json::to_string(&binding).unwrap_or_default());
+    let rows = sqlx::query_as::<_, NoteRow>(
+        "SELECT n.* FROM notes n
+         WHERE n.deleted = 0
+           AND (n.bindings LIKE ? OR n.id IN (SELECT note_id FROM note_mentions WHERE binding = ?))
+         ORDER BY n.pinned DESC, n.updated_at DESC LIMIT 50",
+    )
+    .bind(pattern)
+    .bind(&binding)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::db)?;
+    rows_to_items(rows, &state).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splits_note_targets_and_entity_mentions() {
+        let body = "[[Alpha]] [[ssh:abc|Prod]] [[proxy:1]] [[domain:x.com]] [[ssh:]]";
+        assert_eq!(extract_targets(body), vec!["Alpha", "domain:x.com", "ssh:"]);
+        assert_eq!(extract_mentions(body), vec!["ssh:abc", "proxy:1"]);
+    }
 
     #[test]
     fn extracts_targets_without_alias_and_dedups() {
@@ -293,11 +407,26 @@ mod tests {
     }
 
     #[test]
+    fn extracts_both_syntaxes() {
+        let t = extract_targets("[[Alpha]] and @@Beta@@ and [[alpha|x]] and [[ Gamma ]] [[");
+        assert_eq!(t, vec!["Alpha", "Beta", "Gamma"]);
+    }
+
+    #[test]
     fn rewrites_only_matching_links() {
         let body = "@@Old@@ @@old|alias@@ @@Other@@ @@";
         assert_eq!(
             rewrite_title_links(body, "Old", "New"),
             "@@New@@ @@New|alias@@ @@Other@@ @@"
+        );
+    }
+
+    #[test]
+    fn rewrites_standard_links_and_keeps_delimiters() {
+        let body = "[[Old]] x [[old|alias]] @@Old@@ [[Other]]";
+        assert_eq!(
+            rewrite_title_links(body, "Old", "New"),
+            "[[New]] x [[New|alias]] @@New@@ [[Other]]"
         );
     }
 }

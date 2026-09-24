@@ -7,6 +7,7 @@ import { Node, mergeAttributes, nodeInputRule, type Extensions, type JSONContent
 import { StarterKit } from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import { markdownDestination } from '$lib/markdown';
+import { isEntityBinding } from '$lib/bindings';
 import { HardBreak } from '@tiptap/extension-hard-break';
 import { Paragraph } from '@tiptap/extension-paragraph';
 import { Image, type ImageOptions } from '@tiptap/extension-image';
@@ -14,27 +15,83 @@ import { TaskList } from '@tiptap/extension-task-list';
 import { TaskItem } from '@tiptap/extension-task-item';
 import { TableKit } from '@tiptap/extension-table';
 
-export const WIKI_MARK = '@@';
+/** Standard wiki link delimiters; new links are always written this way. */
+export const WIKI_OPEN = '[[';
+export const WIKI_CLOSE = ']]';
+/** Legacy delimiter (open and close), still parsed. */
+export const WIKI_LEGACY = '@@';
 
-/** `@@Target@@` / `@@Target|alias@@` at the start of a string. */
-export const WIKI_RE = /^@@([^|\n]+?)(?:\|([^|\n]+?))?@@/;
+/** `[[Target]]` / `[[Target|alias]]` or legacy `@@Target@@` at the start of a string. */
+export const WIKI_RE = /^(?:\[\[([^|\]\n]+?)(?:\|([^|\]\n]+?))?\]\]|@@([^|\n]+?)(?:\|([^|\n]+?))?@@)/;
 
-const wikiAttrs = (m: RegExpMatchArray) => ({ target: m[1].trim(), label: m[2]?.trim() ?? null });
+/** Same as `WIKI_RE` but anchored at the end, for the input rule. */
+const WIKI_END_RE = /(?:\[\[([^|\]\n]+?)(?:\|([^|\]\n]+?))?\]\]|@@([^|\n]+?)(?:\|([^|\n]+?))?@@)$/;
 
-/** Index of an unclosed `@@` before the caret, or -1. */
-export function unclosedWikiAt(before: string): number {
-  const open = before.lastIndexOf(WIKI_MARK);
-  if (open < 0) return -1;
-  if (before.indexOf(WIKI_MARK, open + WIKI_MARK.length) >= 0) return -1;
-  if (before.includes('\n', open)) return -1;
-  return open;
+/** Node attrs from a `WIKI_RE` / `WIKI_END_RE` match; `legacy` keeps the `@@` form on save. */
+const wikiAttrs = (m: RegExpMatchArray) => {
+  const legacy = m[1] == null;
+  const target = (legacy ? m[3] : m[1]).trim();
+  const label = (legacy ? m[4] : m[2])?.trim() ?? null;
+  return { target, label, legacy };
+};
+
+/** Template placeholder delimiters `{{name}}`. */
+export const TPL_OPEN = '{{';
+export const TPL_CLOSE = '}}';
+
+/** Index of an unclosed `open` (no `close` after it, same line) before the caret, or -1. */
+export function unclosedMarkAt(before: string, open: string, close: string): number {
+  const at = before.lastIndexOf(open);
+  if (at < 0) return -1;
+  if (before.indexOf(close, at + open.length) >= 0) return -1;
+  if (before.includes('\n', at)) return -1;
+  return at;
 }
 
-export function wikiMarkup(target: string, label?: string | null): string {
-  return label && label !== target ? `${WIKI_MARK}${target}|${label}${WIKI_MARK}` : `${WIKI_MARK}${target}${WIKI_MARK}`;
+/** Position and delimiter of an unclosed wiki link opener before the caret, or null. */
+export function unclosedWikiAt(before: string): { start: number; mark: string } | null {
+  const candidates = [
+    { mark: WIKI_OPEN, close: WIKI_CLOSE },
+    { mark: WIKI_LEGACY, close: WIKI_LEGACY },
+  ];
+  let best: { start: number; mark: string } | null = null;
+  for (const c of candidates) {
+    const open = unclosedMarkAt(before, c.mark, c.close);
+    if (open < 0) continue;
+    if (!best || open > best.start) best = { start: open, mark: c.mark };
+  }
+  return best;
 }
 
-/** Inline atom for wiki links; round-trips as `@@...@@` in Markdown. */
+/** Distinct link targets (text before `|`) in a Markdown body, both syntaxes. */
+export function extractWikiTargets(text: string): string[] {
+  const re = /\[\[([^|\]\n]+?)(?:\|[^\]\n]*?)?\]\]|@@([^|\n]+?)(?:\|[^\n]*?)?@@/g;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(re)) {
+    const target = (m[1] ?? m[2] ?? '').trim();
+    const key = target.toLowerCase();
+    if (target && !seen.has(key)) {
+      seen.add(key);
+      out.push(target);
+    }
+  }
+  return out;
+}
+
+/** Closing delimiter for an opening one. */
+export function wikiCloseOf(mark: string): string {
+  return mark === WIKI_LEGACY ? WIKI_LEGACY : WIKI_CLOSE;
+}
+
+export function wikiMarkup(target: string, label?: string | null, legacy = false): string {
+  const open = legacy ? WIKI_LEGACY : WIKI_OPEN;
+  const close = legacy ? WIKI_LEGACY : WIKI_CLOSE;
+  const inner = label && label !== target ? `${target}|${label}` : target;
+  return `${open}${inner}${close}`;
+}
+
+/** Inline atom for wiki links; round-trips as `[[...]]` (or the original `@@...@@`) in Markdown. */
 export const WikiLink = Node.create({
   name: 'wikiLink',
   group: 'inline',
@@ -53,6 +110,11 @@ export const WikiLink = Node.create({
         parseHTML: (el) => el.textContent,
         renderHTML: () => ({}),
       },
+      legacy: {
+        default: false,
+        parseHTML: (el) => el.hasAttribute('data-legacy'),
+        renderHTML: (attrs) => (attrs.legacy ? { 'data-legacy': '' } : {}),
+      },
     };
   },
 
@@ -61,35 +123,44 @@ export const WikiLink = Node.create({
   },
 
   renderHTML({ node, HTMLAttributes }) {
-    return ['a', mergeAttributes(HTMLAttributes, { class: 'wiki' }), node.attrs.label ?? node.attrs.target];
+    // `kind:id` targets are Veydan entity mentions; styled as chips by the editor
+    const entity = isEntityBinding(String(node.attrs.target ?? ''));
+    return ['a', mergeAttributes(HTMLAttributes, { class: entity ? 'wiki wiki-entity' : 'wiki' }), node.attrs.label ?? node.attrs.target];
   },
 
   renderText({ node }) {
-    return wikiMarkup(node.attrs.target);
+    return wikiMarkup(node.attrs.target, null, node.attrs.legacy);
   },
 
   markdownTokenizer: {
     name: 'wikiLink',
     level: 'inline',
-    start: (src) => src.indexOf(WIKI_MARK),
+    start: (src) => {
+      const a = src.indexOf(WIKI_OPEN);
+      const b = src.indexOf(WIKI_LEGACY);
+      if (a < 0) return b;
+      if (b < 0) return a;
+      return Math.min(a, b);
+    },
     tokenize(src) {
       const m = WIKI_RE.exec(src);
       if (m) return { type: 'wikiLink', raw: m[0], ...wikiAttrs(m) };
     },
   },
 
-  parseMarkdown: (token, h) => h.createNode('wikiLink', { target: token.target, label: token.label }),
+  parseMarkdown: (token, h) =>
+    h.createNode('wikiLink', { target: token.target, label: token.label, legacy: token.legacy }),
 
   renderMarkdown: (node: JSONContent) => {
-    const { target, label } = node.attrs ?? {};
-    return wikiMarkup(String(target ?? ''), label == null ? null : String(label));
+    const { target, label, legacy } = node.attrs ?? {};
+    return wikiMarkup(String(target ?? ''), label == null ? null : String(label), !!legacy);
   },
 
-  // Typing the closing `@@` after `@@Title` converts the text into a wiki link node
+  // Typing the closing `]]` after `[[Title` converts the text into a wiki link node
   addInputRules() {
     return [
       nodeInputRule({
-        find: /@@([^|\n]+?)(?:\|([^|\n]+?))?@@$/,
+        find: WIKI_END_RE,
         type: this.type,
         getAttributes: wikiAttrs,
       }),

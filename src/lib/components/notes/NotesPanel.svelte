@@ -10,7 +10,8 @@
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { api } from '$lib/api';
   import type { NoteCreateInput } from '$lib/types';
-  import { toNoteFilter, templateNotes, type ActiveFilter } from '$lib/notes-filter';
+  import { contextBindings, toNoteFilter, templateNotes, type ActiveFilter } from '$lib/notes-filter';
+  import { binding, type EntityKind } from '$lib/bindings';
   import TemplateSelect from './TemplateSelect.svelte';
   import NoteLockGate from './NoteLockGate.svelte';
   import Icon from '$lib/Icon.svelte';
@@ -20,11 +21,15 @@
   import NoteFilters from './NoteFilters.svelte';
   import NoteTransferDialog, { type TransferMode } from './NoteTransferDialog.svelte';
   import NoteSyncButton from './NoteSyncButton.svelte';
+  import TotpNoteCodes from '$lib/components/TotpNoteCodes.svelte';
+  import { totpStore } from '$lib/store/totp.svelte';
+  import { totpMatchesFilter } from '$lib/totp-tags';
   import { t } from '$lib/i18n';
 
   interface Props {
     open?: boolean;
-    context?: 'global' | 'workspace' | 'profile';
+    /** Entity kind the panel is opened for; its binding becomes the initial filter */
+    context?: 'global' | EntityKind;
     contextId?: string;
     workspaceId?: string;
     openNoteId?: string | null;
@@ -40,6 +45,11 @@
   const hasTemplates = $derived(templateNotes(notesStore.list, notesStore.folders).length > 0);
   let activeFilter = $state<ActiveFilter>({ type: 'all' });
   let sidebarVisible = $state(true);
+
+  // TOTP codes tagged with the open profile / workspace, same as the full notes page
+  const matchedTotp = $derived(
+    totpStore.list.filter((entry) => totpMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
+  );
 
   // Resizable columns
   function loadColWidths(): { sidebar: number; list: number } {
@@ -131,12 +141,10 @@
   $effect(() => {
     if (open) {
       panelWidth = loadPanelWidth();
-      untrack(() => notesStore.ensureLoaded());
+      untrack(() => { void notesStore.ensureLoaded(); void totpStore.ensureLoaded(); });
       // Pre-set filter based on context
       const initial: ActiveFilter =
-        context === 'workspace' && contextId ? { type: 'workspace', id: contextId }
-        : context === 'profile' && contextId ? { type: 'profile', id: contextId }
-        : { type: 'all' };
+        context !== 'global' && contextId ? { type: context, id: contextId } : { type: 'all' };
       untrack(() => void handleFilterChange(initial));
       // Open specific note if requested
       if (openNoteId && untrack(() => notesStore.activeNoteId) !== openNoteId) {
@@ -207,17 +215,14 @@
     // Build bindings from active filter first, fallback to context prop
     const bindings: string[] = [];
 
-    if (activeFilter.type === 'workspace' && activeFilter.id) {
-      bindings.push(`workspace:${activeFilter.id}`);
-    } else if (activeFilter.type === 'profile' && activeFilter.id) {
-      bindings.push(`profile:${activeFilter.id}`);
-      if (workspaceId) bindings.push(`workspace:${workspaceId}`);
-    } else if (context === 'workspace' && contextId) {
-      bindings.push(`workspace:${contextId}`);
-    } else if (context === 'profile' && contextId) {
-      bindings.push(`profile:${contextId}`);
-      if (workspaceId) bindings.push(`workspace:${workspaceId}`);
+    const fromFilter = contextBindings(activeFilter);
+    if (fromFilter.length) {
+      bindings.push(...fromFilter);
+    } else if (context !== 'global' && contextId) {
+      bindings.push(binding(context, contextId));
     }
+    // A profile-scoped note also belongs to the profile's workspace
+    if (workspaceId && bindings.some((b) => b.startsWith('profile:'))) bindings.push(binding('workspace', workspaceId));
     // 'global', 'all', 'pinned', 'archived' → no bindings (global note)
 
     const input: NoteCreateInput = {
@@ -404,6 +409,9 @@
             </div>
           </div>
           <div class="list-scroll">
+            {#if matchedTotp.length}
+              <TotpNoteCodes entries={matchedTotp} />
+            {/if}
             <NotesList
               notes={displayList}
               activeId={notesStore.activeNoteId}

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 import type { NoteFilter, NoteFolder, NoteListItem, NoteSmartView } from '$lib/types';
+import { binding, isEntityKind } from '$lib/bindings';
 
 export const TEMPLATES_FOLDER = 'Templates';
 
@@ -20,10 +21,10 @@ export interface ActiveFilter {
 
 /** Map a sidebar selection to the backend filter */
 export function toNoteFilter(f: ActiveFilter, smartViews: NoteSmartView[] = []): NoteFilter {
+  // Entity kinds (workspace, profile, proxy, ssh, totp) filter by their binding
+  if (isEntityKind(f.type) && f.id) return { archived: false, binding: binding(f.type, f.id) };
   switch (f.type) {
     case 'global':    return { archived: false, global_only: true };
-    case 'workspace': return { archived: false, binding: `workspace:${f.id}` };
-    case 'profile':   return { archived: false, binding: `profile:${f.id}` };
     case 'domain':    return { archived: false, binding: `domain:${f.id}` };
     case 'tag':       return { archived: false, tag_name: f.id };
     case 'tag-group': return { archived: false, tag_prefix: f.id };
@@ -41,5 +42,5 @@ export function toNoteFilter(f: ActiveFilter, smartViews: NoteSmartView[] = []):
 
 /** Bindings a new note inherits from the current selection */
 export function contextBindings(f: ActiveFilter): string[] {
-  return f.type === 'workspace' || f.type === 'profile' ? [`${f.type}:${f.id}`] : [];
+  return isEntityKind(f.type) && f.id ? [binding(f.type, f.id)] : [];
 }

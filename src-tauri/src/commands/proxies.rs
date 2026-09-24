@@ -29,6 +29,35 @@ pub async fn proxy_get(id: String, state: tauri::State<'_, AppState>) -> CmdResu
         .map_err(AppError::db)
 }
 
+#[derive(sqlx::FromRow)]
+struct ProxyCredentials {
+    proxy_type: String,
+    host: String,
+    port: i64,
+    username: Option<String>,
+    password: Option<String>,
+}
+
+/// Full connection string `type://user:pass@host:port` for the clipboard.
+/// The only path that hands the password to the UI, on explicit user action.
+#[tauri::command]
+pub async fn proxy_export_url(id: String, state: tauri::State<'_, AppState>) -> CmdResult<String> {
+    let p = sqlx::query_as::<_, ProxyCredentials>(
+        "SELECT proxy_type, host, port, username, password FROM proxies WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(AppError::db)?
+    .ok_or_else(|| AppError::not_found(format!("Proxy {id}")))?;
+    let auth = match (p.username.filter(|u| !u.is_empty()), p.password.filter(|s| !s.is_empty())) {
+        (Some(u), Some(pw)) => format!("{u}:{pw}@"),
+        (Some(u), None) => format!("{u}@"),
+        _ => String::new(),
+    };
+    Ok(format!("{}://{auth}{}:{}", p.proxy_type, p.host, p.port))
+}
+
 #[tauri::command]
 pub async fn proxy_create(
     req: CreateProxyRequest,

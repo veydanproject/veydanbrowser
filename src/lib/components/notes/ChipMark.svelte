@@ -12,6 +12,9 @@
     folder: 'f',
     workspace: 'w',
     profile: 'p',
+    proxy: 'x',
+    ssh: '>',
+    totp: 'k',
     domain: 's',
     tag: 't',
   };

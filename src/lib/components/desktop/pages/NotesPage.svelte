@@ -2,7 +2,7 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { notesStore } from '$lib/store/notes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
@@ -17,6 +17,11 @@
   import { notesLock } from '$lib/store/notes-lock.svelte';
   import Icon from '$lib/Icon.svelte';
   import NotesList from '$lib/components/notes/NotesList.svelte';
+  import NotesTable from '$lib/components/notes/NotesTable.svelte';
+  import { paletteStore } from '$lib/store/palette.svelte';
+  import CustomSelect from '$lib/components/CustomSelect.svelte';
+  import { noteContextEntities } from '$lib/notes-context';
+  import { loadSort, saveSort, sortNotes, SORT_KEYS, type NoteSort, type SortKey } from '$lib/notes-sort';
   import ListBulkActions from '$lib/components/notes/ListBulkActions.svelte';
   import NoteEditor from '$lib/components/notes/NoteEditor.svelte';
   import NoteFilters from '$lib/components/notes/NoteFilters.svelte';
@@ -34,6 +39,14 @@
   const hasTemplates = $derived(templateNotes(notesStore.list, notesStore.folders).length > 0);
   let activeFilter = $state<ActiveFilter>({ type: 'all' });
   let sidebarVisible = $state(true);
+
+  // List or table view of the middle column
+  const VIEW_KEY = 'notes-view-mode';
+  let viewMode = $state<'list' | 'table'>(localStorage.getItem(VIEW_KEY) === 'table' ? 'table' : 'list');
+  function setViewMode(m: 'list' | 'table') {
+    viewMode = m;
+    try { localStorage.setItem(VIEW_KEY, m); } catch {}
+  }
 
   // Resizable columns
   function loadColWidths(): { sidebar: number; list: number } {
@@ -96,18 +109,26 @@
     totpStore.list.filter((entry) => totpMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
   );
 
+  // Ordering shared by list and table views; FTS results keep their relevance order
+  let sort = $state<NoteSort>(loadSort());
+  const isFtsSearch = $derived(searchQuery.trim().length >= 2 && !isTrash);
+  function setSort(next: NoteSort) {
+    sort = next;
+    saveSort(next);
+  }
   // Filtering happens on the backend (notesStore.view); only the 1-char
   // search (too short for FTS) and trash search are applied locally.
   const displayList = $derived.by(() => {
     const q = searchQuery.trim().toLowerCase();
     const list = notesStore.view;
-    if (!q || (q.length >= 2 && !isTrash)) return list;
-    return list.filter(
+    if (isFtsSearch) return list;
+    const filtered = !q ? list : list.filter(
       (n) =>
         n.title.toLowerCase().includes(q) ||
         n.tags.some((tg: { name: string }) => tg.name.toLowerCase().includes(q)) ||
         n.folder_ids.some(fid => notesStore.folders.find(f => f.id === fid)?.name.toLowerCase().includes(q))
     );
+    return sortNotes(filtered, sort);
   });
 
   async function handleSearch() {
@@ -132,6 +153,20 @@
     if (!id) return;
     notesStore.openRequestId = null;
     void handleFilterChange({ type: 'all' }).then(() => notesStore.openNote(id));
+  });
+
+  // Requests from the command palette; `insertLink` is consumed by the editor
+  let searchInputEl: HTMLInputElement | null = $state(null);
+  $effect(() => {
+    const req = notesStore.uiRequest;
+    if (!req || req.kind === 'insertLink') return;
+    notesStore.uiRequest = null;
+    if (req.kind === 'create') showCreate = true;
+    else if (req.kind === 'filter') void handleFilterChange(req.filter);
+    else if (req.kind === 'search') {
+      sidebarVisible = true;
+      void tick().then(() => searchInputEl?.focus());
+    }
   });
 
   $effect(() => {
@@ -246,6 +281,7 @@
           <Icon name="search" size={15} />
           <input
             type="text"
+            bind:this={searchInputEl}
             bind:value={searchQuery}
             oninput={onSearchInput}
             placeholder={$t('notes_search_placeholder')}
@@ -314,12 +350,41 @@
               : $t('panel_notes_count_many', { n: String(displayList.length) })}
           </p>
         </div>
+        <!-- Looks like an input; the palette's own field takes focus once open -->
+        <button class="palette-field" onclick={() => paletteStore.show()} title={$t('cmd_title')}>
+          <Icon name="zap" size={13} />
+          <span class="palette-placeholder">{$t('cmd_placeholder')}</span>
+          <kbd>Ctrl+P</kbd>
+        </button>
         <div class="list-actions">
           {#if !sidebarVisible}
             <button class="icon-btn" onclick={() => { sidebarVisible = true; }} title={$t('notes_btn_toggle_sidebar')}>
               <Icon name="sidebar" size={14} />
             </button>
           {/if}
+          <div class="sort-ctl" title={$t('notes_sort')}>
+            <div class="sort-select">
+              <CustomSelect
+                options={SORT_KEYS.map((key) => ({ value: key, label: $t(`notes_sort_${key}`) }))}
+                value={sort.key}
+                onchange={(v) => setSort({ ...sort, key: (v ?? 'updated_at') as SortKey })}
+              />
+            </div>
+            <button
+              class="icon-btn"
+              onclick={() => setSort({ ...sort, asc: !sort.asc })}
+              title={sort.asc ? $t('notes_sort_asc') : $t('notes_sort_desc')}
+            >
+              <Icon name={sort.asc ? 'arrow-up' : 'arrow-down'} size={14} />
+            </button>
+          </div>
+          <button
+            class="icon-btn"
+            onclick={() => setViewMode(viewMode === 'list' ? 'table' : 'list')}
+            title={viewMode === 'list' ? $t('notes_view_table') : $t('notes_view_list')}
+          >
+            <Icon name={viewMode === 'list' ? 'table' : 'list'} size={14} />
+          </button>
           {#if isTrash}
             <ListBulkActions {isTrash} notes={displayList} />
           {:else}
@@ -333,7 +398,18 @@
         {#if matchedTotp.length}
           <TotpNoteCodes entries={matchedTotp} />
         {/if}
-        {#if displayList.length > 0 || matchedTotp.length === 0}
+        {#if viewMode === 'table'}
+          <NotesTable
+            notes={displayList}
+            allNotes={notesStore.list}
+            folders={notesStore.folders}
+            {sort}
+            onsort={setSort}
+            contextOf={noteContextEntities}
+            activeId={notesStore.activeNoteId}
+            onselect={handleSelectNote}
+          />
+        {:else if displayList.length > 0 || matchedTotp.length === 0}
         <NotesList
           notes={displayList}
           activeId={notesStore.activeNoteId}
@@ -493,9 +569,10 @@
   .list-header {
     padding: var(--sp-5) var(--sp-4) var(--sp-3);
     display: flex;
-    align-items: flex-start;
+    /* Field and buttons sit on one line, vertically centred against the two-line title */
+    align-items: center;
     justify-content: space-between;
-    gap: var(--sp-2);
+    gap: var(--sp-3);
     flex-shrink: 0;
   }
 
@@ -509,7 +586,39 @@
   .list-sub { font-size: 0.78rem; color: var(--text-faint); }
 
   .list-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-  .list-actions .icon-btn { width: 32px; height: 32px; }
+  .sort-ctl { display: flex; align-items: center; }
+  .sort-ctl .icon-btn { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; border-left: 0; }
+  /* Compact CustomSelect matching the 36px header controls */
+  .sort-select { width: 120px; }
+  .sort-select :global(.trigger) {
+    min-height: 36px; height: 36px; padding: 0 0.6rem;
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+    background: var(--bg-2); color: var(--text-2); font-size: var(--fs-xs);
+  }
+  .sort-select :global(.trigger:focus), .sort-select :global(.trigger.open) { box-shadow: none; }
+  .palette-field {
+    flex: 1;
+    min-width: 90px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-2);
+    color: var(--text-3);
+    font-size: var(--fs-sm);
+    text-align: left;
+    cursor: text;
+  }
+  .palette-field:hover { border-color: var(--border-2); color: var(--text-2); }
+  .palette-placeholder { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .palette-field kbd {
+    font-size: var(--fs-2xs); color: var(--text-3);
+    border: 1px solid var(--border); border-radius: 4px; padding: 0 0.3rem; flex-shrink: 0;
+  }
+  .list-actions .icon-btn { width: 36px; height: 36px; }
 
   .sidebar-footer {
     display: flex;

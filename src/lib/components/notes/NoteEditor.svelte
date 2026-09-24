@@ -4,8 +4,6 @@
 <script lang="ts">
   import { notesStore } from '$lib/store/notes.svelte';
   import { syncStore } from '$lib/store/sync.svelte';
-  import { workspacesStore } from '$lib/store/workspaces.svelte';
-  import { profilesStore } from '$lib/store/profiles.svelte';
   import { api, DEFAULT_ATTACHMENT_POLICY, type AttachmentTransfer } from '$lib/api';
   import { onAttachmentTransfer, pickNativeFiles } from '$lib/attachmentTransfer';
   import type { NoteTag, NoteFolder, Note, NoteAttachment } from '$lib/types';
@@ -18,6 +16,9 @@
   import NoteFindBar from './NoteFindBar.svelte';
   import NoteAttachments from './NoteAttachments.svelte';
   import NoteLinks from './NoteLinks.svelte';
+  import NoteContext from './NoteContext.svelte';
+  import { isEntityBinding, isEntityKind, parseBinding } from '$lib/bindings';
+  import { ensureEntitiesLoaded, entitySummary, resolvePlaceholder } from '$lib/notes-context';
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import CaptureScreen from '$lib/components/media/CaptureScreen.svelte';
   import MediaPrefsBar from '$lib/components/media/MediaPrefsBar.svelte';
@@ -25,7 +26,10 @@
   import { mediaT } from '$lib/media/strings';
   import type { CaptureFile, MediaKind, MediaPrefs } from '$lib/media/types';
   import WikiLinkPicker from './WikiLinkPicker.svelte';
-  import { WIKI_MARK, unclosedWikiAt, wikiMarkup } from '$lib/tiptap-ext';
+  import { extractWikiTargets, unclosedMarkAt, unclosedWikiAt, wikiCloseOf, wikiMarkup, TPL_CLOSE, TPL_OPEN, WIKI_OPEN } from '$lib/tiptap-ext';
+  import { placeholderMarkup } from '$lib/notes-templates';
+  import { templateNotes } from '$lib/notes-filter';
+  import PlaceholderPicker from './PlaceholderPicker.svelte';
   import { applyAction, shiftIndent, continueList, type EditAction, type EditResult } from '$lib/markdown-edit';
   import { attachmentHref, markdownDestination, wordCount } from '$lib/markdown';
   import { pasteHasHiddenFiles } from '$lib/notes-files';
@@ -129,10 +133,10 @@
   function onRichHotkey(e: KeyboardEvent): boolean {
     const mod = e.ctrlKey || e.metaKey;
     if (!mod || e.shiftKey || e.altKey) return false;
-    const key = e.key.toLowerCase();
-    if (key === 'k') { runAction('link'); return true; }
-    if (key === 'f') { openFind(); return true; }
-    if (key === 's') { void notesStore.save(); return true; }
+    // `code` is layout-independent: works the same on Latin and Cyrillic layouts
+    if (e.code === 'KeyK') { runAction('link'); return true; }
+    if (e.code === 'KeyF') { openFind(); return true; }
+    if (e.code === 'KeyS') { void notesStore.save(); return true; }
     return false;
   }
 
@@ -145,12 +149,15 @@
       if (e.key === 'Escape') { wikiOpen = false; return; }
       if (wikiPicker?.handleKeydown(e)) return;
     }
+    if (tplOpen) {
+      if (e.key === 'Escape') { tplOpen = false; return; }
+      if (tplPicker?.handleKeydown(e)) return;
+    }
     if (mod && !e.shiftKey && !e.altKey) {
-      const key = e.key.toLowerCase();
-      const hotkeys: Record<string, EditAction> = { b: 'bold', i: 'italic', k: 'link' };
-      if (hotkeys[key]) { e.preventDefault(); runAction(hotkeys[key]); return; }
-      if (key === 'f') { e.preventDefault(); openFind(); return; }
-      if (key === 's') { e.preventDefault(); void notesStore.save(); return; }
+      const hotkeys: Record<string, EditAction> = { KeyB: 'bold', KeyI: 'italic', KeyK: 'link' };
+      if (hotkeys[e.code]) { e.preventDefault(); runAction(hotkeys[e.code]); return; }
+      if (e.code === 'KeyF') { e.preventDefault(); openFind(); return; }
+      if (e.code === 'KeyS') { e.preventDefault(); void notesStore.save(); return; }
     }
     if (readonly) return;
     // Shift+Tab may arrive with a different `key` on WebKitGTK; `code` is stable
@@ -165,44 +172,120 @@
     }
   }
 
-  // ── Wiki links: `@@` autocomplete in source mode, navigation, backlinks panel ─
+  // ── Wiki links: `[[` autocomplete in source mode, navigation, backlinks panel ─
   let wikiOpen = $state(false);
   let wikiQuery = $state('');
   let wikiIndex = $state(0);
   let wikiStart = 0;
+  let wikiMark = '';
   let wikiPicker: WikiLinkPicker | null = $state(null);
   let linksOpen = $state(false);
   let linksVersion = $state(0);
 
-  /** Track an unclosed `@@` immediately before the caret. */
+  /** Track an unclosed `[[` (or legacy `@@`) immediately before the caret. */
   function updateWikiState() {
     const pos = textareaEl?.selectionStart ?? contentValue.length;
     const before = contentValue.slice(0, pos);
     const open = unclosedWikiAt(before);
-    if (open < 0) {
+    if (!open) {
       wikiOpen = false;
       return;
     }
-    wikiStart = open;
-    wikiQuery = before.slice(open + WIKI_MARK.length);
+    wikiStart = open.start;
+    wikiMark = open.mark;
+    wikiQuery = before.slice(open.start + open.mark.length);
     wikiIndex = 0;
     wikiOpen = true;
   }
 
-  /** Replace the partial `@@query` with a completed link. */
-  function pickWikiLink(title: string) {
+  // ── Template placeholders: `{{` autocomplete in source mode ─────────────────
+  let tplOpen = $state(false);
+  let tplQuery = $state('');
+  let tplIndex = $state(0);
+  let tplStart = 0;
+  let tplPicker: PlaceholderPicker | null = $state(null);
+
+  /** Track an unclosed `{{` immediately before the caret. */
+  function updateTplState() {
     const pos = textareaEl?.selectionStart ?? contentValue.length;
-    const link = wikiMarkup(title);
+    const before = contentValue.slice(0, pos);
+    const open = unclosedMarkAt(before, TPL_OPEN, TPL_CLOSE);
+    if (open < 0) { tplOpen = false; return; }
+    tplStart = open;
+    tplQuery = before.slice(open + TPL_OPEN.length);
+    tplIndex = 0;
+    tplOpen = true;
+  }
+
+  /** Notes in the Templates folder keep `{{name}}`; everywhere else the value is expanded at once. */
+  const isTemplateNote = $derived(!!note && templateNotes(notesStore.list, folders).some((n) => n.id === note.id));
+  const previewPlaceholder = (name: string) => resolvePlaceholder(name, titleValue, note?.bindings ?? []);
+  function placeholderText(name: string): string {
+    if (isTemplateNote) return placeholderMarkup(name);
+    return previewPlaceholder(name) || placeholderMarkup(name);
+  }
+
+  /** Replace the partial `{{query` with the placeholder markup or its value. */
+  function pickPlaceholder(name: string) {
+    const pos = textareaEl?.selectionStart ?? contentValue.length;
+    const markup = placeholderText(name);
     const rest = contentValue.slice(pos);
-    const skip = rest.startsWith(WIKI_MARK) ? WIKI_MARK.length : 0;
+    const skip = rest.startsWith(TPL_CLOSE) ? TPL_CLOSE.length : 0;
+    const text = contentValue.slice(0, tplStart) + markup + rest.slice(skip);
+    tplOpen = false;
+    const caret = tplStart + markup.length;
+    applyEdit({ text, selStart: caret, selEnd: caret });
+  }
+
+  /** Replace the partial `[[query` with a completed link. */
+  function pickWikiLink(target: string, label?: string | null) {
+    const pos = textareaEl?.selectionStart ?? contentValue.length;
+    const link = wikiMarkup(target, label);
+    const rest = contentValue.slice(pos);
+    const close = wikiCloseOf(wikiMark);
+    const skip = rest.startsWith(close) ? close.length : 0;
     const text = contentValue.slice(0, wikiStart) + link + rest.slice(skip);
     wikiOpen = false;
     const caret = wikiStart + link.length;
     applyEdit({ text, selStart: caret, selEnd: caret });
   }
 
-  /** Open a linked note by id or title; create it when nothing matches. */
+  // ── Context: entity bindings and `[[kind:id]]` mentions as cards ─────────────
+  const CONTEXT_KEY = 'notes-context-open';
+  let contextOpen = $state(localStorage.getItem(CONTEXT_KEY) !== '0');
+  let contextFocus = $state<string | null>(null);
+  const mentions = $derived(extractWikiTargets(contentValue).filter(isEntityBinding));
+  const contextCount = $derived(new Set([...(note?.bindings ?? []).filter(isEntityBinding), ...mentions]).size);
+
+  function toggleContext() {
+    contextOpen = !contextOpen;
+    try { localStorage.setItem(CONTEXT_KEY, contextOpen ? '1' : '0'); } catch {}
+  }
+
+  /** Start a wiki link at the caret; opens the picker via the editors' `[[` tracking. */
+  function startWikiLink() {
+    if (readonly) return;
+    if (mode === 'rich') { richEditor?.insertText(WIKI_OPEN); return; }
+    const pos = textareaEl?.selectionStart ?? contentValue.length;
+    const text = contentValue.slice(0, pos) + WIKI_OPEN + contentValue.slice(pos);
+    applyEdit({ text, selStart: pos + WIKI_OPEN.length, selEnd: pos + WIKI_OPEN.length });
+    tick().then(updateWikiState);
+  }
+
+  // `insertLink` request from the command palette
+  $effect(() => {
+    if (notesStore.uiRequest?.kind !== 'insertLink') return;
+    notesStore.uiRequest = null;
+    startWikiLink();
+  });
+
+  /** Open a linked note by id or title; create it when nothing matches. Entity mentions open their card. */
   async function openWikiLink(target: string) {
+    if (isEntityBinding(target)) {
+      contextOpen = true;
+      contextFocus = target;
+      return;
+    }
     const key = target.trim().toLowerCase();
     const find = () =>
       notesStore.list.find((n) => n.id === target) ?? notesStore.list.find((n) => n.title.toLowerCase() === key);
@@ -375,6 +458,8 @@
 
   onMount(() => {
     if (!('__TAURI_INTERNALS__' in window)) return;
+    // Entity names for chips, suggestions and context cards
+    void ensureEntitiesLoaded();
     let unlisten: (() => void) | null = null;
     let unlistenSync: (() => void) | null = null;
     let unlistenStatus: (() => void) | null = null;
@@ -479,14 +564,14 @@
     }
 
     for (const b of note.bindings) {
-      if (b.startsWith('workspace:')) {
-        const ws = workspacesStore.list.find(w => w.id === b.slice('workspace:'.length));
-        if (ws) chips.push({ kind: 'workspace', label: ws.name, color: ws.color, onremove: () => notesStore.removeNoteBinding(note!.id, b) });
-      } else if (b.startsWith('profile:')) {
-        const pr = profilesStore.list.find(p => p.id === b.slice('profile:'.length));
-        if (pr) chips.push({ kind: 'profile', label: pr.name, color: 'var(--accent)', onremove: () => notesStore.removeNoteBinding(note!.id, b) });
-      } else if (b.startsWith('domain:')) {
-        chips.push({ kind: 'domain', label: b.slice('domain:'.length), color: 'var(--text-2)', onremove: () => notesStore.removeNoteBinding(note!.id, b) });
+      const parsed = parseBinding(b);
+      if (!parsed) continue;
+      const onremove = () => notesStore.removeNoteBinding(note!.id, b);
+      if (isEntityKind(parsed.kind)) {
+        const entity = entitySummary(parsed.kind, parsed.value);
+        if (entity) chips.push({ kind: parsed.kind, label: entity.name, color: entity.color, onremove });
+      } else if (parsed.kind === 'domain') {
+        chips.push({ kind: 'domain', label: parsed.value, color: 'var(--text-2)', onremove });
       }
     }
 
@@ -555,6 +640,7 @@
   function onBodyChange() {
     notesStore.onContentChange(contentValue);
     updateWikiState();
+    updateTplState();
   }
 
   const saveLabel: Record<string, string> = {
@@ -652,13 +738,20 @@
         {folders}
         activeFolderIds={notesStore.list.find(n => n.id === note.id)?.folder_ids ?? []}
         onaddFolder={(folderId) => notesStore.addNoteFolder(note!.id, folderId)}
-        workspaces={workspacesStore.list}
-        profiles={profilesStore.list}
         activeBindings={note.bindings}
         onaddBinding={(binding) => notesStore.addNoteBinding(note!.id, binding)}
       />
       <div class="header-right">
         <span class="updated-at">{formatUpdatedAt(note.updated_at)}</span>
+        <button
+          class="icon-action"
+          class:active={contextOpen}
+          onclick={toggleContext}
+          title={$t('ctx_title')}
+        >
+          <Icon name="layers" size={13} />
+          {#if contextCount > 0}<span class="att-count">{contextCount}</span>{/if}
+        </button>
         <span
           class="save-status-icon status-{saveStatus}"
           title={saveLabel[saveStatus] ?? $t('note_status_saved')}
@@ -694,6 +787,17 @@
       </div>
     </div>
 
+    {#if contextOpen}
+      <NoteContext
+        bindings={note.bindings}
+        {mentions}
+        focus={contextFocus}
+        {readonly}
+        onbind={(b) => notesStore.addNoteBinding(note!.id, b)}
+        onunbind={(b) => notesStore.removeNoteBinding(note!.id, b)}
+      />
+    {/if}
+
     <div class="note-content">
       <NoteToolbar
         {mode}
@@ -727,6 +831,8 @@
               excludeId={note.id}
               onchange={setContent}
               onwikilink={openWikiLink}
+              {placeholderText}
+              placeholderPreview={isTemplateNote ? undefined : previewPlaceholder}
               onfiles={uploadFiles}
               onclipboardfiles={pasteClipboardFiles}
               onhotkey={onRichHotkey}
@@ -741,7 +847,7 @@
             oninput={onBodyChange}
             onkeydown={onEditorKeydown}
             onpaste={onPaste}
-            onblur={() => (wikiOpen = false)}
+            onblur={() => { wikiOpen = false; tplOpen = false; }}
             {readonly}
             spellcheck="false"
           ></textarea>
@@ -754,11 +860,19 @@
               excludeId={note.id}
               onpick={pickWikiLink}
             />
+          {:else if tplOpen}
+            <PlaceholderPicker
+              bind:this={tplPicker}
+              bind:index={tplIndex}
+              query={tplQuery}
+              preview={isTemplateNote ? undefined : previewPlaceholder}
+              onpick={pickPlaceholder}
+            />
           {/if}
         {/if}
       </div>
       {#if linksOpen}
-        <NoteLinks noteId={note.id} version={linksVersion} onopen={(id) => notesStore.openNote(id)} />
+        <NoteLinks noteId={note.id} version={linksVersion} onopen={(id) => notesStore.openNote(id)} oncreate={openWikiLink} />
       {/if}
       {#if attachmentsOpen}
         <NoteAttachments

@@ -40,8 +40,10 @@ use commands::notes::{
     note_add_binding, note_add_folder, note_archive, note_attachment_add_from_path,
     note_attachment_delete, note_attachment_fetch, note_attachment_list, note_attachment_read,
     note_attachment_save, note_backlinks, note_create, note_delete, note_delete_many,
-    note_draft_discard, note_draft_get, note_draft_save, note_folder_create, note_folder_delete,
-    note_folder_list, note_folder_update, note_get, note_history_diff, note_history_get,
+    note_binding_summaries, note_draft_discard, note_draft_get, note_draft_save, note_entity_notes,
+    note_entity_search, note_folder_create, note_placeholder_values,
+    note_folder_delete, note_folder_list, note_folder_update, note_get, note_history_diff,
+    note_history_get,
     note_history_list, note_history_merge, note_history_restore, note_links, note_list, note_nav,
     note_reindex, note_related, note_remove_binding, note_remove_folder, note_resolve_link,
     note_restore, note_search, note_set_folder, note_set_tags, note_smart_view_create,
@@ -217,6 +219,19 @@ fn open_url(url: String, app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Put text on the OS clipboard. Unlike `navigator.clipboard` it does not need a
+/// user-gesture context, so it works after awaited backend calls.
+#[cfg(desktop)]
+#[tauri::command]
+async fn clipboard_write_text(text: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+        cb.set_text(text).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Whether the updater can install updates in-place for this install method.
 /// On Linux only AppImage is updatable; deb/rpm installs must download manually.
 #[cfg(desktop)]
@@ -365,6 +380,10 @@ fn run_mobile() {
             note_smart_view_delete,
             note_backlinks,
             note_links,
+            note_entity_notes,
+            note_binding_summaries,
+            note_entity_search,
+            note_placeholder_values,
             note_related,
             note_resolve_link,
             notes_lock_status,
@@ -562,6 +581,7 @@ fn run_desktop() {
             host_info,
             fingerprint_presets,
             open_url,
+            clipboard_write_text,
             update_supported,
             // Demo / clear
             demo_seed,
@@ -617,6 +637,7 @@ fn run_desktop() {
             proxy_update,
             proxy_delete,
             proxy_check,
+            proxy_export_url,
             proxy_trust_fingerprint,
             // Workspaces
             workspace_list,
@@ -710,6 +731,10 @@ fn run_desktop() {
             quick_capture_shortcut_set,
             note_backlinks,
             note_links,
+            note_entity_notes,
+            note_binding_summaries,
+            note_entity_search,
+            note_placeholder_values,
             note_related,
             note_resolve_link,
             notes_lock_status,

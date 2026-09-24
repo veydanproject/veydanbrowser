@@ -19,11 +19,13 @@
 //! - `filter`   — backend evaluation of `NoteFilter`
 //! - `smart_views` — saved filters
 //! - `quick_capture` — small always-on-top window + global shortcut (desktop)
-//! - `links`    — wiki links, backlinks, related notes
+//! - `links`    — wiki links, backlinks, related notes, entity mentions
+//! - `binding`  — registry of `kind:value` binding kinds
 //! - `templates` — notes from the Templates folder with placeholders
 //! - `lock`     — password lock for the notes UI with auto-lock
 
 mod attachments;
+mod binding;
 #[cfg(desktop)]
 mod capture;
 mod crud;
@@ -55,6 +57,8 @@ pub use attachments::{
     note_attachment_fetch, note_attachment_list, note_attachment_open, note_attachment_read,
     note_attachment_save, note_attachments_gc,
 };
+pub use binding::{note_binding_summaries, note_entity_search};
+pub use templates::note_placeholder_values;
 #[cfg(desktop)]
 pub use capture::handle_capture;
 pub use crud::{
@@ -65,7 +69,9 @@ pub use crud::{
 pub use folders::*;
 pub use history::*;
 pub use index::start_notes_watcher;
-pub use links::{note_backlinks, note_links, note_related, note_resolve_link};
+pub use links::{
+    note_backlinks, note_entity_notes, note_links, note_related, note_resolve_link,
+};
 pub use lock::{
     notes_lock_lock, notes_lock_set, notes_lock_status, notes_lock_timeout_set, notes_lock_touch,
     notes_lock_unlock, start_auto_lock, NotesLock,

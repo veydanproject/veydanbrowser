@@ -21,6 +21,7 @@ import type {
   NoteCreateInput,
   NoteFilter,
   NoteLinks,
+  BindingSummary,
   NoteNav,
   NoteSyncInfo,
   OrphanAttachment,
@@ -169,6 +170,8 @@ export const api = {
       call<Proxy>('proxy_update', { id, req }),
     delete: (id: string) => call<void>('proxy_delete', { id }),
     check: (id: string) => call<ProxyCheckResult>('proxy_check', { id }),
+    /** `type://user:pass@host:port` including the stored password */
+    exportUrl: (id: string) => call<string>('proxy_export_url', { id }),
     trustFingerprint: (id: string, fingerprint: string, ip: string, country: string | null, city: string | null) =>
       call<void>('proxy_trust_fingerprint', { id, fingerprint, ip, country, city }),
   },
@@ -286,6 +289,14 @@ export const api = {
     backlinks: (id: string) => call<NoteListItem[]>('note_backlinks', { id }),
     related: (id: string) => call<NoteListItem[]>('note_related', { id }),
     links: (id: string) => call<NoteLinks>('note_links', { id }),
+    /** Live notes bound to or mentioning an entity binding, e.g. `ssh:{id}` */
+    entityNotes: (binding: string) => call<NoteListItem[]>('note_entity_notes', { binding }),
+    /** Names behind entity bindings; platform-neutral, public fields only */
+    bindingSummaries: (bindings: string[]) => call<BindingSummary[]>('note_binding_summaries', { bindings }),
+    entitySearch: (kind: string, query: string) => call<BindingSummary[]>('note_entity_search', { kind, query }),
+    /** Placeholder name -> current value for a note's title and bindings */
+    placeholderValues: (title: string, bindings: string[]) =>
+      call<Record<string, string>>('note_placeholder_values', { title, bindings }),
     resolveLink: (target: string) => call<string | null>('note_resolve_link', { target }),
     syncInfo: (id: string) => call<NoteSyncInfo>('note_sync_info', { id }),
     smartViewList: () => call<NoteSmartView[]>('note_smart_view_list'),
@@ -408,6 +419,8 @@ export const api = {
 
   system: {
     openUrl: (url: string) => call<void>('open_url', { url }),
+    /** OS clipboard via the backend; works outside a user-gesture context */
+    clipboardWriteText: (text: string) => call<void>('clipboard_write_text', { text }),
     updateSupported: () => call<boolean>('update_supported'),
     hostInfo: () => call<HostInfo>('host_info'),
   },

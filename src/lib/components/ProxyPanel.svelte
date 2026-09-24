@@ -7,6 +7,7 @@
   import { t } from '$lib/i18n';
   import type { CreateProxyRequest, Proxy } from '$lib/types';
   import Drawer from '$lib/components/ui/Drawer.svelte';
+  import EntityNotes from '$lib/components/notes/EntityNotes.svelte';
   import { formatError } from '$lib/utils';
 
   interface Props {
@@ -175,6 +176,9 @@
           </button>
         </div>
       </form>
+      {#if proxy}
+        <EntityNotes kind="proxy" id={proxy.id} newTitle={proxy.name} />
+      {/if}
 </Drawer>
 
 <style>

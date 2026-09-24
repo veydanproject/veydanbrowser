@@ -18,12 +18,42 @@
     type NoteListItem,
     type NoteNav,
   } from '$lib/mobile/api';
-  import { t } from '$lib/mobile/i18n';
+  import { t, type MobileKey } from '$lib/mobile/i18n';
   import type { RowAction, RowMode } from '$lib/mobile/notes-editor';
   import type { TotpEntry } from '$lib/types';
   import { totpMatchesFilter } from '$lib/totp-tags';
+  import { loadSort, saveSort, sortNotes, SORT_KEYS, type NoteSort } from '$lib/notes-sort';
+  import { entitySummaryFor } from '$lib/mobile/api';
+  import NotesTable from '$lib/components/notes/NotesTable.svelte';
 
   let notes = $state<NoteListItem[]>([]);
+
+  // Ordering shared with desktop (same localStorage key)
+  let sort = $state<NoteSort>(loadSort());
+  function setSort(next: NoteSort) {
+    sort = next;
+    saveSort(next);
+  }
+  const shown = $derived(sortNotes(notes, sort));
+  const SORT_LABEL: Record<NoteSort['key'], MobileKey> = {
+    updated_at: 'notes_sort_updated_at',
+    created_at: 'notes_sort_created_at',
+    title: 'notes_sort_title',
+  };
+
+  // List or table; a tablet starts in table mode
+  const VIEW_KEY = 'notes-view-mode';
+  const TABLET_MIN_PX = 768;
+  function loadView(): 'list' | 'table' {
+    const v = localStorage.getItem(VIEW_KEY);
+    if (v === 'table' || v === 'list') return v;
+    return window.innerWidth >= TABLET_MIN_PX ? 'table' : 'list';
+  }
+  let viewMode = $state<'list' | 'table'>(loadView());
+  function setViewMode(m: 'list' | 'table') {
+    viewMode = m;
+    try { localStorage.setItem(VIEW_KEY, m); } catch {}
+  }
   let totpEntries = $state<TotpEntry[]>([]);
   let nav = $state<NoteNav | null>(null);
   let search = $state('');
@@ -319,9 +349,23 @@
       <Icon name={filter.kind === 'trash' ? 'trash-2' : 'file-text'} size={40} />
       <p>{search.trim() || filter.kind !== 'all' ? $t('common_nothing_found') : $t('notes_list_empty')}</p>
     </div>
+  {:else if notes.length && viewMode === 'table' && !selecting}
+    <div class="table-wrap">
+      <NotesTable
+        notes={shown.map((n) => n.raw)}
+        allNotes={notes.map((n) => n.raw)}
+        folders={nav?.folders ?? []}
+        {sort}
+        onsort={setSort}
+        contextOf={entitySummaryFor}
+        activeId={null}
+        onselect={(id) => goto(`/notes/${id}`)}
+        touch
+      />
+    </div>
   {:else if notes.length}
     <div class="m-cards">
-      {#each notes as n (n.id)}
+      {#each shown as n (n.id)}
         <NoteRow
           note={n}
           mode={rowMode}
@@ -371,6 +415,25 @@
       <Icon name="check-square" size={20} /><span class="m-row-label">{$t('notes_select')}</span>
     </button>
   </div>
+  <div class="group">{$t('notes_view')}</div>
+  <div class="m-seg">
+    <button type="button" class="m-seg-btn" class:active={viewMode === 'list'} onclick={() => setViewMode('list')}>{$t('notes_view_list')}</button>
+    <button type="button" class="m-seg-btn" class:active={viewMode === 'table'} onclick={() => setViewMode('table')}>{$t('notes_view_table')}</button>
+  </div>
+  <div class="group">{$t('notes_sort')}</div>
+  <div class="m-list">
+    {#each SORT_KEYS as key (key)}
+      <button type="button" class="m-row" onclick={() => setSort({ ...sort, key })}>
+        <Icon name={key === 'title' ? 'type' : 'clock'} size={20} />
+        <span class="m-row-label">{$t(SORT_LABEL[key])}</span>
+        {#if sort.key === key}<Icon name="check" size={18} />{/if}
+      </button>
+    {/each}
+    <button type="button" class="m-row" onclick={() => setSort({ ...sort, asc: !sort.asc })}>
+      <Icon name={sort.asc ? 'arrow-up' : 'arrow-down'} size={20} />
+      <span class="m-row-label">{sort.asc ? $t('notes_sort_asc') : $t('notes_sort_desc')}</span>
+    </button>
+  </div>
 </BottomSheet>
 
 <BottomSheet open={sheet === 'quick' && !!quickNote} title={quickNote?.title || $t('notes_untitled')} onclose={() => (sheet = 'none')}>
@@ -413,6 +476,20 @@
   .pull .spin { animation: spin 1s linear infinite; }
   .pull span { display: inline-flex; }
   .count { margin: 0 var(--sp-1) var(--sp-3); font-size: 13px; }
+  .group {
+    padding: var(--sp-3) var(--sp-2) var(--sp-1);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--text-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .table-wrap {
+    margin: 0 calc(-1 * var(--sp-3));
+    padding: 0 var(--sp-3);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
   .empty-trash {
     margin-top: auto;
     min-height: 48px;

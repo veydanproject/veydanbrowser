@@ -6,6 +6,7 @@
 //! loaded once into `FilterContext`, then `matches` is a pure check per row.
 
 use super::attachments::attachments_dir_for;
+use super::binding::is_scope_binding;
 use super::files::resolve_note_abs_path;
 use super::models::{NoteFilter, NoteFolder, NoteRow, NoteTagInfo};
 use super::tags::{fetch_all_note_folder_ids_map, fetch_all_note_tags_map};
@@ -116,11 +117,7 @@ impl FilterContext {
                 return false;
             }
         }
-        if filter.global_only == Some(true)
-            && bindings
-                .iter()
-                .any(|b| b.starts_with("workspace:") || b.starts_with("profile:"))
-        {
+        if filter.global_only == Some(true) && bindings.iter().any(|b| is_scope_binding(b)) {
             return false;
         }
 

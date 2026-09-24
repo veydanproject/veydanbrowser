@@ -5,7 +5,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Editor } from '@tiptap/core';
-  import { noteExtensions, WIKI_MARK, unclosedWikiAt, type ResolveSrc } from '$lib/tiptap-ext';
+  import { noteExtensions, unclosedMarkAt, unclosedWikiAt, TPL_CLOSE, TPL_OPEN, type ResolveSrc } from '$lib/tiptap-ext';
   import type { EditAction } from '$lib/markdown-edit';
   import { portal } from '$lib/portal';
 
@@ -14,18 +14,21 @@
     resolveSrc: ResolveSrc;
     placeholder: string;
     onchange: (md: string) => void;
-    /** Text typed after an unclosed `@@`, or null when no wiki link is being typed. */
+    /** Text typed after an unclosed `[[`, or null when no wiki link is being typed. */
     onwiki: (query: string | null) => void;
     onwikilink: (target: string) => void;
+    /** Text typed after an unclosed `{{`, or null when no placeholder is being typed. */
+    ontpl?: (query: string | null) => void;
   }
 
-  let { content, resolveSrc, placeholder, onchange, onwiki, onwikilink }: Props = $props();
+  let { content, resolveSrc, placeholder, onchange, onwiki, onwikilink, ontpl }: Props = $props();
 
   let hostEl: HTMLElement | null = $state(null);
   let editor: Editor | null = null;
   let lastEmitted = '';
   let isEmpty = $state(false);
   let wikiFrom = 0;
+  let tplFrom = 0;
   let lightboxSrc = $state('');
 
   const MIN_IMG_W = 40;
@@ -217,24 +220,40 @@
     return true;
   }
 
-  /** Track an unclosed `@@` before the caret inside the current text block. */
+  /** Track an unclosed `[[` (or legacy `@@`) and `{{` before the caret inside the current text block. */
   function updateWikiState() {
     if (!editor) return;
     const { $from: caret, empty } = editor.state.selection;
-    if (!empty || !caret.parent.isTextblock) { onwiki(null); return; }
+    if (!empty || !caret.parent.isTextblock) { onwiki(null); ontpl?.(null); return; }
     const before = caret.parent.textBetween(0, caret.parentOffset, undefined, '\ufffc');
     const open = unclosedWikiAt(before);
-    if (open < 0) { onwiki(null); return; }
-    wikiFrom = caret.pos - (before.length - open);
-    onwiki(before.slice(open + WIKI_MARK.length));
+    if (open) {
+      wikiFrom = caret.pos - (before.length - open.start);
+      onwiki(before.slice(open.start + open.mark.length));
+      ontpl?.(null);
+      return;
+    }
+    onwiki(null);
+    const tpl = unclosedMarkAt(before, TPL_OPEN, TPL_CLOSE);
+    if (tpl < 0) { ontpl?.(null); return; }
+    tplFrom = caret.pos - (before.length - tpl);
+    ontpl?.(before.slice(tpl + TPL_OPEN.length));
   }
 
-  /** Replace the partial `@@query` with a wiki link node. */
-  export function pickWikiLink(title: string) {
+  /** Replace the partial `{{query` with plain text (markup or expanded value). */
+  export function pickPlaceholder(text: string) {
+    if (!editor) return;
+    const to = editor.state.selection.from;
+    editor.chain().focus().insertContentAt({ from: tplFrom, to }, { type: 'text', text }).run();
+    ontpl?.(null);
+  }
+
+  /** Replace the partial `[[query` with a wiki link node. */
+  export function pickWikiLink(target: string, label?: string | null) {
     if (!editor) return;
     const to = editor.state.selection.from;
     editor.chain().focus()
-      .insertContentAt({ from: wikiFrom, to }, [{ type: 'wikiLink', attrs: { target: title } }, { type: 'text', text: ' ' }])
+      .insertContentAt({ from: wikiFrom, to }, [{ type: 'wikiLink', attrs: { target, label: label ?? null } }, { type: 'text', text: ' ' }])
       .run();
     onwiki(null);
   }
@@ -281,7 +300,7 @@
     } else chain.setLink({ href }).run();
   }
 
-  /** Plain text at the caret, e.g. `@@` to start a wiki link. */
+  /** Plain text at the caret, e.g. `[[` to start a wiki link. */
   export function insertText(text: string) {
     editor?.chain().focus().insertContent(text).run();
   }
@@ -350,6 +369,13 @@
     padding: 0 0.15em;
     border-radius: 3px;
     background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .host :global(a.wiki-entity) {
+    padding: 0 0.4em;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    color: var(--text);
+    background: var(--surface-2);
   }
   .host :global(code) {
     font-family: var(--font-mono);
