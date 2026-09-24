@@ -283,6 +283,9 @@ jobs:
       (needs.build.result == 'success' || needs.build-android.result == 'success')
     runs-on: ubuntu-latest
     steps:
+      # gh release upload calls git even when --repo is set.
+      - uses: actions/checkout@v4
+
       # One writer. Parallel builds only upload bundles and .sig files.
       - name: Build latest.json from release assets
         if: needs.verify-version.outputs.updater_keys != ''
