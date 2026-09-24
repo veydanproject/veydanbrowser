@@ -170,11 +170,9 @@ jobs:
           releaseBody: 'See the assets below to download and install this version.'
           releaseDraft: true
           prerelease: ${{ needs.verify-version.outputs.prerelease == 'true' }}
-          # latest.json must deterministically point at the NSIS installer
-          # (targets "all" builds both NSIS and MSI on Windows).
-          updaterJsonPreferNsis: true
-          # Parallel jobs delete and re-upload the same latest.json; a 404
-          # on that asset is retried after a short pause.
+          # Each matrix job would download, merge, and re-upload the same
+          # latest.json. The publish job writes that file once.
+          includeUpdaterJson: false
           retryAttempts: 5
           args: ${{ matrix.args }}
 
@@ -285,10 +283,92 @@ jobs:
       (needs.build.result == 'success' || needs.build-android.result == 'success')
     runs-on: ubuntu-latest
     steps:
-      # Matrix jobs merge platform entries into latest.json via
-      # download→merge→re-upload; concurrent finishes can drop an entry.
-      # Gate on the platforms this tag requested — a failed gate keeps the
-      # release draft; re-run the dropped platform's build job to re-merge.
+      # One writer. Parallel builds only upload bundles and .sig files.
+      - name: Build latest.json from release assets
+        if: needs.verify-version.outputs.updater_keys != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATER_KEYS: ${{ needs.verify-version.outputs.updater_keys }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p updater-assets
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --dir updater-assets --pattern '*.sig'
+          mapfile -t NAMES < <(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name')
+
+          has_asset() {
+            local name="$1" asset
+            for asset in "${NAMES[@]}"; do
+              [ "$asset" = "$name" ] && return 0
+            done
+            return 1
+          }
+
+          # Signature whose bundle the updater should install for this key.
+          pick_sig() {
+            local key="$1" file base
+            case "$key" in
+              linux-x86_64)
+                for file in updater-assets/*.AppImage.sig; do
+                  base="$(basename "$file")"
+                  case "$base" in *.AppImage.tar.gz.sig) continue ;; esac
+                  echo "$base"
+                  return 0
+                done
+                for file in updater-assets/*.AppImage.tar.gz.sig; do
+                  echo "$(basename "$file")"
+                  return 0
+                done
+                ;;
+              windows-x86_64)
+                for file in updater-assets/*-setup.exe.sig updater-assets/*.nsis.zip.sig; do
+                  echo "$(basename "$file")"
+                  return 0
+                done
+                ;;
+              darwin-aarch64)
+                for file in updater-assets/*aarch64.app.tar.gz.sig; do
+                  echo "$(basename "$file")"
+                  return 0
+                done
+                ;;
+              darwin-x86_64)
+                for file in updater-assets/*_x64.app.tar.gz.sig; do
+                  echo "$(basename "$file")"
+                  return 0
+                done
+                ;;
+            esac
+            return 1
+          }
+
+          VERSION="$(cat VERSION)"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "See the assets below to download and install this version." \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+            '{version:$version, notes:$notes, pub_date:$pub_date, platforms:{}}' > latest.json
+
+          for platform in $UPDATER_KEYS; do
+            sig="$(pick_sig "$platform")" || {
+              echo "::error::No updater signature for $platform"
+              exit 1
+            }
+            asset="${sig%.sig}"
+            has_asset "$asset" || {
+              echo "::error::Release is missing $asset for $platform"
+              exit 1
+            }
+            url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${asset}"
+            jq --arg platform "$platform" --arg signature "$(cat "updater-assets/$sig")" --arg url "$url" \
+              '.platforms[$platform] = {signature:$signature, url:$url}' latest.json > latest.json.tmp
+            mv latest.json.tmp latest.json
+          done
+
+          gh release upload "$GITHUB_REF_NAME" latest.json --clobber
+
       - name: Verify latest.json covers requested platforms
         if: needs.verify-version.outputs.updater_keys != ''
         env:
