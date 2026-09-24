@@ -380,8 +380,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPDATER_KEYS: ${{ needs.verify-version.outputs.updater_keys }}
         run: |
+          # The build step left its local copy; re-download what the release actually has.
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --pattern latest.json -O latest.json
+            --pattern latest.json -O latest.json --clobber
           for p in $UPDATER_KEYS; do
             jq -e ".platforms[\"$p\"].signature" latest.json >/dev/null \
               || { echo "::error::latest.json is missing platform $p"; exit 1; }
