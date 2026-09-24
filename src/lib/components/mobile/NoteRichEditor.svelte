@@ -6,6 +6,7 @@
   import { onMount } from 'svelte';
   import { Editor } from '@tiptap/core';
   import { noteExtensions, unclosedMarkAt, unclosedWikiAt, TPL_CLOSE, TPL_OPEN, type ResolveSrc } from '$lib/tiptap-ext';
+  import { stockHistoryChord, takeHistory } from '$lib/keybindings';
   import type { EditAction } from '$lib/markdown-edit';
   import { portal } from '$lib/portal';
 
@@ -54,6 +55,20 @@
       contentType: 'markdown',
       editorProps: {
         attributes: { spellcheck: 'false' },
+        handleKeyDown: (_view, e) => {
+          if (!editor) return false;
+          const taken = takeHistory(e, (command) => {
+            e.preventDefault();
+            if (command === 'edit.undo') editor?.commands.undo();
+            else editor?.commands.redo();
+          });
+          if (taken) return true;
+          if (stockHistoryChord(e)) {
+            e.preventDefault();
+            return true;
+          }
+          return false;
+        },
         handleClick: (_view, _pos, e) => onClick(e),
         handleDoubleClick: (_view, _pos, e) => onDblClick(e),
       },

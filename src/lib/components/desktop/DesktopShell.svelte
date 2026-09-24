@@ -33,6 +33,7 @@
   import { syncStore } from '$lib/store/sync.svelte';
   import UIInspector from '$lib/inspector/UIInspector.svelte';
   import { inspectorApp } from '$lib/inspector/inspector.svelte';
+  import { matches, stockHistoryChord } from '$lib/keybindings';
   import WindowControls from '$lib/components/WindowControls.svelte';
   import ResizeHandles from '$lib/components/ResizeHandles.svelte';
 
@@ -116,8 +117,32 @@
     api.settings.setLocale(get(locale)).catch(() => {});
   }
 
+  /** Plain text fields use the browser undo stack; the rich editor handles its own. */
+  function isNativeTextField(target: EventTarget | null): boolean {
+    if (target instanceof HTMLTextAreaElement) return !target.readOnly && !target.disabled;
+    if (!(target instanceof HTMLInputElement) || target.readOnly || target.disabled) return false;
+    const skip = ['button', 'checkbox', 'radio', 'file', 'range', 'color', 'submit', 'reset', 'image', 'hidden'];
+    return !skip.includes(target.type);
+  }
+
   function handleKeyBack(e: KeyboardEvent) {
-    if (e.ctrlKey && e.shiftKey && e.code === 'KeyD') {
+    if (!e.defaultPrevented && isNativeTextField(e.target)) {
+      if (matches(e, 'edit.undo')) {
+        e.preventDefault();
+        document.execCommand('undo');
+        return;
+      }
+      if (matches(e, 'edit.redo')) {
+        e.preventDefault();
+        document.execCommand('redo');
+        return;
+      }
+      if (stockHistoryChord(e)) {
+        e.preventDefault();
+        return;
+      }
+    }
+    if (matches(e, 'app.inspector')) {
       e.preventDefault();
       inspectorApp.toggle();
       return;

@@ -10,6 +10,7 @@
   import { commands, type Command } from '$lib/commands';
   import { ensureEntitiesLoaded } from '$lib/notes-context';
   import { paletteStore } from '$lib/store/palette.svelte';
+  import { matches } from '$lib/keybindings';
 
   const open = $derived(paletteStore.open);
   let query = $state('');
@@ -51,14 +52,8 @@
     }
   }
 
-  /** Ctrl/Cmd+P and Ctrl/Cmd+Shift+P on any keyboard layout; Ctrl+K stays with the editor link action. */
-  function isPaletteHotkey(e: KeyboardEvent): boolean {
-    const mod = e.ctrlKey || e.metaKey;
-    return mod && !e.altKey && e.code === 'KeyP';
-  }
-
   function onWindowKeydown(e: KeyboardEvent) {
-    if (isPaletteHotkey(e)) {
+    if (matches(e, 'app.palette')) {
       e.preventDefault();
       paletteStore.toggle();
     }

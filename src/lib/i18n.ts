@@ -1138,6 +1138,27 @@ const translations = {
     terminal_status_idle: 'idle',
 
     // UI Inspector / Design QA
+    hotkey_section: 'Hotkeys',
+    hotkey_hint: 'A shortcut follows the physical key, not the letter of the current keyboard layout.',
+    hotkey_group_edit: 'Editing',
+    hotkey_group_editor: 'Editor',
+    hotkey_group_app: 'Application',
+    hotkey_edit_undo: 'Undo',
+    hotkey_edit_redo: 'Redo',
+    hotkey_editor_bold: 'Bold',
+    hotkey_editor_italic: 'Italic',
+    hotkey_editor_link: 'Link',
+    hotkey_editor_find: 'Find',
+    hotkey_editor_save: 'Save',
+    hotkey_app_palette: 'Command palette',
+    hotkey_app_inspector: 'UI inspector',
+    hotkey_change: 'Change',
+    hotkey_reset: 'Reset',
+    hotkey_record: 'Press a shortcut…',
+    hotkey_unbound: 'Not set',
+    hotkey_need_modifier: 'Add Ctrl, Alt, or Cmd',
+    hotkey_conflict: 'Already used by {name}',
+
     inspector_toggle: 'UI Inspector',
     inspector_grid: 'Grid',
     inspector_grid_off: 'Off',
@@ -1156,7 +1177,7 @@ const translations = {
     inspector_gutter: 'Gutter',
     inspector_margin: 'Margin',
     inspector_viewport: 'Viewport',
-    inspector_hotkey_hint: 'Toggle with Ctrl+Shift+D',
+    inspector_hotkey_hint: 'Toggle with {keys}',
     inspector_developer_tools: 'Developer Tools',
 
     // System tray
@@ -2311,6 +2332,27 @@ const translations = {
     terminal_status_idle: 'не активен',
 
     // UI Inspector / Design QA
+    hotkey_section: 'Горячие клавиши',
+    hotkey_hint: 'Сочетание срабатывает по позиции клавиши, а не по букве текущей раскладки.',
+    hotkey_group_edit: 'Правка текста',
+    hotkey_group_editor: 'Редактор',
+    hotkey_group_app: 'Приложение',
+    hotkey_edit_undo: 'Отменить',
+    hotkey_edit_redo: 'Повторить',
+    hotkey_editor_bold: 'Жирный',
+    hotkey_editor_italic: 'Курсив',
+    hotkey_editor_link: 'Ссылка',
+    hotkey_editor_find: 'Найти',
+    hotkey_editor_save: 'Сохранить',
+    hotkey_app_palette: 'Палитра команд',
+    hotkey_app_inspector: 'Инспектор интерфейса',
+    hotkey_change: 'Изменить',
+    hotkey_reset: 'Сбросить',
+    hotkey_record: 'Нажмите сочетание…',
+    hotkey_unbound: 'Не задано',
+    hotkey_need_modifier: 'Нужен Ctrl, Alt или Cmd',
+    hotkey_conflict: 'Уже занято: {name}',
+
     inspector_toggle: 'UI Инспектор',
     inspector_grid: 'Сетка',
     inspector_grid_off: 'Выкл',
@@ -2329,7 +2371,7 @@ const translations = {
     inspector_gutter: 'Отступ',
     inspector_margin: 'Поля',
     inspector_viewport: 'Вьюпорт',
-    inspector_hotkey_hint: 'Включить через Ctrl+Shift+D',
+    inspector_hotkey_hint: 'Включить через {keys}',
     inspector_developer_tools: 'Инструменты разработчика',
 
     // System tray

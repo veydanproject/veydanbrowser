@@ -2,6 +2,7 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
+  import { matches } from '$lib/keybindings';
   import { notesStore } from '$lib/store/notes.svelte';
   import { syncStore } from '$lib/store/sync.svelte';
   import { api, DEFAULT_ATTACHMENT_POLICY, type AttachmentTransfer } from '$lib/api';
@@ -129,14 +130,13 @@
     tick().then(() => findBar?.focus());
   }
 
-  /** Ctrl+K / Ctrl+F / Ctrl+S in the rich editor (bold/italic are built in). */
+  /** Editor shortcuts from the shared map (physical key, any layout). */
   function onRichHotkey(e: KeyboardEvent): boolean {
-    const mod = e.ctrlKey || e.metaKey;
-    if (!mod || e.shiftKey || e.altKey) return false;
-    // `code` is layout-independent: works the same on Latin and Cyrillic layouts
-    if (e.code === 'KeyK') { runAction('link'); return true; }
-    if (e.code === 'KeyF') { openFind(); return true; }
-    if (e.code === 'KeyS') { void notesStore.save(); return true; }
+    if (matches(e, 'editor.link')) { runAction('link'); return true; }
+    if (matches(e, 'editor.find')) { openFind(); return true; }
+    if (matches(e, 'editor.save')) { void notesStore.save(); return true; }
+    if (matches(e, 'editor.bold')) { runAction('bold'); return true; }
+    if (matches(e, 'editor.italic')) { runAction('italic'); return true; }
     return false;
   }
 
@@ -153,12 +153,11 @@
       if (e.key === 'Escape') { tplOpen = false; return; }
       if (tplPicker?.handleKeydown(e)) return;
     }
-    if (mod && !e.shiftKey && !e.altKey) {
-      const hotkeys: Record<string, EditAction> = { KeyB: 'bold', KeyI: 'italic', KeyK: 'link' };
-      if (hotkeys[e.code]) { e.preventDefault(); runAction(hotkeys[e.code]); return; }
-      if (e.code === 'KeyF') { e.preventDefault(); openFind(); return; }
-      if (e.code === 'KeyS') { e.preventDefault(); void notesStore.save(); return; }
-    }
+    if (matches(e, 'editor.bold')) { e.preventDefault(); runAction('bold'); return; }
+    if (matches(e, 'editor.italic')) { e.preventDefault(); runAction('italic'); return; }
+    if (matches(e, 'editor.link')) { e.preventDefault(); runAction('link'); return; }
+    if (matches(e, 'editor.find')) { e.preventDefault(); openFind(); return; }
+    if (matches(e, 'editor.save')) { e.preventDefault(); void notesStore.save(); return; }
     if (readonly) return;
     // Shift+Tab may arrive with a different `key` on WebKitGTK; `code` is stable
     if (e.key === 'Tab' || e.code === 'Tab') {

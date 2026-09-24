@@ -14,6 +14,7 @@
   import Icon from '$lib/Icon.svelte';
   import WikiLinkPicker from './WikiLinkPicker.svelte';
   import { t } from '$lib/i18n';
+  import { stockHistoryChord, stockMarkChord, takeHistory } from '$lib/keybindings';
 
   interface Props {
     content: string;
@@ -125,7 +126,18 @@
       if (e.key === 'Escape') { tplOpen = false; return true; }
       if (tplPicker?.handleKeydown(e)) return true;
     }
-    return onhotkey?.(e) ?? false;
+    if (editor && takeHistory(e, (command) => {
+      e.preventDefault();
+      if (command === 'edit.undo') editor?.commands.undo();
+      else editor?.commands.redo();
+    })) return true;
+    if (onhotkey?.(e)) return true;
+    // Stock TipTap shortcuts follow event.key, so a custom binding would not replace them.
+    if (stockHistoryChord(e) || stockMarkChord(e)) {
+      e.preventDefault();
+      return true;
+    }
+    return false;
   }
 
   /** Wiki atoms open on click; http links open with Ctrl/Cmd or when read-only, else edit the URL. */

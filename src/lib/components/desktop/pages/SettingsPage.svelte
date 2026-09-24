@@ -28,6 +28,8 @@
   import NoteLockSettings from '$lib/components/notes/NoteLockSettings.svelte';
   import SyncSettings from '$lib/components/SyncSettings.svelte';
   import BugReportDialog from '$lib/components/BugReportDialog.svelte';
+  import HotkeySettings from '$lib/components/desktop/HotkeySettings.svelte';
+  import { formatCommand, keybindingOverrides } from '$lib/keybindings';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -77,23 +79,6 @@
   let latestCamoufox = $state<string | null>(null);
   let checkingUpdate = $state(false);
   let checkUpdateError = $state('');
-
-  // Quick capture shortcut
-  let quickShortcut = $state('');
-  let quickShortcutSaving = $state(false);
-  let quickShortcutError = $state('');
-
-  async function saveQuickShortcut() {
-    quickShortcutSaving = true;
-    quickShortcutError = '';
-    try {
-      quickShortcut = await api.notes.quickCaptureShortcutSet(quickShortcut);
-    } catch (e) {
-      quickShortcutError = `${$t('settings_quick_capture_invalid')}: ${formatError(e)}`;
-    } finally {
-      quickShortcutSaving = false;
-    }
-  }
 
   // Notes dir
   let notesDir = $state('');
@@ -267,9 +252,6 @@
       const info = await api.notes.getDir();
       notesDir = info.current;
       notesDirIsCustom = info.is_custom;
-    } catch {}
-    try {
-      quickShortcut = await api.notes.quickCaptureShortcutGet();
     } catch {}
 
     // Load tray settings
@@ -690,7 +672,7 @@
     <div class="dev-tools-row">
       <div class="dev-tools-info">
         <span>{$t('inspector_toggle')}</span>
-        <span class="muted">{$t('inspector_hotkey_hint')}</span>
+        <span class="muted">{$t('inspector_hotkey_hint', { keys: formatCommand('app.inspector', $keybindingOverrides) || $t('hotkey_unbound') })}</span>
       </div>
       <button
         class="toggle"
@@ -701,6 +683,8 @@
       ></button>
     </div>
   </div>
+
+  <HotkeySettings />
 
   <!-- System tray -->
   <div class="card">
@@ -797,29 +781,6 @@
     <div class="card-title">{$t('settings_capture_section')}</div>
     <p class="muted">{$t('settings_capture_hint')}</p>
     <NoteCaptureRules />
-  </div>
-
-  <!-- Quick capture shortcut -->
-  <div class="card">
-    <div class="card-title">{$t('settings_quick_capture_section')}</div>
-    <p class="muted">{$t('settings_quick_capture_hint')}</p>
-    <div class="dir-row">
-      <input
-        class="dir-input"
-        type="text"
-        bind:value={quickShortcut}
-        placeholder="CmdOrCtrl+Shift+N"
-        readonly={!isTauri}
-      />
-    </div>
-    <div class="btn-row">
-      <button class="btn btn-primary btn-sm" disabled={quickShortcutSaving || !isTauri} onclick={saveQuickShortcut}>
-        {quickShortcutSaving ? $t('settings_notes_saving') : $t('settings_notes_save')}
-      </button>
-    </div>
-    {#if quickShortcutError}
-      <div class="error-msg">{quickShortcutError}</div>
-    {/if}
   </div>
 
   <!-- Notes lock -->
