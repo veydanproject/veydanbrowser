@@ -200,6 +200,7 @@
     const input: NoteCreateInput = {
       title: createTitle.trim(),
       bindings: contextBindings(activeFilter),
+      tag_names: activeFilter.type === 'tag' && activeFilter.id ? [activeFilter.id] : undefined,
       template_id: createTemplate || undefined,
     };
     try {
