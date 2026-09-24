@@ -169,11 +169,26 @@
     }
   });
 
+  // Note opened from outside the current list stays open. A note that drops out
+  // because the filter or search changed is closed.
+  let trackedNoteId: string | null = null;
+  let openedOutsideList = false;
+
   $effect(() => {
-    if (notesStore.activeNoteId && !displayList.some(n => n.id === notesStore.activeNoteId)) {
-      notesStore.activeNoteId = null;
-      notesStore.activeNote = null;
+    const id = notesStore.activeNoteId;
+    const inList = !!id && displayList.some((n) => n.id === id);
+    if (id !== trackedNoteId) {
+      trackedNoteId = id;
+      openedOutsideList = !!id && !inList;
+      return;
     }
+    if (!id || inList) {
+      openedOutsideList = false;
+      return;
+    }
+    if (openedOutsideList) return;
+    notesStore.activeNoteId = null;
+    notesStore.activeNote = null;
   });
 
   async function handleFilterChange(f: ActiveFilter) {
