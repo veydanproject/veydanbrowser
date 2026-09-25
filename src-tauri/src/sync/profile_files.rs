@@ -471,17 +471,35 @@ pub async fn collect_local_changes(
 pub struct ApplyOutcome {
     /// Set when an op was skipped on a transient condition; peer heads must not advance.
     pub retry: Option<String>,
+    /// Blobs collected by GC. Reported as warnings; peer heads still advance.
+    pub skipped: Vec<String>,
+}
+
+enum BlobMiss {
+    Retry(String),
+    Gone(String),
+}
+
+/// A missing blob younger than the GC grace is delayed; an older one was collected.
+fn blob_miss(op: Option<&Op>, delayed: String, collected: String) -> BlobMiss {
+    let now_ms = Utc::now().timestamp_millis().max(0) as u64;
+    if op.is_some_and(|op| super::blob_gone(op, now_ms)) {
+        BlobMiss::Gone(collected)
+    } else {
+        BlobMiss::Retry(delayed)
+    }
 }
 
 /// Bring `dir` to the manifest: download changed files, drop files it does not list.
-/// Returns the reason when a blob is not available yet.
+/// `Some` when a blob is missing.
 async fn apply_manifest(
     engine: &Engine,
     cache: &HashCache,
     dir: &Path,
     manifest: &Manifest,
     app: &AppHandle,
-) -> CmdResult<Option<String>> {
+    op: Option<&Op>,
+) -> CmdResult<Option<BlobMiss>> {
     std::fs::create_dir_all(dir).map_err(AppError::io)?;
     let mut keep: HashSet<&str> = HashSet::new();
     let listed: Vec<&ManifestFile> = manifest
@@ -506,9 +524,10 @@ async fn apply_manifest(
             continue;
         }
         let Some(data) = engine.get_blob(&f.blob).await.map_err(AppError::other)? else {
-            return Ok(Some(format!(
-                "blob for profile file {} not available yet",
-                f.path
+            return Ok(Some(blob_miss(
+                op,
+                format!("blob for profile file {} not available yet", f.path),
+                format!("blob for profile file {} was collected", f.path),
             )));
         };
         write_raw(&dest, &data)?;
@@ -521,25 +540,30 @@ async fn apply_manifest(
     Ok(None)
 }
 
-/// Download and apply a manifest blob; `Ok(None)` means it is not available yet.
+/// Download and apply a manifest blob. `Err` means a blob is missing.
 async fn fetch_and_apply(
     engine: &Engine,
     state: &AppState,
     app: &AppHandle,
     dir: &Path,
     manifest_blob: &str,
-) -> CmdResult<Option<Manifest>> {
+    op: Option<&Op>,
+) -> CmdResult<Result<Manifest, BlobMiss>> {
     let Some(raw) = engine
         .get_blob(manifest_blob)
         .await
         .map_err(AppError::other)?
     else {
-        return Ok(None);
+        return Ok(Err(blob_miss(
+            op,
+            format!("manifest {manifest_blob} not available yet"),
+            format!("manifest {manifest_blob} was collected"),
+        )));
     };
     let manifest = Manifest::parse(&String::from_utf8_lossy(&raw))?;
-    match apply_manifest(engine, &state.sync.file_hashes, dir, &manifest, app).await? {
-        None => Ok(Some(manifest)),
-        Some(_) => Ok(None),
+    match apply_manifest(engine, &state.sync.file_hashes, dir, &manifest, app, op).await? {
+        None => Ok(Ok(manifest)),
+        Some(miss) => Ok(Err(miss)),
     }
 }
 
@@ -634,15 +658,15 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
                     save_profile_files_state(db, &st).await?;
                     continue;
                 }
-                match fetch_and_apply(engine, &state, app, &dir, &p.manifest_blob).await? {
-                    Some(manifest) => {
+                match fetch_and_apply(engine, &state, app, &dir, &p.manifest_blob, Some(op)).await?
+                {
+                    Ok(manifest) => {
                         record_applied(&mut st, &manifest);
                         st.head_hlc = Some(op.hlc.clone());
                         save_profile_files_state(db, &st).await?;
                     }
-                    None => {
-                        outcome.retry = Some(format!("profile files for {id} not available yet"))
-                    }
+                    Err(BlobMiss::Gone(reason)) => outcome.skipped.push(reason),
+                    Err(BlobMiss::Retry(reason)) => outcome.retry = Some(reason),
                 }
             }
             _ => {}
@@ -670,14 +694,12 @@ pub async fn apply_pending(
     let dir = profile_dir(state, profile_id)
         .await?
         .ok_or_else(|| AppError::not_found("Profile not found"))?;
-    match fetch_and_apply(engine, state, app, &dir, &st.pending_manifest).await? {
-        Some(manifest) => {
+    match fetch_and_apply(engine, state, app, &dir, &st.pending_manifest, None).await? {
+        Ok(manifest) => {
             record_applied(&mut st, &manifest);
             save_profile_files_state(db, &st).await
         }
-        None => Err(AppError::other(
-            "profile files are not fully available in the vault yet",
-        )),
+        Err(BlobMiss::Retry(reason) | BlobMiss::Gone(reason)) => Err(AppError::other(reason)),
     }
 }
 

@@ -26,7 +26,7 @@ use sqlx::{Pool, Sqlite};
 use std::collections::{BTreeSet, HashMap};
 use veydan_sync::{refs_from_payload, Engine, LargeFileStore, Op};
 
-const GRACE_MS: i64 = 24 * 60 * 60 * 1000;
+pub(super) const GRACE_MS: i64 = 24 * 60 * 60 * 1000;
 const INTERVAL_MS: i64 = 24 * 60 * 60 * 1000;
 
 pub const LAST_RUN_KEY: &str = "sync_gc_last";

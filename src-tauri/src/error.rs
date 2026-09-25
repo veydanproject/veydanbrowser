@@ -19,6 +19,14 @@ pub enum AppError {
     /// The conflict the caller resolved no longer matches the stored one.
     #[error("Conflict changed: {0}")]
     ConflictChanged(String),
+    #[error("Vault is locked")]
+    VaultLocked,
+    #[error("Password vault cannot be unlocked with the current lock")]
+    VaultMismatch,
+    #[error("Could not decrypt this entry")]
+    DecryptFailed,
+    #[error("Saved passwords must be deleted before the lock can be turned off")]
+    VaultHasEntries,
     #[error("{0}")]
     Other(String),
 }

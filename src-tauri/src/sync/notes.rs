@@ -247,6 +247,8 @@ pub struct ApplyOutcome {
     /// Set when an op was skipped on a transient condition; peer heads must not
     /// advance so the skipped ops are delivered again next cycle.
     pub retry: Option<String>,
+    /// Blobs collected by GC. Reported as warnings; peer heads still advance.
+    pub skipped: Vec<String>,
 }
 
 async fn load_head(db: &sqlx::Pool<sqlx::Sqlite>, id: &str) -> CmdResult<Option<NoteHead>> {
@@ -363,8 +365,15 @@ pub async fn apply_remote(
             .await
             .map_err(AppError::other)?
         else {
-            // Chunk arrived before its blob; deliver the rest again next cycle.
-            outcome.retry = Some(format!("blob for note {id} not available yet"));
+            let now_ms = Utc::now().timestamp_millis().max(0) as u64;
+            if super::blob_gone(&op, now_ms) {
+                outcome
+                    .skipped
+                    .push(format!("blob for note {id} was collected"));
+            } else {
+                // Chunk arrived before its blob; deliver the rest again next cycle.
+                outcome.retry = Some(format!("blob for note {id} not available yet"));
+            }
             continue;
         };
         let remote_hash = sha256_hex(&remote_raw);

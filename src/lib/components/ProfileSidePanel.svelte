@@ -13,9 +13,11 @@
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import ExportProfileModal from '$lib/components/ExportProfileModal.svelte';
   import TotpPanel from '$lib/components/TotpPanel.svelte';
+  import PasswordPanel from '$lib/components/passwords/PasswordPanel.svelte';
   import NotesPanel from '$lib/components/notes/NotesPanel.svelte';
   import { notesStore } from '$lib/store/notes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
+  import { passwordStore } from '$lib/store/passwords.svelte';
   import { formatError, relTime as fmtRelTime, formatDateTime } from '$lib/utils';
   import SshProfileTab from '$lib/components/ssh/SshProfileTab.svelte';
 
@@ -34,7 +36,7 @@
 
   let { profile, proxy, workspaceId, columns, isRunning, onclose, onchange, onsync, onedit, onrawdata }: Props = $props();
 
-  let activeTab = $state<'info' | 'totp' | 'notes' | 'ssh'>('info');
+  let activeTab = $state<'info' | 'totp' | 'passwords' | 'notes' | 'ssh'>('info');
   let notesOpen = $state(false);
   let noteToOpen = $state<string | null>(null);
 
@@ -58,6 +60,7 @@
   let exportingCookies = $state(false);
 
   const totpCount = $derived(totpStore.countForProfile(profile.id));
+  const passwordCount = $derived(passwordStore.countForProfile(profile.id));
 
   // Column (single tag) assignment
   let tagsLoading = $state(false);
@@ -188,6 +191,12 @@
           <span class="tab-count">{totpCount}</span>
         {/if}
       </button>
+      <button class="tab" class:active={activeTab === 'passwords'} onclick={() => (activeTab = 'passwords')}>
+        <Icon name="lock" size={12} /> {$t('pw_title')}
+        {#if passwordCount > 0}
+          <span class="tab-count">{passwordCount}</span>
+        {/if}
+      </button>
       <button class="tab" class:active={activeTab === 'notes'} onclick={() => { activeTab = 'notes'; notesStore.ensureLoaded(); }}>
         <Icon name="file-text" size={12} /> {$t('panel_tab_notes')}
       </button>
@@ -199,6 +208,8 @@
   <div class="psp-body">
       {#if activeTab === 'totp'}
         <TotpPanel profileId={profile.id} />
+      {:else if activeTab === 'passwords'}
+        <PasswordPanel profileId={profile.id} />
       {:else if activeTab === 'notes'}
         <div class="notes-inline">
           <div class="notes-inline-header">

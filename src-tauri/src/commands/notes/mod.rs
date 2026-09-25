@@ -35,7 +35,7 @@ mod folders;
 mod history;
 mod index;
 mod links;
-mod lock;
+pub(crate) mod lock;
 mod merge;
 mod models;
 mod nav;
@@ -76,6 +76,7 @@ pub use lock::{
     notes_lock_lock, notes_lock_set, notes_lock_status, notes_lock_timeout_set, notes_lock_touch,
     notes_lock_unlock, start_auto_lock, NotesLock,
 };
+pub(crate) use lock::require_lock_password;
 pub use nav::note_nav;
 #[cfg(desktop)]
 pub use quick_capture::{
@@ -86,7 +87,7 @@ pub use settings::*;
 pub use smart_views::{
     note_smart_view_create, note_smart_view_delete, note_smart_view_list, note_smart_view_update,
 };
-pub use tags::{note_tag_create, note_tag_delete, note_tag_list, note_tag_update};
+pub use tags::{note_tag_create, note_tag_delete, note_tag_list, note_tag_update, TAG_PLACEHOLDER_COLOR};
 #[cfg(desktop)]
 pub use transfer::{note_export, note_import};
 #[cfg(desktop)]

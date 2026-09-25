@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 export type AppError = {
-  code: 'db' | 'io' | 'browser' | 'proxy' | 'not_found' | 'conflict_changed' | 'other';
+  code: 'db' | 'io' | 'browser' | 'proxy' | 'not_found' | 'conflict_changed' | 'vault_locked' | 'vault_mismatch' | 'decrypt_failed' | 'vault_has_entries' | 'other';
   message: string;
 };
 
@@ -275,6 +275,45 @@ export interface TotpUpdateRequest {
   tags?: string[];
 }
 
+// ── Passwords ─────────────────────────────────────────────────────────────────
+
+export interface PasswordEntry {
+  id: string;
+  title: string;
+  username: string | null;
+  url: string | null;
+  has_note: boolean;
+  totp_ids: string[];
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PasswordCreateRequest {
+  title: string;
+  username?: string | null;
+  url?: string | null;
+  password: string;
+  note?: string | null;
+  totp_ids?: string[];
+  tags?: string[];
+}
+
+export interface PasswordUpdateRequest {
+  title?: string;
+  username?: string | null;
+  url?: string | null;
+  password?: string | null;
+  note?: string | null;
+  clear_note?: boolean;
+  totp_ids?: string[];
+  tags?: string[];
+}
+
+export interface RevealedSecret {
+  value: string;
+}
+
 // ── Notes ─────────────────────────────────────────────────────────────────────
 
 export type NoteFormat = 'md' | 'txt' | 'py' | string;
@@ -403,6 +442,8 @@ export interface NoteLockStatus {
   locked: boolean;
   /** Inactivity minutes before auto-lock; 0 disables auto-lock */
   timeout_min: number;
+  /** `none` until the first password, `ok` when the vault exists, `mismatch` when the lock cannot unwrap it */
+  vault: 'none' | 'ok' | 'mismatch';
 }
 
 export interface NoteSmartView {

@@ -14,6 +14,7 @@
   import BottomNav from '$lib/components/mobile/BottomNav.svelte';
   import HubSheet from '$lib/components/mobile/HubSheet.svelte';
   import NotesMoreSheet from '$lib/components/mobile/NotesMoreSheet.svelte';
+  import { notesLock } from '$lib/store/notes-lock.svelte';
 
   let { children }: { children: Snippet } = $props();
 
@@ -40,6 +41,7 @@
   onMount(() => {
     // Theme may have applied before the native chrome bridge was ready.
     syncAndroidChrome($theme);
+    void notesLock.listen();
   });
 </script>
 

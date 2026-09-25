@@ -354,6 +354,25 @@ pub async fn totp_delete(id: String, state: tauri::State<'_, AppState>) -> CmdRe
         .execute(&state.db)
         .await
         .map_err(AppError::db)?;
+    // Drop the id from every password that linked it
+    let needle = serde_json::to_string(&id).map_err(AppError::other)?;
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, totp_ids FROM passwords WHERE instr(totp_ids, ?) > 0",
+    )
+    .bind(&needle)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::db)?;
+    for (pw_id, raw) in rows {
+        let mut ids: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+        ids.retain(|x| x != &id);
+        sqlx::query("UPDATE passwords SET totp_ids = ? WHERE id = ?")
+            .bind(serde_json::to_string(&ids).map_err(AppError::other)?)
+            .bind(&pw_id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+    }
     Ok(())
 }
 

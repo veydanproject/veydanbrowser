@@ -8,6 +8,7 @@
   import NotesNav from '$lib/components/mobile/NotesNav.svelte';
   import NoteRow from '$lib/components/mobile/NoteRow.svelte';
   import TotpNoteCodes from '$lib/components/TotpNoteCodes.svelte';
+  import PasswordNoteCodes from '$lib/components/passwords/PasswordNoteCodes.svelte';
   import BottomSheet from '$lib/components/mobile/BottomSheet.svelte';
   import MoveFolderSheet from '$lib/components/mobile/MoveFolderSheet.svelte';
   import {
@@ -20,8 +21,8 @@
   } from '$lib/mobile/api';
   import { t, type MobileKey } from '$lib/mobile/i18n';
   import type { RowAction, RowMode } from '$lib/mobile/notes-editor';
-  import type { TotpEntry } from '$lib/types';
-  import { totpMatchesFilter } from '$lib/totp-tags';
+  import type { PasswordEntry, TotpEntry } from '$lib/types';
+  import { entityMatchesFilter } from '$lib/entity-tags';
   import { loadSort, saveSort, sortNotes, SORT_KEYS, type NoteSort } from '$lib/notes-sort';
   import { entitySummaryFor } from '$lib/mobile/api';
   import NotesTable from '$lib/components/notes/NotesTable.svelte';
@@ -55,6 +56,7 @@
     try { localStorage.setItem(VIEW_KEY, m); } catch {}
   }
   let totpEntries = $state<TotpEntry[]>([]);
+  let passwordEntries = $state<PasswordEntry[]>([]);
   let nav = $state<NoteNav | null>(null);
   let search = $state('');
   let searchOpen = $state(false);
@@ -71,7 +73,8 @@
   const rowMode = $derived<RowMode>(filter.kind === 'trash' ? 'trash' : filter.kind === 'archived' ? 'archived' : 'normal');
   const isMain = $derived(['all', 'pinned', 'archived'].includes(filter.kind));
   const folder = $derived<NavChild | undefined>(filter.kind === 'folder' ? nav?.folders.find((f) => f.id === filter.id) : undefined);
-  const matchedTotp = $derived(totpEntries.filter((entry) => totpMatchesFilter(entry.tags, filter.kind, filter.id)));
+  const matchedTotp = $derived(totpEntries.filter((entry) => entityMatchesFilter(entry.tags, filter.kind, filter.id)));
+  const matchedPasswords = $derived(passwordEntries.filter((entry) => entityMatchesFilter(entry.tags, filter.kind, filter.id)));
 
   // Sheets
   let sheet = $state<'none' | 'more' | 'quick' | 'move'>('none');
@@ -125,6 +128,11 @@
       totpEntries = await api.totp.list();
     } catch {
       totpEntries = [];
+    }
+    try {
+      passwordEntries = await api.passwords.list();
+    } catch {
+      passwordEntries = [];
     }
   }
 
@@ -343,8 +351,11 @@
   {#if matchedTotp.length}
     <TotpNoteCodes entries={matchedTotp} />
   {/if}
+  {#if matchedPasswords.length}
+    <PasswordNoteCodes entries={matchedPasswords} />
+  {/if}
 
-  {#if notes.length === 0 && matchedTotp.length === 0}
+  {#if notes.length === 0 && matchedTotp.length === 0 && matchedPasswords.length === 0}
     <div class="m-empty">
       <Icon name={filter.kind === 'trash' ? 'trash-2' : 'file-text'} size={40} />
       <p>{search.trim() || filter.kind !== 'all' ? $t('common_nothing_found') : $t('notes_list_empty')}</p>

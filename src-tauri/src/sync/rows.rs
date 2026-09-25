@@ -10,6 +10,7 @@
 
 use super::state::{load_row_state, load_row_states, save_row_state, RowSyncState};
 #[cfg(desktop)]
+use crate::commands::notes::TAG_PLACEHOLDER_COLOR;
 use crate::commands::profiles::profile_delete;
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
@@ -262,6 +263,50 @@ pub const SPECS: &[TableSpec] = &[
         delete: Delete::Plain(&[]),
     },
     TableSpec {
+        entity: "password_vault",
+        table: "password_vault",
+        pk: "id",
+        columns: &[
+            "vault_id",
+            "crypto_version",
+            "kdf_algorithm",
+            "kdf_salt",
+            "kdf_memory",
+            "kdf_iterations",
+            "kdf_parallelism",
+            "wrapped_key",
+            "created_at",
+            "updated_at",
+        ],
+        links: NO_LINKS,
+        filter: None,
+        unique: None,
+        insert: true,
+        delete: Delete::Plain(&[]),
+    },
+    TableSpec {
+        entity: "password",
+        table: "passwords",
+        pk: "id",
+        columns: &[
+            "title",
+            "username",
+            "url",
+            "password_enc",
+            "note_enc",
+            "totp_ids",
+            "tags",
+            "vault_id",
+            "created_at",
+            "updated_at",
+        ],
+        links: NO_LINKS,
+        filter: None,
+        unique: None,
+        insert: true,
+        delete: Delete::Plain(&[]),
+    },
+    TableSpec {
         entity: "pw_history",
         table: "password_history",
         pk: "id",
@@ -371,6 +416,8 @@ const MOBILE_ENTITIES: &[&str] = &[
     "workspace",
     "profile",
     "totp",
+    "password",
+    "password_vault",
     "note_tag",
     "note_folder",
     "note_smart_view",
@@ -787,7 +834,12 @@ async fn upsert(
     aliases: &mut HashMap<String, String>,
 ) -> CmdResult<Upsert> {
     let db = &state.db;
-    let cols = known_columns(spec, payload);
+    let mut cols = known_columns(spec, payload);
+
+    // A tag auto-created by name carries the placeholder color; it must not erase a chosen one.
+    if spec.entity == "note_tag" && payload.get("color").and_then(Value::as_str) == Some(TAG_PLACEHOLDER_COLOR) {
+        cols.retain(|(c, _)| *c != "color");
+    }
 
     // Same unique key under another id: keep that row, absorb the remote id.
     if let Some(keys) = spec.unique {
@@ -1024,6 +1076,16 @@ async fn apply_links(
     Ok(())
 }
 
+async fn tag_in_use(db: &Pool<Sqlite>, tag_id: &str) -> CmdResult<bool> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM note_tag_links WHERE tag_id = ? LIMIT 1")
+            .bind(tag_id)
+            .fetch_optional(db)
+            .await
+            .map_err(AppError::db)?;
+    Ok(row.is_some())
+}
+
 /// Delete a row the vault deleted. `Ok(false)` means "not now" (browser running).
 async fn delete_row(app: &AppHandle, spec: &TableSpec, id: &str) -> CmdResult<bool> {
     let state = app.state::<AppState>();
@@ -1113,6 +1175,13 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
             if matches!(spec.delete, Delete::Ignore) {
                 continue;
             }
+            // A tag still linked to local notes survives a tombstone (it was merged by
+            // name under this id); an empty hash makes the next cycle publish it again.
+            if spec.entity == "note_tag" && tag_in_use(db, id).await? {
+                st.synced_hash = String::new();
+                save_row_state(db, &st).await?;
+                continue;
+            }
             match delete_row(app, spec, id).await {
                 Ok(false) => {
                     outcome.retry = Some(format!("{} {id} is in use", spec.entity));
@@ -1191,6 +1260,11 @@ pub async fn finish_apply(app: &AppHandle, outcome: &ApplyOutcome) {
         let state = app.state::<AppState>();
         crate::commands::settings::reload_tray_settings(app, &state).await;
         crate::commands::notes::reapply_quick_capture_shortcut(app).await;
+    }
+    if outcome.changed.contains("password_vault") {
+        let state = app.state::<AppState>();
+        crate::vault::refresh_after_sync(&state).await;
+        let _ = app.emit("passwords://vault-changed", ());
     }
     if !outcome.changed.is_empty() {
         let _ = app.emit(

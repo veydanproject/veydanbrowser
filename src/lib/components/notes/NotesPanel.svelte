@@ -22,8 +22,10 @@
   import NoteTransferDialog, { type TransferMode } from './NoteTransferDialog.svelte';
   import NoteSyncButton from './NoteSyncButton.svelte';
   import TotpNoteCodes from '$lib/components/TotpNoteCodes.svelte';
+  import PasswordNoteCodes from '$lib/components/passwords/PasswordNoteCodes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
-  import { totpMatchesFilter } from '$lib/totp-tags';
+  import { passwordStore } from '$lib/store/passwords.svelte';
+  import { entityMatchesFilter } from '$lib/entity-tags';
   import { t } from '$lib/i18n';
 
   interface Props {
@@ -48,7 +50,10 @@
 
   // TOTP codes tagged with the open profile / workspace, same as the full notes page
   const matchedTotp = $derived(
-    totpStore.list.filter((entry) => totpMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
+    totpStore.list.filter((entry) => entityMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
+  );
+  const matchedPasswords = $derived(
+    passwordStore.list.filter((entry) => entityMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
   );
 
   // Resizable columns
@@ -141,7 +146,7 @@
   $effect(() => {
     if (open) {
       panelWidth = loadPanelWidth();
-      untrack(() => { void notesStore.ensureLoaded(); void totpStore.ensureLoaded(); });
+      untrack(() => { void notesStore.ensureLoaded(); void totpStore.ensureLoaded(); void passwordStore.ensureLoaded(); });
       // Pre-set filter based on context
       const initial: ActiveFilter =
         context !== 'global' && contextId ? { type: context, id: contextId } : { type: 'all' };
@@ -412,6 +417,9 @@
           <div class="list-scroll">
             {#if matchedTotp.length}
               <TotpNoteCodes entries={matchedTotp} />
+            {/if}
+            {#if matchedPasswords.length}
+              <PasswordNoteCodes entries={matchedPasswords} />
             {/if}
             <NotesList
               notes={displayList}

@@ -11,6 +11,7 @@ pub struct DemoPack {
     pub proxies: Vec<DemoProxy>,
     pub profiles: Vec<DemoProfile>,
     pub totp: Vec<DemoTotp>,
+    pub passwords: Vec<DemoPassword>,
     #[cfg(desktop)]
     pub ssh_keys: Vec<DemoSshKey>,
     #[cfg(desktop)]
@@ -77,6 +78,20 @@ pub struct DemoTotp {
     pub issuer: &'static str,
     pub secret: &'static str,
     pub tags: &'static [&'static str],
+}
+
+#[derive(Clone)]
+pub struct DemoPassword {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub username: &'static str,
+    pub url: &'static str,
+    pub password: &'static str,
+    pub note: Option<&'static str>,
+    pub totp_ids: &'static [&'static str],
+    pub tags: &'static [&'static str],
+    /// Note titles in this locale. Stored as `note:{id}` on the password, not on the note.
+    pub note_titles: &'static [&'static str],
 }
 
 #[cfg(desktop)]
@@ -189,6 +204,7 @@ pub fn pack(locale: &str) -> DemoPack {
         proxies: proxies(),
         profiles: profiles(ru),
         totp: totp_entries(),
+        passwords: passwords(ru),
         #[cfg(desktop)]
         ssh_keys: ssh_keys(),
         #[cfg(desktop)]
@@ -695,6 +711,101 @@ fn totp_entries() -> Vec<DemoTotp> {
             issuer: "Stripe",
             secret: "MJQXGZJTGIZTILLC",
             tags: &["workspace:demo-ws-biz"],
+        },
+    ]
+}
+
+fn passwords(ru: bool) -> Vec<DemoPassword> {
+    vec![
+        DemoPassword {
+            id: "demo-pw-ig",
+            title: "Instagram Brand A",
+            username: "brand.a",
+            url: "https://instagram.com",
+            password: "demo-ig-BrandA",
+            note: Some(t(
+                ru,
+                "Ad account for Brand A. 2FA is the Telegram code.",
+                "Рекламный кабинет Brand A. 2FA — код Telegram.",
+            )),
+            totp_ids: &["demo-totp-tg", "demo-totp-cf"],
+            tags: &["profile:demo-pr-ig", "workspace:demo-ws-smm", "client/brand-a", "work/smm"],
+            note_titles: if ru {
+                &["Бриф клиента Brand A", "Контент-план недели"]
+            } else {
+                &["Client brief Brand A", "Content plan week"]
+            },
+        },
+        DemoPassword {
+            id: "demo-pw-gh",
+            title: "GitHub",
+            username: "octocat",
+            url: "https://github.com",
+            password: "demo-gh-work",
+            note: Some(t(ru, "Work org login.", "Вход в рабочую организацию.")),
+            totp_ids: &["demo-totp-gh"],
+            tags: &["profile:demo-pr-gh", "workspace:demo-ws-dev", "work/dev"],
+            note_titles: if ru {
+                &["Онбординг репо", "ADR auth"]
+            } else {
+                &["Repo onboarding", "ADR auth"]
+            },
+        },
+        DemoPassword {
+            id: "demo-pw-aws",
+            title: "AWS root",
+            username: "root",
+            url: "https://console.aws.amazon.com",
+            password: "demo-aws-root",
+            note: Some(t(ru, "Root. Prefer IAM.", "Root. Лучше IAM.")),
+            totp_ids: &["demo-totp-aws"],
+            tags: &["profile:demo-pr-aws", "workspace:demo-ws-devops", "infra/prod"],
+            note_titles: if ru { &["Runbook деплоя"] } else { &["Deploy runbook"] },
+        },
+        DemoPassword {
+            id: "demo-pw-cf",
+            title: "Cloudflare",
+            username: "ops@veydan.test",
+            url: "https://dash.cloudflare.com",
+            password: "demo-cf-ops",
+            note: None,
+            totp_ids: &["demo-totp-cf"],
+            tags: &["workspace:demo-ws-devops", "infra/prod", "work/devops"],
+            note_titles: if ru {
+                &["Nginx snippet", "Алерты мониторинга"]
+            } else {
+                &["Nginx snippet", "Monitoring alerts"]
+            },
+        },
+        DemoPassword {
+            id: "demo-pw-stripe",
+            title: "Stripe",
+            username: "billing@veydan.test",
+            url: "https://dashboard.stripe.com",
+            password: "demo-stripe-bill",
+            note: Some(t(ru, "Billing owner.", "Владелец биллинга.")),
+            totp_ids: &["demo-totp-stripe"],
+            tags: &["workspace:demo-ws-biz", "work/biz"],
+            note_titles: if ru { &["Воронка сделок"] } else { &["Deal pipeline"] },
+        },
+        DemoPassword {
+            id: "demo-pw-bank",
+            title: t(ru, "Bank", "Банк"),
+            username: "admin@veydan.net",
+            url: "https://veydan.net",
+            password: "demo-bank-admin",
+            note: Some(t(
+                ru,
+                "Personal banking. Vault lock is demo.",
+                "Личный банк. Пароль хранилища — demo.",
+            )),
+            totp_ids: &[],
+            tags: &["profile:demo-pr-bank", "workspace:default", "personal"],
+            note_titles: if ru {
+                &["Health log", "WiFi дома"]
+            } else {
+                &["Health log", "WiFi codes home"]
+            },
         },
     ]
 }
@@ -1330,7 +1441,7 @@ fn notes_en() -> Vec<DemoNote> {
         },
         DemoNote {
             title: "WiFi codes home",
-            content: "# Home Wi‑Fi\n\nSSID: `HomeLab`\nPass: `demo-wifi-not-real`\n\nGuest VLAN: `HomeGuest`.\n",
+            content: "# Home Wi‑Fi\n\nSSID: `HomeLab`\nPass: `demo-wifi-not-real`\n\nGuest VLAN: `HomeGuest`.\n\nNotes lock and password vault: `demo`.\n",
             tags: &["personal"],
             folder_id: Some("demo-folder-personal"),
             bindings: &["workspace:default"],
@@ -1696,7 +1807,7 @@ fn notes_ru() -> Vec<DemoNote> {
         },
         DemoNote {
             title: "WiFi дома",
-            content: "# Домашний Wi‑Fi\n\nSSID: `HomeLab`\nPass: `demo-wifi-not-real`\n\nGuest VLAN: `HomeGuest`.\n",
+            content: "# Домашний Wi‑Fi\n\nSSID: `HomeLab`\nPass: `demo-wifi-not-real`\n\nGuest VLAN: `HomeGuest`.\n\nПароль блокировки и хранилища паролей: `demo`.\n",
             tags: &["personal"],
             folder_id: Some("demo-folder-personal"),
             bindings: &["workspace:default"],

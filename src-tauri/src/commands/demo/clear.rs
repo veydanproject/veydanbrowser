@@ -65,6 +65,12 @@ pub async fn clear_catalog(state: &AppState) -> CmdResult<()> {
     let _ = sqlx::query("DELETE FROM totp_entries")
         .execute(&state.db)
         .await;
+    let _ = sqlx::query("DELETE FROM passwords")
+        .execute(&state.db)
+        .await;
+    let _ = sqlx::query("DELETE FROM password_vault")
+        .execute(&state.db)
+        .await;
     let _ = sqlx::query("DELETE FROM password_history")
         .execute(&state.db)
         .await;
@@ -95,27 +101,8 @@ pub async fn clear_catalog(state: &AppState) -> CmdResult<()> {
     .await
     .map_err(AppError::db)?;
 
-    // Sync positions, so the next cycle re-reads the vault. Binding stays.
-    for key in ["sync_own_seq", "sync_own_head", "sync_hlc"] {
-        let _ = sqlx::query("DELETE FROM app_settings WHERE key = ?")
-            .bind(key)
-            .execute(&state.db)
-            .await;
-    }
-
-    // Sync entity state (not vault config)
-    let _ = sqlx::query("DELETE FROM sync_note_state")
-        .execute(&state.db)
-        .await;
-    let _ = sqlx::query("DELETE FROM sync_attachment_state")
-        .execute(&state.db)
-        .await;
-    let _ = sqlx::query("DELETE FROM sync_row_state")
-        .execute(&state.db)
-        .await;
-    let _ = sqlx::query("DELETE FROM sync_profile_files_state")
-        .execute(&state.db)
-        .await;
+    // Log position and per-entity sync state stay, so the next cycle publishes
+    // tombstones for the rows that just disappeared. Binding stays too.
     let _ = sqlx::query("DELETE FROM sync_gc_candidates")
         .execute(&state.db)
         .await;

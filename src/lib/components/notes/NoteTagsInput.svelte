@@ -8,7 +8,7 @@
   import { t, type TranslationKey } from '$lib/i18n';
   import ChipMark from './ChipMark.svelte';
   import { binding, ENTITY_KINDS } from '$lib/bindings';
-  import { ENTITY_DEFS, searchEntities, type EntitySummary } from '$lib/notes-context';
+  import { ENTITY_DEFS, ensureEntitiesLoaded, searchEntities, type EntitySummary } from '$lib/notes-context';
 
   interface ContextChip {
     kind: string;
@@ -58,12 +58,14 @@
       : []
   );
 
-  /** Veydan entities of every kind matching the input, as `kind:id` bindings not yet on the note. */
+  /** Veydan entities matching the input. With an empty field, offer TOTP and passwords to bind. */
   const entitySuggestions = $derived.by(() => {
-    if (inputValue.trim().length === 0) return [];
+    const q = inputValue.trim();
+    const kinds = q ? ENTITY_KINDS : (['totp', 'password'] as const);
+    const max = q ? 3 : 6;
     const out: { binding: string; kindLabel: TranslationKey; entity: EntitySummary }[] = [];
-    for (const kind of ENTITY_KINDS) {
-      for (const entity of searchEntities(kind, inputValue, 3)) {
+    for (const kind of kinds) {
+      for (const entity of searchEntities(kind, q, max)) {
         const b = binding(kind, entity.id);
         if (!activeBindings.includes(b)) out.push({ binding: b, kindLabel: ENTITY_DEFS[kind].label, entity });
       }
@@ -79,6 +81,7 @@
     open = true;
     inputValue = '';
     selectedColor = TAG_COLORS[0];
+    void ensureEntitiesLoaded();
     setTimeout(() => inputEl?.focus(), 50);
   }
 
@@ -155,7 +158,7 @@
           placeholder={$t('notes_label_placeholder')}
           onkeydown={onKeydown}
         />
-        {#if !inputValue.trim()}
+        {#if !inputValue.trim() && entitySuggestions.length === 0}
           <div class="hint">{$t('notes_label_hint')}</div>
         {/if}
 

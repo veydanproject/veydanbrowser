@@ -6,6 +6,7 @@ pub mod demo;
 pub mod media;
 pub mod notes;
 pub mod password;
+pub mod passwords;
 pub mod totp;
 
 // Desktop only: browser profiles, proxies, SSH/SFTP, backups, tray settings

@@ -7,10 +7,10 @@
  * Mirrors `src-tauri/src/commands/notes/binding.rs`.
  */
 
-export const BINDING_KINDS = ['workspace', 'profile', 'proxy', 'ssh', 'totp', 'url', 'domain'] as const;
+export const BINDING_KINDS = ['workspace', 'profile', 'proxy', 'ssh', 'totp', 'password', 'note', 'url', 'domain'] as const;
 export type BindingKind = (typeof BINDING_KINDS)[number];
 
-export const ENTITY_KINDS = ['workspace', 'profile', 'proxy', 'ssh', 'totp'] as const;
+export const ENTITY_KINDS = ['workspace', 'profile', 'proxy', 'ssh', 'totp', 'password'] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 
 export interface Binding {

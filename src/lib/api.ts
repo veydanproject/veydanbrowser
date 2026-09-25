@@ -33,6 +33,10 @@ import type {
   NoteHistoryEntry,
   NoteListItem,
   NoteTag,
+  PasswordCreateRequest,
+  PasswordEntry,
+  PasswordUpdateRequest,
+  RevealedSecret,
   NoteUpdateInput,
   PresetInfo,
   Profile,
@@ -220,6 +224,17 @@ export const api = {
       call<{ id: string; password: string; created_at: string }>('pwgen_history_add', { password }),
     clear: () => call<void>('pwgen_history_clear'),
     trim: (limit: number) => call<void>('pwgen_history_trim', { limit }),
+  },
+
+  passwords: {
+    list: () => call<PasswordEntry[]>('password_list'),
+    get: (id: string) => call<PasswordEntry>('password_get', { id }),
+    create: (req: PasswordCreateRequest) => call<PasswordEntry>('password_create', { req }),
+    update: (id: string, req: PasswordUpdateRequest) => call<PasswordEntry>('password_update', { id, req }),
+    delete: (id: string) => call<void>('password_delete', { id }),
+    reveal: (id: string, field: 'password' | 'note') => call<RevealedSecret>('password_reveal', { id, field }),
+    copy: (id: string) => call<void>('password_copy', { id }),
+    vaultReset: (password: string) => call<void>('password_vault_reset', { password }),
   },
 
   media: {

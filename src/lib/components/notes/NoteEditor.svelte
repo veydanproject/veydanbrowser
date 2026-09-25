@@ -4,6 +4,7 @@
 <script lang="ts">
   import { matches } from '$lib/keybindings';
   import { notesStore } from '$lib/store/notes.svelte';
+  import { passwordStore } from '$lib/store/passwords.svelte';
   import { syncStore } from '$lib/store/sync.svelte';
   import { api, DEFAULT_ATTACHMENT_POLICY, type AttachmentTransfer } from '$lib/api';
   import { onAttachmentTransfer, pickNativeFiles } from '$lib/attachmentTransfer';
@@ -19,7 +20,7 @@
   import NoteLinks from './NoteLinks.svelte';
   import NoteContext from './NoteContext.svelte';
   import { isEntityBinding, isEntityKind, parseBinding } from '$lib/bindings';
-  import { ensureEntitiesLoaded, entitySummary, resolvePlaceholder } from '$lib/notes-context';
+  import { contextKeys, ensureEntitiesLoaded, entitySummary, resolvePlaceholder } from '$lib/notes-context';
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import CaptureScreen from '$lib/components/media/CaptureScreen.svelte';
   import MediaPrefsBar from '$lib/components/media/MediaPrefsBar.svelte';
@@ -46,6 +47,23 @@
   let { allTags, folders }: Props = $props();
 
   const note = $derived(notesStore.activeNote);
+
+  // A password card stays only while the password still tags this note.
+  $effect(() => {
+    const current = note;
+    if (!current) return;
+    if (!passwordStore.loaded) {
+      void passwordStore.ensureLoaded();
+      return;
+    }
+    const stale = current.bindings.filter((b) => {
+      const parsed = parseBinding(b);
+      if (parsed?.kind !== 'password' || !parsed.value) return false;
+      const entry = passwordStore.list.find((e) => e.id === parsed.value);
+      return !!entry && !entry.tags.includes(`note:${current.id}`);
+    });
+    for (const binding of stale) void notesStore.removeNoteBinding(current.id, binding);
+  });
   const saveStatus = $derived(notesStore.saveStatus);
   const externalChange = $derived(notesStore.externalChange);
 
@@ -254,7 +272,7 @@
   let contextOpen = $state(localStorage.getItem(CONTEXT_KEY) !== '0');
   let contextFocus = $state<string | null>(null);
   const mentions = $derived(extractWikiTargets(contentValue).filter(isEntityBinding));
-  const contextCount = $derived(new Set([...(note?.bindings ?? []).filter(isEntityBinding), ...mentions]).size);
+  const contextCount = $derived(contextKeys(note?.bindings ?? [], mentions, note?.id).length);
 
   function toggleContext() {
     contextOpen = !contextOpen;
@@ -565,7 +583,9 @@
     for (const b of note.bindings) {
       const parsed = parseBinding(b);
       if (!parsed) continue;
-      const onremove = () => notesStore.removeNoteBinding(note!.id, b);
+      const onremove = parsed.kind === 'password'
+        ? () => passwordStore.unlinkNote(parsed.value, note.id)
+        : () => notesStore.removeNoteBinding(note!.id, b);
       if (isEntityKind(parsed.kind)) {
         const entity = entitySummary(parsed.kind, parsed.value);
         if (entity) chips.push({ kind: parsed.kind, label: entity.name, color: entity.color, onremove });
@@ -788,6 +808,7 @@
 
     {#if contextOpen}
       <NoteContext
+        noteId={note.id}
         bindings={note.bindings}
         {mentions}
         focus={contextFocus}

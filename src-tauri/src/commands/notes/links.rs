@@ -21,11 +21,8 @@ type Db = sqlx::Pool<sqlx::Sqlite>;
 /// Supported (open, close) delimiter pairs; `[[ ]]` is the standard, `@@ @@` legacy.
 const WIKI_MARKS: [(&str, &str); 2] = [("[[", "]]"), ("@@", "@@")];
 
-/// One wiki link occurrence: byte range of the whole markup and its inner text.
+/// One wiki link occurrence and the byte offset where its inner text begins.
 struct WikiSpan<'a> {
-    start: usize,
-    end: usize,
-    /// Byte offset where `inner` begins.
     inner_start: usize,
     inner: &'a str,
 }
@@ -53,7 +50,7 @@ fn wiki_spans(content: &str) -> Vec<WikiSpan<'_>> {
         let start = pos + open_at;
         let end = start + open.len() + close_at + close.len();
         if !inner.contains('\n') {
-            spans.push(WikiSpan { start, end, inner_start: start + open.len(), inner });
+            spans.push(WikiSpan { inner_start: start + open.len(), inner });
         }
         pos = end;
     }

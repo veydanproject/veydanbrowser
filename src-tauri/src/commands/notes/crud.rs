@@ -429,6 +429,27 @@ async fn hard_delete(id: &str, state: &AppState) -> Result<(), AppError> {
         .await
         .map_err(AppError::db)?;
 
+    // Soft `note:{id}` links stored on passwords
+    let needle = format!("\"note:{id}\"");
+    let linked: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, tags FROM passwords WHERE instr(tags, ?) > 0")
+            .bind(&needle)
+            .fetch_all(&state.db)
+            .await
+            .map_err(AppError::db)?;
+    let tag = format!("note:{id}");
+    for (pw_id, raw) in linked {
+        let mut tags: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+        tags.retain(|t| t != &tag);
+        sqlx::query("UPDATE passwords SET tags = ?, updated_at = ? WHERE id = ?")
+            .bind(serde_json::to_string(&tags).map_err(AppError::other)?)
+            .bind(Utc::now().to_rfc3339())
+            .bind(&pw_id)
+            .execute(&state.db)
+            .await
+            .map_err(AppError::db)?;
+    }
+
     sqlx::query("DELETE FROM notes WHERE id = ?")
         .bind(id)
         .execute(&state.db)

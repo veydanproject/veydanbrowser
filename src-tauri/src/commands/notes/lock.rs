@@ -21,10 +21,15 @@ const TICK: Duration = Duration::from_secs(10);
 pub const EVENT_LOCKED: &str = "notes://locked";
 pub const EVENT_UNLOCKED: &str = "notes://unlocked";
 
+/// Wrong attempts in a row before each further one waits.
+const FAIL_FREE_ATTEMPTS: u32 = 3;
+const FAIL_DELAY: Duration = Duration::from_secs(1);
+
 /// Last user activity while unlocked; `None` means locked.
 #[derive(Default)]
 pub struct NotesLock {
     last_activity: Mutex<Option<Instant>>,
+    failed_attempts: Mutex<u32>,
 }
 
 impl NotesLock {
@@ -36,12 +41,26 @@ impl NotesLock {
         }
     }
 
-    fn touch(&self) {
+    pub(crate) fn touch(&self) {
         *self.last_activity.lock().unwrap() = Some(Instant::now());
+        *self.failed_attempts.lock().unwrap() = 0;
     }
 
     fn clear(&self) {
         *self.last_activity.lock().unwrap() = None;
+    }
+
+    /// Slows brute force: after a few wrong passwords each attempt pauses first.
+    async fn throttle(&self) {
+        let failed = *self.failed_attempts.lock().unwrap();
+        if failed >= FAIL_FREE_ATTEMPTS {
+            tokio::time::sleep(FAIL_DELAY).await;
+        }
+    }
+
+    fn record_failure(&self) {
+        let mut failed = self.failed_attempts.lock().unwrap();
+        *failed = failed.saturating_add(1);
     }
 }
 
@@ -50,6 +69,8 @@ pub struct LockStatus {
     pub enabled: bool,
     pub locked: bool,
     pub timeout_min: u32,
+    /// `none` | `ok` | `mismatch`
+    pub vault: String,
 }
 
 async fn read_setting(state: &AppState, key: &str) -> Option<String> {
@@ -89,7 +110,7 @@ async fn timeout_min(state: &AppState) -> u32 {
         .unwrap_or(DEFAULT_TIMEOUT_MIN)
 }
 
-fn hash_password(password: &str) -> Result<String, AppError> {
+pub(crate) fn hash_password(password: &str) -> Result<String, AppError> {
     Argon2::default()
         .hash_password(password.as_bytes())
         .map(|h| h.to_string())
@@ -110,10 +131,12 @@ pub(crate) async fn status(state: &AppState) -> LockStatus {
     let enabled = read_setting(state, HASH_KEY).await.is_some();
     let timeout_min = timeout_min(state).await;
     let locked = enabled && !state.notes_lock.is_unlocked(timeout_min);
+    let vault = crate::vault::status_label(state).await;
     LockStatus {
         enabled,
         locked,
         timeout_min,
+        vault,
     }
 }
 
@@ -154,11 +177,38 @@ pub async fn notes_lock_set(
             if p.chars().count() < 4 {
                 return Err(AppError::other("Password must be at least 4 characters").into());
             }
-            write_setting(&state, HASH_KEY, Some(&hash_password(&p)?)).await?;
+            let phc = hash_password(&p)?;
+            let mut tx = state.db.begin().await.map_err(AppError::db)?;
+            let update = crate::vault::rewrap_in(&mut tx, current.as_deref(), &p).await?;
+            sqlx::query(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            )
+            .bind(HASH_KEY)
+            .bind(&phc)
+            .execute(&mut *tx)
+            .await
+            .map_err(AppError::db)?;
+            tx.commit().await.map_err(AppError::db)?;
+            state.vault.apply(update);
             state.notes_lock.touch();
         }
         None => {
-            write_setting(&state, HASH_KEY, None).await?;
+            if crate::vault::entry_count(&state.db).await? > 0 {
+                return Err(AppError::VaultHasEntries);
+            }
+            let mut tx = state.db.begin().await.map_err(AppError::db)?;
+            sqlx::query("DELETE FROM password_vault")
+                .execute(&mut *tx)
+                .await
+                .map_err(AppError::db)?;
+            sqlx::query("DELETE FROM app_settings WHERE key = ?")
+                .bind(HASH_KEY)
+                .execute(&mut *tx)
+                .await
+                .map_err(AppError::db)?;
+            tx.commit().await.map_err(AppError::db)?;
+            state.vault.lock();
             state.notes_lock.clear();
         }
     }
@@ -181,15 +231,33 @@ pub async fn notes_lock_unlock(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<LockStatus> {
+    state.notes_lock.throttle().await;
     let Some(phc) = read_setting(&state, HASH_KEY).await else {
-        return Ok(status(&state).await);
+        // Another device wrapped the vault. The same password installs the local lock.
+        if !crate::vault::has_row(&state).await? {
+            return Ok(status(&state).await);
+        }
+        crate::vault::open_with_password(&state, &password).await?;
+        if state.vault.open_key().is_none() {
+            state.vault.lock();
+            state.notes_lock.record_failure();
+            return Err(AppError::other("Wrong password").into());
+        }
+        write_setting(&state, HASH_KEY, Some(&hash_password(&password)?)).await?;
+        state.notes_lock.touch();
+        let status = status(&state).await;
+        let _ = app.emit(EVENT_UNLOCKED, ());
+        return Ok(status);
     };
     if !verify(&password, &phc) {
+        state.notes_lock.record_failure();
         return Err(AppError::other("Wrong password").into());
     }
+    crate::vault::open_with_password(&state, &password).await?;
     state.notes_lock.touch();
+    let status = status(&state).await;
     let _ = app.emit(EVENT_UNLOCKED, ());
-    Ok(status(&state).await)
+    Ok(status)
 }
 
 #[tauri::command]
@@ -198,6 +266,7 @@ pub async fn notes_lock_lock(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<LockStatus> {
     state.notes_lock.clear();
+    state.vault.lock();
     let _ = app.emit(EVENT_LOCKED, ());
     Ok(status(&state).await)
 }
@@ -207,6 +276,17 @@ pub async fn notes_lock_lock(
 pub async fn notes_lock_touch(state: tauri::State<'_, AppState>) -> CmdResult<()> {
     if state.notes_lock.last_activity.lock().unwrap().is_some() {
         state.notes_lock.touch();
+    }
+    Ok(())
+}
+
+/// Check the configured lock password. Fails when the lock is off or the password is wrong.
+pub(crate) async fn require_lock_password(state: &AppState, password: &str) -> Result<(), AppError> {
+    let Some(phc) = read_setting(state, HASH_KEY).await else {
+        return Err(AppError::VaultLocked);
+    };
+    if !verify(password, &phc) {
+        return Err(AppError::other("Wrong password"));
     }
     Ok(())
 }
@@ -224,6 +304,7 @@ pub fn start_auto_lock(app: tauri::AppHandle) {
             let timeout = timeout_min(&state).await;
             if timeout > 0 && !state.notes_lock.is_unlocked(timeout) {
                 state.notes_lock.clear();
+                state.vault.lock();
                 let _ = app.emit(EVENT_LOCKED, ());
             }
         }

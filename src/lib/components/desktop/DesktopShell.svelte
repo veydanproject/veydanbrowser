@@ -19,12 +19,15 @@
   import type { Profile } from '$lib/types';
   import PasswordGenerator from '$lib/components/PasswordGenerator.svelte';
   import TotpGenerator from '$lib/components/TotpGenerator.svelte';
+  import PasswordDrawer from '$lib/components/passwords/PasswordDrawer.svelte';
   import SSHSessionBar from '$lib/components/ssh/SSHSessionBar.svelte';
   import SSHTerminal from '$lib/components/ssh/SSHTerminal.svelte';
   import CommandPalette from '$lib/components/desktop/CommandPalette.svelte';
   import { registerNotesCommands } from '$lib/commands-notes';
   import { sshStore } from '$lib/store/ssh.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
+  import { passwordStore } from '$lib/store/passwords.svelte';
+  import { notesLock } from '$lib/store/notes-lock.svelte';
   import { updaterStore } from '$lib/store/updater.svelte';
   import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import { listen } from '@tauri-apps/api/event';
@@ -42,6 +45,14 @@
   let runningIds = $state<string[]>([]);
   let pwgenOpen = $state(false);
   let totpOpen = $state(false);
+  let passwordsOpen = $state(false);
+
+  $effect(() => {
+    if (passwordStore.createRequest || passwordStore.openId) passwordsOpen = true;
+  });
+  $effect(() => {
+    if (totpStore.pendingSearch !== null) totpOpen = true;
+  });
 
   let runningProfiles = $derived(
     profilesStore.list.filter((p) => runningIds.includes(p.id))
@@ -188,6 +199,8 @@
     if (!standaloneNotes) {
       profilesStore.ensureLoaded();
       totpStore.ensureLoaded();
+      passwordStore.ensureLoaded();
+      void notesLock.listen();
       sshStore.ensureLoaded();
       refreshRunning();
       window.addEventListener('focus', refreshRunning);
@@ -342,6 +355,9 @@
         <button class="theme-toggle" onclick={() => (totpOpen = !totpOpen)} title={$t('totp_title')}>
           <Icon name="shield" size={15} />
         </button>
+        <button class="theme-toggle" onclick={() => (passwordsOpen = !passwordsOpen)} title={$t('pw_title')}>
+          <Icon name="lock" size={15} />
+        </button>
         <button class="theme-toggle" onclick={() => (pwgenOpen = !pwgenOpen)} title={$t('pwgen_title')}>
           <Icon name="key" size={15} />
         </button>
@@ -404,6 +420,7 @@
 {#if !standaloneNotes}
   <PasswordGenerator bind:open={pwgenOpen} />
   <TotpGenerator bind:open={totpOpen} context="global" />
+  <PasswordDrawer bind:open={passwordsOpen} context="global" />
 {/if}
 <UIInspector />
 

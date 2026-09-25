@@ -7250,7 +7250,7 @@ dependencies = [
 
 [[package]]
 name = "veydanbrowser"
-version = "2.2.14"
+version = "2.2.15"
 dependencies = [
  "age",
  "anyhow",
@@ -7258,6 +7258,7 @@ dependencies = [
  "argon2",
  "async-trait",
  "base64 0.22.1",
+ "chacha20poly1305",
  "chrono",
  "diffy",
  "futures-util",
@@ -7296,6 +7297,7 @@ dependencies = [
  "veydan-sync",
  "webkit2gtk",
  "which",
+ "zeroize",
  "zip 8.6.0",
  "zstd",
 ]

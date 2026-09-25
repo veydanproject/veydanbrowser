@@ -27,6 +27,7 @@
     proxy: 'shield',
     ssh: 'terminal',
     totp: 'key',
+    password: 'lock',
   };
 
   let query = $state('');

@@ -36,6 +36,8 @@
   import ChipMark from '$lib/components/notes/ChipMark.svelte';
   import { extractWikiTargets, unclosedMarkAt, unclosedWikiAt, wikiCloseOf, wikiMarkup, TPL_CLOSE, TPL_OPEN } from '$lib/tiptap-ext';
   import { isEntityBinding } from '$lib/bindings';
+  import { contextKeys } from '$lib/notes-context';
+  import { passwordStore } from '$lib/store/passwords.svelte';
   import { TEMPLATES_FOLDER } from '$lib/notes-filter';
   import NoteContextSheet from '$lib/components/mobile/NoteContextSheet.svelte';
   import PlaceholderSheet from '$lib/components/mobile/PlaceholderSheet.svelte';
@@ -273,7 +275,11 @@
   let contextFocus = $state<string | null>(null);
   const mentions = $derived(extractWikiTargets(content).filter(isEntityBinding));
   const entityBindings = $derived((isNew ? draftBindings : bindings).filter(isEntityBinding));
-  const contextCount = $derived(new Set([...entityBindings, ...mentions]).size);
+  const contextCount = $derived(contextKeys(entityBindings, mentions, isNew ? null : id).length);
+
+  $effect(() => {
+    void passwordStore.ensureLoaded();
+  });
 
   function openContext(focus: string | null = null) {
     contextFocus = focus;
@@ -1046,7 +1052,7 @@
       {#each shownChips as c (c.kind + c.id)}
         {#if c.kind === 'folder'}
           <button type="button" class="m-chip small" style:--chip={c.color} onclick={() => removeFolder(c.id)}><ChipMark kind="folder" />{c.label}</button>
-        {:else if c.kind === 'proxy' || c.kind === 'ssh' || c.kind === 'totp'}
+        {:else if c.kind === 'proxy' || c.kind === 'ssh' || c.kind === 'totp' || c.kind === 'password'}
           <button type="button" class="m-chip small" style:--chip={c.color} onclick={() => openContext(`${c.kind}:${c.id}`)}><ChipMark kind={c.kind} />{c.label}</button>
         {:else}
           <span class="m-chip small" class:ws={c.kind === 'workspace'} style:--chip={c.color}><ChipMark kind={c.kind} />{c.label}</span>

@@ -32,6 +32,7 @@ pub(crate) struct TemplateVars {
     pub ssh_port: String,
     pub ssh_user: String,
     pub totp: String,
+    pub password: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -65,6 +66,15 @@ impl TemplateVars {
                 BindingKind::Profile => vars.profile = lookup_name(kind, value, state).await,
                 BindingKind::Workspace => vars.workspace = lookup_name(kind, value, state).await,
                 BindingKind::Totp => vars.totp = lookup_name(kind, value, state).await,
+                BindingKind::Password => {
+                    vars.password = sqlx::query_scalar("SELECT title FROM passwords WHERE id = ?")
+                        .bind(value)
+                        .fetch_optional(&state.db)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                }
                 BindingKind::Url => vars.url = value.to_string(),
                 BindingKind::Domain => vars.domain = value.to_string(),
                 BindingKind::Proxy => {
@@ -125,7 +135,7 @@ pub(crate) async fn lookup_name(kind: BindingKind, id: &str, state: &AppState) -
 }
 
 /// Current value of every placeholder.
-fn pairs(vars: &TemplateVars) -> [(&'static str, String); 18] {
+fn pairs(vars: &TemplateVars) -> [(&'static str, String); 19] {
     let now = Local::now();
     [
         ("date", now.format("%Y-%m-%d").to_string()),
@@ -146,6 +156,7 @@ fn pairs(vars: &TemplateVars) -> [(&'static str, String); 18] {
         ("ssh_port", vars.ssh_port.clone()),
         ("ssh_user", vars.ssh_user.clone()),
         ("totp", vars.totp.clone()),
+        ("password", vars.password.clone()),
     ]
 }
 

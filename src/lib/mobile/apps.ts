@@ -16,6 +16,7 @@ export interface AppModule {
 export const APPS: AppModule[] = [
   { id: 'notes', title: 'app_notes', icon: 'file-text', route: '/notes' },
   { id: 'totp', title: 'app_totp', icon: 'shield', route: '/totp' },
+  { id: 'passwords', title: 'app_passwords', icon: 'lock', route: '/passwords' },
   { id: 'tools', title: 'app_tools', icon: 'key', route: '/tools' },
   { id: 'settings', title: 'app_settings', icon: 'settings', route: '/settings' },
 ];

@@ -8,11 +8,12 @@
   import BottomSheet from './BottomSheet.svelte';
 
   /** Entity kinds looked up in the backend; workspace/profile come from nav props. */
-  const ENTITY_SEARCH = ['proxy', 'ssh', 'totp'] as const;
+  const ENTITY_SEARCH = ['proxy', 'ssh', 'totp', 'password'] as const;
   const ENTITY_LABEL: Record<(typeof ENTITY_SEARCH)[number], MobileKey> = {
     proxy: 'notes_context_kind_proxy',
     ssh: 'notes_context_kind_ssh',
     totp: 'notes_context_kind_totp',
+    password: 'notes_context_kind_password',
   };
 
   interface Props {
@@ -24,6 +25,8 @@
     workspaces: NavChild[];
     profiles: NavChild[];
     bindings: string[];
+    /** Notes that can be stored as `note:id` tags. Empty hides the hits. */
+    notes?: { id: string; title: string }[];
     busy?: boolean;
     onclose: () => void;
     onaddTag: (name: string, color?: string) => void;
@@ -32,7 +35,7 @@
   }
 
   let {
-    open, tags, selectedTags, folders, folderIds, workspaces, profiles, bindings,
+    open, tags, selectedTags, folders, folderIds, workspaces, profiles, bindings, notes = [],
     busy = false, onclose, onaddTag, onaddFolder, onaddBinding,
   }: Props = $props();
 
@@ -64,6 +67,9 @@
   const profileHits = $derived(
     q ? profiles.filter((p) => !bindings.includes(`profile:${p.id}`) && p.name.toLowerCase().includes(q)) : [],
   );
+  const noteHits = $derived(
+    q ? notes.filter((n) => !bindings.includes(`note:${n.id}`) && n.title.toLowerCase().includes(q)).slice(0, 6) : [],
+  );
   const canCreate = $derived(query.trim().length > 0 && !tags.some((t) => t.name === query.trim()));
 
   // Proxy / SSH / TOTP hits come from the backend, debounced
@@ -72,21 +78,26 @@
   $effect(() => {
     const term = q;
     if (entityTimer) clearTimeout(entityTimer);
-    if (!term) { entityHits = []; return; }
+    const kinds = term ? ENTITY_SEARCH : (['totp', 'password'] as const);
     entityTimer = setTimeout(async () => {
-      const lists = await Promise.all(ENTITY_SEARCH.map((kind) => api.notes.entitySearch(kind, term).catch(() => [])));
+      const lists = await Promise.all(kinds.map((kind) => api.notes.entitySearch(kind, term).catch(() => [])));
       if (term !== q) return;
       entityHits = lists.flat().filter((s) => !bindings.includes(s.binding)).slice(0, 12);
-    }, 200);
+    }, term ? 200 : 0);
   });
 
   const hasHits = $derived(
-    tagHits.length + folderHits.length + workspaceHits.length + profileHits.length + entityHits.length > 0,
+    tagHits.length + folderHits.length + workspaceHits.length + profileHits.length + noteHits.length + entityHits.length > 0,
   );
 
   function submitTag() {
     const name = query.trim().replace(/^#/, '');
     if (!name) return;
+    const matched = notes.filter((n) => n.title.toLowerCase() === name.toLowerCase());
+    if (matched.length === 1) {
+      onaddBinding(`note:${matched[0].id}`);
+      return;
+    }
     onaddTag(name, canCreate ? color : undefined);
   }
 
@@ -109,7 +120,7 @@
       {@attach (el: HTMLInputElement) => el.focus()}
     />
   </div>
-  {#if !q}
+  {#if !q && entityHits.length === 0}
     <p class="hint">{$t('notes_label_hint')}</p>
   {/if}
 
@@ -140,6 +151,13 @@
           <span class="dot"></span>
           <span class="name">{p.name}</span>
           <span class="kind">{$t('notes_kind_profile')}</span>
+        </button>
+      {/each}
+      {#each noteHits as n (n.id)}
+        <button type="button" class="hit" disabled={busy} onpointerdown={(e) => { e.preventDefault(); onaddBinding(`note:${n.id}`); }}>
+          <span class="dot muted"></span>
+          <span class="name">{n.title}</span>
+          <span class="kind">{$t('notes_kind_note')}</span>
         </button>
       {/each}
       {#each entityHits as s (s.binding)}

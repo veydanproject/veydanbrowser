@@ -8,6 +8,7 @@ export const TEMPLATE_PLACEHOLDERS = [
   'proxy', 'proxy_type', 'proxy_host', 'proxy_port', 'proxy_region',
   'ssh', 'ssh_host', 'ssh_port', 'ssh_user',
   'totp',
+  'password',
 ] as const;
 
 export type TemplatePlaceholder = (typeof TEMPLATE_PLACEHOLDERS)[number];

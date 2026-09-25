@@ -21,13 +21,6 @@
   onMount(() => {
     void notesLock.refresh();
     void notesLock.listen();
-    const touch = () => notesLock.touch();
-    window.addEventListener('keydown', touch, true);
-    window.addEventListener('pointerdown', touch, true);
-    return () => {
-      window.removeEventListener('keydown', touch, true);
-      window.removeEventListener('pointerdown', touch, true);
-    };
   });
 
   $effect(() => {

@@ -15,6 +15,8 @@
     proxy: 'x',
     ssh: '>',
     totp: 'k',
+    password: 'l',
+    note: 'n',
     domain: 's',
     tag: 't',
   };

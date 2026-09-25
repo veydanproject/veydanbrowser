@@ -40,6 +40,12 @@
     }
   });
 
+  $effect(() => {
+    if (!open || totpStore.pendingSearch === null) return;
+    search = totpStore.pendingSearch;
+    totpStore.pendingSearch = null;
+  });
+
   const filteredEntries = $derived.by(() => {
     let list = totpStore.list;
 

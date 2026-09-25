@@ -17,6 +17,8 @@
   import { isEntityKind, parseBinding } from '$lib/bindings';
   import { ENTITY_DEFS, entitySummary } from '$lib/notes-context';
   import { isSystemTag, mergeTags, systemTags, userLabels } from '$lib/totp-tags';
+  import { notesLinkedToTotp, syncTotpNotes } from '$lib/totp-notes';
+  import TotpNoteLinks from '$lib/components/TotpNoteLinks.svelte';
 
   interface Props {
     initialTags?: string[];
@@ -101,6 +103,21 @@
 
   let saving = $state(false);
   let error = $state('');
+  let noteIds = $state<string[]>([]);
+  let noteSeed = $state<string[]>([]);
+  let notesSeeded = false;
+
+  const noteOptions = $derived(
+    notesStore.list.filter((n) => !n.deleted).map((n) => ({ id: n.id, title: n.title })),
+  );
+
+  $effect(() => {
+    if (notesSeeded || !entry || !notesStore.loaded) return;
+    const ids = notesLinkedToTotp(entry.id, notesStore.list);
+    noteIds = ids;
+    noteSeed = [...ids];
+    notesSeeded = true;
+  });
 
   function bindingKind(tag: string): string {
     return parseBinding(tag)?.kind ?? 'workspace';
@@ -254,13 +271,12 @@
     try {
       if (!(await commitQuery())) return;
       const tags = mergeTags(lockedBindings, extraBindings, labelNames);
-      if (entry) {
-        await api.totp.update(entry.id, { name: name.trim(), issuer: issuer.trim() || null, tags });
-      } else if (tab === 'qr') {
-        await api.totp.add({ name: name.trim(), issuer: issuer.trim() || null, uri: qrUri, tags });
-      } else {
-        await api.totp.add({ name: name.trim(), issuer: issuer.trim() || null, secret: secret.trim(), algorithm, digits, period, tags });
-      }
+      const saved = entry
+        ? await api.totp.update(entry.id, { name: name.trim(), issuer: issuer.trim() || null, tags })
+        : tab === 'qr'
+          ? await api.totp.add({ name: name.trim(), issuer: issuer.trim() || null, uri: qrUri, tags })
+          : await api.totp.add({ name: name.trim(), issuer: issuer.trim() || null, secret: secret.trim(), algorithm, digits, period, tags });
+      await syncTotpNotes(saved.id, noteIds, noteSeed);
       await totpStore.refresh();
       onadded?.();
       onclose();
@@ -464,6 +480,8 @@
           </div>
         {/if}
       </div>
+
+      <TotpNoteLinks notes={noteOptions} selected={noteIds} onchange={(ids) => (noteIds = ids)} />
 
       {#if error}
         <div class="error-msg">{error}</div>

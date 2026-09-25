@@ -18,18 +18,20 @@ pub(crate) enum BindingKind {
     Proxy,
     Ssh,
     Totp,
+    Password,
     Url,
     Domain,
 }
 
 impl BindingKind {
     /// Most specific first; used to rank related notes.
-    pub const ALL: [BindingKind; 7] = [
+    pub const ALL: [BindingKind; 8] = [
         BindingKind::Url,
         BindingKind::Domain,
         BindingKind::Ssh,
         BindingKind::Proxy,
         BindingKind::Totp,
+        BindingKind::Password,
         BindingKind::Profile,
         BindingKind::Workspace,
     ];
@@ -41,6 +43,7 @@ impl BindingKind {
             BindingKind::Proxy => "proxy:",
             BindingKind::Ssh => "ssh:",
             BindingKind::Totp => "totp:",
+            BindingKind::Password => "password:",
             BindingKind::Url => "url:",
             BindingKind::Domain => "domain:",
         }
@@ -54,6 +57,7 @@ impl BindingKind {
             BindingKind::Proxy => Some("proxies"),
             BindingKind::Ssh => Some("ssh_connections"),
             BindingKind::Totp => Some("totp_entries"),
+            BindingKind::Password => Some("passwords"),
             BindingKind::Url | BindingKind::Domain => None,
         }
     }
@@ -80,6 +84,9 @@ impl BindingKind {
             }
             BindingKind::Ssh => "SELECT id, name, username || '@' || host AS subtitle FROM ssh_connections",
             BindingKind::Totp => "SELECT id, name, coalesce(issuer, '') AS subtitle FROM totp_entries",
+            BindingKind::Password => {
+                "SELECT id, title AS name, coalesce(username, '') AS subtitle FROM passwords"
+            }
             BindingKind::Url | BindingKind::Domain => return None,
         })
     }
@@ -174,7 +181,7 @@ pub async fn note_entity_search(
     // Match name or subtitle (issuer for TOTP, user@host for SSH); SQLite allows the alias in WHERE
     let pattern = format!("%{}%", query.trim().to_lowercase());
     let rows = sqlx::query_as::<_, SummaryRow>(sqlx::AssertSqlSafe(format!(
-        "{sql} WHERE lower(name) LIKE ? OR lower(subtitle) LIKE ? ORDER BY name LIMIT 30"
+        "SELECT * FROM ({sql}) AS entity WHERE lower(name) LIKE ? OR lower(subtitle) LIKE ? ORDER BY name LIMIT 30"
     )))
     .bind(&pattern)
     .bind(&pattern)

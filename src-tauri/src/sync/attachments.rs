@@ -394,6 +394,8 @@ pub struct ApplyOutcome {
     pub changed_notes: Vec<String>,
     /// Set when a blob was not yet available; peer heads must not advance.
     pub retry: Option<String>,
+    /// Blobs collected by GC. Reported as warnings; peer heads still advance.
+    pub skipped: Vec<String>,
 }
 
 /// Apply remote attachment ops of both forms (LWW by HLC on the shared state row).
@@ -461,11 +463,15 @@ pub async fn apply_remote(engine: &Engine, app: &AppHandle, ops: &[Op]) -> CmdRe
             };
             apply_large(&store, app, &state, &policy, &payload, lf, &path, &mut st).await?
         } else {
-            apply_blob(engine, &payload, &path, &mut st).await?
+            apply_blob(engine, op, &payload, &path, &mut st).await?
         };
         match applied {
             Applied::Written => outcome.changed_notes.push(payload.note_id.clone()),
             Applied::Unchanged => {}
+            Applied::Gone(reason) => {
+                outcome.skipped.push(reason);
+                continue;
+            }
             Applied::Retry(reason) => {
                 outcome.retry.get_or_insert(reason);
                 continue;
@@ -484,10 +490,12 @@ enum Applied {
     Written,
     Unchanged,
     Retry(String),
+    Gone(String),
 }
 
 async fn apply_blob(
     engine: &Engine,
+    op: &Op,
     payload: &AttachmentPayload,
     path: &Path,
     st: &mut AttachmentSyncState,
@@ -497,6 +505,13 @@ async fn apply_blob(
         .await
         .map_err(AppError::other)?
     else {
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        if super::blob_gone(op, now_ms) {
+            return Ok(Applied::Gone(format!(
+                "blob for attachment {}/{} was collected",
+                payload.note_id, payload.name
+            )));
+        }
         return Ok(Applied::Retry(format!(
             "blob for attachment {}/{} not available yet",
             payload.note_id, payload.name

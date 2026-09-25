@@ -136,6 +136,7 @@ const ENTITY_COLOR: Record<EntityKind, string> = {
   proxy: '#f5c451',
   ssh: '#2dd4bf',
   totp: '#60a5fa',
+  password: '#a78bfa',
 };
 const ENTITY_ICON: Record<EntityKind, string> = {
   workspace: 'layers',
@@ -143,6 +144,7 @@ const ENTITY_ICON: Record<EntityKind, string> = {
   proxy: 'shield',
   ssh: 'terminal',
   totp: 'key',
+  password: 'lock',
 };
 
 /** Names of entities seen so far (`note_binding_summaries`); filled before items are shaped. */
@@ -473,4 +475,5 @@ export const api = {
     delete: (noteId: string, name: string) => shared.notes.attachmentDelete(noteId, name),
   },
   totp: shared.totp,
+  passwords: shared.passwords,
 };

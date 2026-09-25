@@ -8,6 +8,8 @@ class TotpStore {
   list = $state<TotpEntry[]>([]);
   loading = $state(false);
   loaded = $state(false);
+  /** Search to apply when the TOTP drawer opens. */
+  pendingSearch = $state<string | null>(null);
   private _promise: Promise<void> | null = null;
 
   async ensureLoaded() {

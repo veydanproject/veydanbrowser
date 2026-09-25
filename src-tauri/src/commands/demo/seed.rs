@@ -30,6 +30,7 @@ pub async fn seed_catalog(state: &AppState, locale: &str) -> CmdResult<()> {
 
     // Extra volume for a fuller video demo (~5× catalog size)
     super::bulk::seed_bulk(state, locale, &now).await?;
+    seed_passwords(state, &pack, &now).await?;
 
     crate::commands::notes::rebuild_manifest(&state.db, &state.app_data_dir).await?;
     Ok(())
@@ -325,8 +326,10 @@ async fn seed_ssh(state: &AppState, pack: &DemoPack, now: &str) -> CmdResult<()>
 
 async fn seed_tags(state: &AppState, pack: &DemoPack, now: &str) -> CmdResult<()> {
     for tag in &pack.tags {
+        // A tag recreated by name (sync, reindex) keeps its id; the demo color still lands.
         sqlx::query(
-            "INSERT INTO note_tags (id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO note_tags (id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(name) DO UPDATE SET color = excluded.color, updated_at = excluded.updated_at",
         )
         .bind(tag.id)
         .bind(tag.name)
@@ -531,5 +534,210 @@ async fn seed_capture_rules(state: &AppState, pack: &DemoPack) -> CmdResult<()> 
     .execute(&state.db)
     .await
     .map_err(AppError::db)?;
+    Ok(())
+}
+
+const DEMO_LOCK: &str = "demo";
+
+/// Encrypted password rows linked to profiles, workspaces, TOTP and notes.
+/// The notes lock becomes `demo` because the vault row was wiped with the catalog.
+async fn seed_passwords(state: &AppState, pack: &DemoPack, now: &str) -> CmdResult<()> {
+    let phc = crate::commands::notes::lock::hash_password(DEMO_LOCK)?;
+    sqlx::query(
+        "INSERT INTO app_settings (key, value) VALUES ('notes_lock_hash', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(&phc)
+    .execute(&state.db)
+    .await
+    .map_err(AppError::db)?;
+
+    let (key, vault_id) = crate::vault::install_for_seed(state, DEMO_LOCK).await?;
+    state.notes_lock.touch();
+
+    let titles: Vec<(String, String)> = sqlx::query_as("SELECT id, title FROM notes WHERE deleted = 0")
+        .fetch_all(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    for entry in &pack.passwords {
+        let mut tags: Vec<String> = entry.tags.iter().map(|s| s.to_string()).collect();
+        for title in entry.note_titles {
+            if let Some((id, _)) = titles.iter().find(|(_, t)| t == title) {
+                let link = format!("note:{id}");
+                if !tags.contains(&link) {
+                    tags.push(link);
+                }
+            }
+        }
+        let tags_json = serde_json::to_string(&tags).map_err(AppError::other)?;
+        let totp_json = serde_json::to_string(entry.totp_ids).map_err(AppError::other)?;
+        let password_enc = crate::vault::encrypt_field(&key, entry.id, "password", entry.password)?;
+        let note_enc = match entry.note {
+            Some(note) if !note.is_empty() => {
+                Some(crate::vault::encrypt_field(&key, entry.id, "note", note)?)
+            }
+            _ => None,
+        };
+        sqlx::query(
+            "INSERT INTO passwords (
+                id, title, username, url, password_enc, note_enc, totp_ids, tags, vault_id, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(entry.id)
+        .bind(entry.title)
+        .bind(entry.username)
+        .bind(entry.url)
+        .bind(&password_enc)
+        .bind(&note_enc)
+        .bind(&totp_json)
+        .bind(&tags_json)
+        .bind(&vault_id)
+        .bind(now)
+        .bind(now)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    }
+
+    seed_extra_passwords(state, pack, &key, &vault_id, now, &titles).await?;
+    Ok(())
+}
+
+const EXTRA_LOGINS: &[(&str, &str, &str)] = &[
+    ("Notion", "ops@veydan.test", "https://notion.so"),
+    ("Figma", "design@veydan.test", "https://figma.com"),
+    ("Slack", "team@veydan.test", "https://slack.com"),
+    ("Jira", "dev@veydan.test", "https://atlassian.net"),
+    ("Linear", "pm@veydan.test", "https://linear.app"),
+    ("Sentry", "ops@veydan.test", "https://sentry.io"),
+    ("Datadog", "sre@veydan.test", "https://datadoghq.com"),
+    ("Vercel", "dev@veydan.test", "https://vercel.com"),
+    ("Netlify", "dev@veydan.test", "https://netlify.com"),
+    ("GitLab", "ci@veydan.test", "https://gitlab.com"),
+    ("Hetzner", "root", "https://console.hetzner.cloud"),
+    ("DigitalOcean", "ops@veydan.test", "https://cloud.digitalocean.com"),
+    ("Bitwarden", "admin@veydan.test", "https://vault.bitwarden.com"),
+    ("1Password", "admin@veydan.test", "https://my.1password.com"),
+    ("Google Ads", "ads@veydan.test", "https://ads.google.com"),
+    ("Binance", "trader@veydan.test", "https://binance.com"),
+    ("Grafana", "ops@veydan.test", "https://grafana.veydan.test"),
+    ("Mail", "inbox@veydan.test", "https://mail.veydan.test"),
+    ("TikTok Ads", "brand.a", "https://ads.tiktok.com"),
+    ("LinkedIn", "brand.a", "https://linkedin.com"),
+    ("Facebook Ads", "brand.a", "https://business.facebook.com"),
+    ("Shopify", "shop@veydan.test", "https://admin.shopify.com"),
+    ("npm", "dev@veydan.test", "https://npmjs.com"),
+    ("Docker Hub", "dev@veydan.test", "https://hub.docker.com"),
+    ("OpenAI", "api@veydan.test", "https://platform.openai.com"),
+    ("Statuspage", "ops@veydan.test", "https://statuspage.io"),
+    ("PagerDuty", "oncall@veydan.test", "https://pagerduty.com"),
+    ("HubSpot", "sales@veydan.test", "https://app.hubspot.com"),
+    ("Zoom", "meet@veydan.test", "https://zoom.us"),
+    ("Miro", "design@veydan.test", "https://miro.com"),
+    ("Dropbox", "files@veydan.test", "https://dropbox.com"),
+];
+
+const EXTRA_LABELS: &[&str] = &[
+    "work/smm",
+    "work/dev",
+    "work/devops",
+    "work/biz",
+    "personal",
+    "client/brand-a",
+    "infra/prod",
+    "infra/staging",
+];
+
+async fn seed_extra_passwords(
+    state: &AppState,
+    pack: &DemoPack,
+    key: &crate::vault::SecretKey,
+    vault_id: &str,
+    now: &str,
+    titles: &[(String, String)],
+) -> CmdResult<()> {
+    let ru = pack.default_workspace_name == "Личное";
+    let note_ids: Vec<&str> = titles.iter().map(|(id, _)| id.as_str()).collect();
+    if note_ids.is_empty() {
+        return Ok(());
+    }
+    let totp_ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM totp_entries ORDER BY id")
+        .fetch_all(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    let profile_ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM profiles ORDER BY id")
+        .fetch_all(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    let ws_ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM workspaces ORDER BY id")
+        .fetch_all(&state.db)
+        .await
+        .map_err(AppError::db)?;
+
+    for i in 1..=EXTRA_LOGINS.len() {
+        let (title, username, url) = EXTRA_LOGINS[i - 1];
+        let id = format!("demo-pw-x{i:02}");
+        let mut tags = Vec::new();
+        if !ws_ids.is_empty() {
+            tags.push(format!("workspace:{}", ws_ids[(i - 1) % ws_ids.len()].0));
+        }
+        if i % 2 == 1 && !profile_ids.is_empty() {
+            tags.push(format!("profile:{}", profile_ids[(i - 1) % profile_ids.len()].0));
+        }
+        tags.push(EXTRA_LABELS[(i - 1) % EXTRA_LABELS.len()].to_string());
+        let note_a = note_ids[(i - 1) % note_ids.len()];
+        tags.push(format!("note:{note_a}"));
+        if i % 3 == 0 {
+            let note_b = note_ids[(i + 11) % note_ids.len()];
+            if note_b != note_a {
+                tags.push(format!("note:{note_b}"));
+            }
+        }
+        let mut linked: Vec<String> = Vec::new();
+        if i % 2 == 0 && !totp_ids.is_empty() {
+            linked.push(totp_ids[(i - 1) % totp_ids.len()].0.clone());
+        }
+        if i % 6 == 0 && totp_ids.len() > 1 {
+            let second = totp_ids[i % totp_ids.len()].0.clone();
+            if !linked.contains(&second) {
+                linked.push(second);
+            }
+        }
+        let totp_json = serde_json::to_string(&linked).map_err(AppError::other)?;
+        let secret_note = if i % 4 == 0 {
+            None
+        } else if ru {
+            Some(format!("Демо-доступ #{i}. Пароль хранилища — demo."))
+        } else {
+            Some(format!("Demo login #{i}. Vault lock is demo."))
+        };
+        let tags_json = serde_json::to_string(&tags).map_err(AppError::other)?;
+        let password = format!("demo-extra-{i:02}");
+        let password_enc = crate::vault::encrypt_field(key, &id, "password", &password)?;
+        let note_enc = match &secret_note {
+            Some(note) => Some(crate::vault::encrypt_field(key, &id, "note", note)?),
+            None => None,
+        };
+        sqlx::query(
+            "INSERT INTO passwords (
+                id, title, username, url, password_enc, note_enc, totp_ids, tags, vault_id, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(title)
+        .bind(username)
+        .bind(url)
+        .bind(&password_enc)
+        .bind(&note_enc)
+        .bind(&totp_json)
+        .bind(&tags_json)
+        .bind(vault_id)
+        .bind(now)
+        .bind(now)
+        .execute(&state.db)
+        .await
+        .map_err(AppError::db)?;
+    }
     Ok(())
 }

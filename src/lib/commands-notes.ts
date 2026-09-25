@@ -9,6 +9,7 @@ import { api } from '$lib/api';
 import { t } from '$lib/i18n';
 import { commands, type Command } from '$lib/commands';
 import { notesStore } from '$lib/store/notes.svelte';
+import { passwordStore } from '$lib/store/passwords.svelte';
 import { templateNotes } from '$lib/notes-filter';
 import { ENTITY_DEFS } from '$lib/notes-context';
 import { ENTITY_KINDS } from '$lib/bindings';
@@ -67,6 +68,16 @@ export function registerNotesCommands(): void {
       icon: 'zap',
       group: tr()('cmd_group_notes'),
       run: () => api.notes.openQuickCapture(),
+    },
+    {
+      id: 'passwords.create',
+      title: tr()('cmd_passwords_create'),
+      keywords: 'new password',
+      icon: 'plus',
+      group: tr()('ctx_kind_password'),
+      run: () => {
+        passwordStore.createRequest = true;
+      },
     },
   ]);
 

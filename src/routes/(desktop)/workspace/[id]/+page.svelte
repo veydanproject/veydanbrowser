@@ -24,6 +24,7 @@
   import { proxiesStore } from '$lib/store/proxies.svelte';
   import { formatError } from '$lib/utils';
   import TotpGenerator from '$lib/components/TotpGenerator.svelte';
+  import PasswordDrawer from '$lib/components/passwords/PasswordDrawer.svelte';
   import NotesPanel from '$lib/components/notes/NotesPanel.svelte';
   import SSHPanel from '$lib/components/ssh/SSHPanel.svelte';
 
@@ -179,6 +180,7 @@
 
   // --- Proxy CRUD ---
   let totpOpen = $state(false);
+  let passwordsOpen = $state(false);
   let notesOpen = $state(false);
   let sshOpen = $state(false);
   let proxyPanelProxy = $state<Proxy | null | undefined>(undefined);
@@ -287,6 +289,9 @@
         {/if}
         <button class="btn btn-ghost btn-sm" onclick={() => (totpOpen = true)} title={$t('totp_title')}>
           <Icon name="shield" size={12} />TOTP
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick={() => (passwordsOpen = true)} title={$t('pw_title')}>
+          <Icon name="lock" size={12} />{$t('pw_title')}
         </button>
         <button class="btn btn-ghost btn-sm" onclick={() => (notesOpen = true)} title="Notes">
           <Icon name="file-text" size={12} />Notes
@@ -583,6 +588,11 @@
 
 <TotpGenerator
   bind:open={totpOpen}
+  context="workspace"
+  contextId={workspaceId}
+/>
+<PasswordDrawer
+  bind:open={passwordsOpen}
   context="workspace"
   contextId={workspaceId}
 />

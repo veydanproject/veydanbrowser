@@ -22,6 +22,7 @@ mod proxy;
 mod sync;
 #[cfg(desktop)]
 mod tray;
+mod vault;
 
 #[cfg(desktop)]
 use browser::launch::BrowserState;
@@ -73,6 +74,10 @@ use commands::notes::{
 use commands::password::{
     pwgen_history_add, pwgen_history_clear, pwgen_history_list, pwgen_history_trim,
 };
+use commands::passwords::{
+    password_create, password_delete, password_get, password_list, password_reveal,
+    password_update, password_vault_reset,
+};
 #[cfg(desktop)]
 use commands::profiles::*;
 #[cfg(desktop)]
@@ -94,6 +99,8 @@ use commands::ssh_keys::{
     ssh_key_delete, ssh_key_export_private, ssh_key_generate, ssh_key_get, ssh_key_import,
     ssh_key_list, ssh_key_update,
 };
+#[cfg(desktop)]
+use commands::passwords::password_copy;
 use commands::totp::{
     totp_add, totp_delete, totp_generate_code, totp_generate_codes, totp_list, totp_preview_uri,
     totp_update,
@@ -141,6 +148,7 @@ pub struct AppState {
     /// Notes dir watcher; dropped before a backup restore releases its handle.
     pub notes_watcher: Arc<Mutex<Option<notify::RecommendedWatcher>>>,
     pub notes_lock: commands::notes::NotesLock,
+    pub vault: vault::VaultState,
     pub sync: Arc<SyncManager>,
     #[cfg(desktop)]
     pub browser: Arc<BrowserState>,
@@ -291,6 +299,7 @@ fn run_mobile() {
                 notes_custom_dir: Arc::new(std::sync::RwLock::new(None)),
                 notes_watcher: Arc::new(Mutex::new(None)),
                 notes_lock: commands::notes::NotesLock::default(),
+                vault: vault::VaultState::default(),
                 sync: Arc::new(SyncManager::default()),
             });
 
@@ -304,6 +313,7 @@ fn run_mobile() {
             }
 
             start_sync_scheduler(app.handle().clone());
+            commands::notes::start_auto_lock(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -333,6 +343,14 @@ fn run_mobile() {
             pwgen_history_add,
             pwgen_history_clear,
             pwgen_history_trim,
+            // Passwords
+            password_list,
+            password_get,
+            password_create,
+            password_update,
+            password_delete,
+            password_reveal,
+            password_vault_reset,
             // TOTP
             totp_list,
             totp_add,
@@ -479,6 +497,7 @@ fn run_desktop() {
                 notes_custom_dir: Arc::new(std::sync::RwLock::new(notes_custom_dir)),
                 notes_watcher: Arc::new(Mutex::new(None)),
                 notes_lock: commands::notes::NotesLock::default(),
+                vault: vault::VaultState::default(),
                 sync: Arc::new(SyncManager::default()),
                 browser: Arc::new(BrowserState::default()),
                 download: DownloadManager::default(),
@@ -675,6 +694,15 @@ fn run_desktop() {
             pwgen_history_add,
             pwgen_history_clear,
             pwgen_history_trim,
+            // Passwords
+            password_list,
+            password_get,
+            password_create,
+            password_update,
+            password_delete,
+            password_reveal,
+            password_copy,
+            password_vault_reset,
             // TOTP
             totp_list,
             totp_add,

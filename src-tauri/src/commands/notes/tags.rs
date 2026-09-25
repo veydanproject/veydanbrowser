@@ -10,6 +10,9 @@ use uuid::Uuid;
 
 // ── Tag helpers ───────────────────────────────────────────────────────────────
 
+/// Color of a tag created by name only; a chosen color always wins over it.
+pub const TAG_PLACEHOLDER_COLOR: &str = "#6366f1";
+
 pub(crate) async fn fetch_note_tags(
     note_id: &str,
     db: &sqlx::Pool<sqlx::Sqlite>,
@@ -93,10 +96,11 @@ pub(crate) async fn upsert_tag(
 
     let id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO note_tags (id, name, color, created_at, updated_at) VALUES (?, ?, '#6366f1', ?, ?)",
+        "INSERT INTO note_tags (id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(name)
+    .bind(TAG_PLACEHOLDER_COLOR)
     .bind(&now)
     .bind(&now)
     .execute(db)
@@ -149,20 +153,24 @@ pub async fn note_tag_create(
     if name.is_empty() {
         return Err(AppError::io("Tag name cannot be empty"));
     }
-    let color = color.unwrap_or_else(|| "#6366f1".to_string());
+    let color = color.unwrap_or_else(|| TAG_PLACEHOLDER_COLOR.to_string());
     let now = Utc::now().to_rfc3339();
     let id = uuid::Uuid::new_v4().to_string();
 
+    // Only a chosen color replaces the stored one; the placeholder keeps what is there.
     sqlx::query(
         "INSERT INTO note_tags (id, name, color, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(name) DO UPDATE SET color = excluded.color, updated_at = excluded.updated_at",
+         ON CONFLICT(name) DO UPDATE SET
+           color = CASE WHEN excluded.color = ? THEN note_tags.color ELSE excluded.color END,
+           updated_at = excluded.updated_at",
     )
     .bind(&id)
     .bind(&name)
     .bind(&color)
     .bind(&now)
     .bind(&now)
+    .bind(TAG_PLACEHOLDER_COLOR)
     .execute(&state.db)
     .await
     .map_err(AppError::db)?;

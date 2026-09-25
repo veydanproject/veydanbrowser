@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
-use veydan_sync::{CancelFlag, Engine, HlcClock, Probe, Vmk};
+use veydan_sync::{CancelFlag, Engine, HlcClock, Op, Probe, Vmk};
 
 const TICK_SEC: u64 = 1;
 /// Minimum gap between cycles started by `sync_trigger` (app resume, screen open).
@@ -278,10 +278,27 @@ fn push_debug(app: &AppHandle, level: &str, step: &str, source: &str, cycle: u64
     let _ = app.emit(EVENT_DEBUG, entry);
 }
 
-struct RunningGuard<'a>(&'a AtomicBool);
+pub struct RunningGuard<'a>(&'a AtomicBool);
 impl Drop for RunningGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+impl SyncManager {
+    /// Hold the cycle slot so a bulk data rewrite cannot interleave with a sync.
+    /// Waits up to `max_wait` for a running cycle to finish.
+    pub async fn pause(&self, max_wait: std::time::Duration) -> Option<RunningGuard<'_>> {
+        let deadline = std::time::Instant::now() + max_wait;
+        loop {
+            if !self.running.swap(true, Ordering::SeqCst) {
+                return Some(RunningGuard(&self.running));
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
     }
 }
 
@@ -905,6 +922,11 @@ pub async fn run_cycle(app: &AppHandle, source: &str) -> CmdResult<()> {
     result.map(|_| ())
 }
 
+/// Blob missing for an op older than the GC grace: it was collected, not delayed.
+pub(super) fn blob_gone(op: &Op, now_ms: u64) -> bool {
+    now_ms.saturating_sub(op.hlc.wall_ms) >= gc::GRACE_MS as u64
+}
+
 /// FOREIGN KEY failure in an apply step: record it as "retry next cycle" and go on.
 fn fk_retry<T: Default>(
     step: &str,
@@ -1115,6 +1137,10 @@ async fn cycle_inner(app: &AppHandle, state: &AppState) -> CmdResult<Vec<String>
     trace_retry(app, "notes", &outcome.retry);
     trace_retry(app, "notes meta", &note_meta.retry);
     trace_retry(app, "app rows", &rows_outcome.retry);
+    for reason in att_outcome.skipped.iter().chain(&outcome.skipped) {
+        trace(app, "warn", "apply", reason);
+        warnings.push(reason.clone());
+    }
     if let Some(reason) = &deferred {
         trace(app, "retry", "apply", reason);
     }
@@ -1290,6 +1316,10 @@ async fn profile_files_phase(
     emit_progress(app, "profiles_down", 78, 0, 0, "");
     match profile_files::apply_remote(engine, app, pulled_ops).await {
         Ok(o) => {
+            for reason in &o.skipped {
+                trace(app, "warn", "profiles", reason);
+                warnings.push(reason.clone());
+            }
             match &o.retry {
                 Some(reason) => trace(app, "retry", "profiles", reason),
                 None => trace(app, "info", "profiles", "download ok"),

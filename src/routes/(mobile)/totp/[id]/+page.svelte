@@ -6,15 +6,20 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import Icon from '$lib/Icon.svelte';
-  import TotpLabelField from '$lib/components/mobile/TotpLabelField.svelte';
+  import EntityLabelField from '$lib/components/mobile/EntityLabelField.svelte';
+  import TotpNoteLinks from '$lib/components/TotpNoteLinks.svelte';
   import { api, formatError } from '$lib/mobile/api';
   import { t } from '$lib/mobile/i18n';
+  import { notesLinkedToTotp, syncTotpNotes } from '$lib/totp-notes';
 
   const id = $derived(page.params.id ?? '');
 
   let name = $state('');
   let issuer = $state('');
   let tags = $state<string[]>([]);
+  let notes = $state<{ id: string; title: string; bindings: string[] }[]>([]);
+  let noteIds = $state<string[]>([]);
+  let noteSeed = $state<string[]>([]);
   let ready = $state(false);
   let missing = $state(false);
   let error = $state('');
@@ -32,6 +37,14 @@
       issuer = entry.issuer ?? '';
       tags = [...entry.tags];
       ready = true;
+      try {
+        const items = await api.notes.list();
+        notes = items.map((n) => ({ id: n.id, title: n.title, bindings: n.bindings }));
+        noteIds = notesLinkedToTotp(id, notes);
+        noteSeed = [...noteIds];
+      } catch {
+        /* note picker stays empty; the account can still be saved */
+      }
     } catch (err) {
       error = formatError(err);
     }
@@ -50,6 +63,7 @@
         issuer: issuer.trim() || null,
         tags,
       });
+      await syncTotpNotes(id, noteIds, noteSeed);
       goto('/totp', { replaceState: true });
     } catch (err) {
       error = formatError(err);
@@ -86,7 +100,8 @@
         <input id="issuer" bind:value={issuer} placeholder={$t('totp_field_issuer_placeholder')} autocomplete="off" />
       </div>
 
-      <TotpLabelField {tags} onchange={(next) => (tags = next)} />
+      <EntityLabelField {tags} onchange={(next) => (tags = next)} />
+      <TotpNoteLinks {notes} selected={noteIds} onchange={(ids) => (noteIds = ids)} />
 
       <button class="btn btn-primary save" onclick={save} disabled={saving}>
         <Icon name="check" size={16} />

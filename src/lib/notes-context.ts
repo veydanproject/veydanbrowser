@@ -9,13 +9,16 @@
 
 import { goto } from '$app/navigation';
 import { api } from '$lib/api';
-import { bindingValue, isEntityKind, parseBinding, type EntityKind } from '$lib/bindings';
+import { bindingValue, isEntityBinding, isEntityKind, parseBinding, type EntityKind } from '$lib/bindings';
+import { userLabels } from '$lib/entity-tags';
 import type { TranslationKey } from '$lib/i18n';
+import { notesStore } from '$lib/store/notes.svelte';
 import { workspacesStore } from '$lib/store/workspaces.svelte';
 import { profilesStore } from '$lib/store/profiles.svelte';
 import { proxiesStore } from '$lib/store/proxies.svelte';
 import { sshStore } from '$lib/store/ssh.svelte';
 import { totpStore } from '$lib/store/totp.svelte';
+import { passwordStore } from '$lib/store/passwords.svelte';
 
 export type EntityStatus = 'ok' | 'bad' | 'unknown';
 
@@ -51,8 +54,48 @@ async function copyText(text: string): Promise<void> {
   await api.system.clipboardWriteText(text);
 }
 
+/** Desktop writes the clipboard in Rust. Mobile falls back to reveal. */
+async function copyPassword(id: string): Promise<void> {
+  try {
+    await api.passwords.copy(id);
+    return;
+  } catch (e) {
+    const code = e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
+    if (code === 'vault_locked' || code === 'vault_mismatch' || code === 'decrypt_failed' || code === 'not_found') {
+      throw e;
+    }
+  }
+  const revealed = await api.passwords.reveal(id, 'password');
+  try {
+    await navigator.clipboard.writeText(revealed.value);
+  } catch {
+    await copyText(revealed.value);
+  }
+  const value = revealed.value;
+  setTimeout(() => {
+    navigator.clipboard.readText().then((current) => {
+      if (current === value) void navigator.clipboard.writeText('');
+    }).catch(() => {});
+  }, 30_000);
+}
+
 const region = (country: string | null, city: string | null) =>
   [country, city].filter((s): s is string => !!s).join(', ');
+
+/** Workspace color, then a free label, then the accent. Shared by chips and context cards. */
+function tagsColor(tags: string[]): string {
+  for (const tag of tags) {
+    const parsed = parseBinding(tag);
+    if (parsed?.kind !== 'workspace') continue;
+    const color = workspacesStore.list.find((w) => w.id === parsed.value)?.color;
+    if (color) return color;
+  }
+  for (const name of userLabels(tags)) {
+    const color = notesStore.allTags.find((t) => t.name === name)?.color;
+    if (color) return color;
+  }
+  return 'var(--accent)';
+}
 
 export const ENTITY_DEFS: Record<EntityKind, EntityKindDef> = {
   workspace: {
@@ -174,7 +217,7 @@ export const ENTITY_DEFS: Record<EntityKind, EntityKindDef> = {
         name: e.issuer ? `${e.issuer} · ${e.name}` : e.name,
         subtitle: '',
         status: null,
-        color: 'var(--text-2)',
+        color: tagsColor(e.tags),
       })),
     // Used by the command palette; the context card shows the live code chip instead
     actions: [
@@ -189,10 +232,56 @@ export const ENTITY_DEFS: Record<EntityKind, EntityKindDef> = {
       },
     ],
   },
+  password: {
+    kind: 'password',
+    icon: 'lock',
+    label: 'ctx_kind_password',
+    color: 'var(--text-2)',
+    ensureLoaded: () => passwordStore.ensureLoaded(),
+    list: () =>
+      passwordStore.list.map((e) => ({
+        id: e.id,
+        name: e.title,
+        subtitle: e.username ?? e.url ?? '',
+        status: null,
+        color: tagsColor(e.tags),
+      })),
+    actions: [
+      {
+        id: 'copy-username',
+        label: 'ctx_action_copy_username',
+        icon: 'copy',
+        run: async (id) => {
+          const entry = passwordStore.list.find((e) => e.id === id);
+          if (entry?.username) await copyText(entry.username);
+        },
+      },
+      {
+        id: 'copy-password',
+        label: 'ctx_action_copy_password',
+        icon: 'copy',
+        run: copyPassword,
+      },
+    ],
+  },
 };
 
 export function entitySummary(kind: EntityKind, id: string): EntitySummary | undefined {
   return ENTITY_DEFS[kind].list().find((e) => e.id === id);
+}
+
+/** Bindings, mentions, and passwords tagged `note:id`. Same set the context panel lists. */
+export function contextKeys(bindings: string[], mentions: string[], noteId?: string | null): string[] {
+  const keys = new Set<string>();
+  for (const item of bindings) if (isEntityBinding(item)) keys.add(item);
+  for (const item of mentions) if (isEntityBinding(item)) keys.add(item);
+  if (noteId) {
+    const tag = `note:${noteId}`;
+    for (const entry of passwordStore.list) {
+      if (entry.tags.includes(tag)) keys.add(`password:${entry.id}`);
+    }
+  }
+  return [...keys];
 }
 
 /** Entities behind a note's bindings, as the table's context column shows them. */
@@ -239,6 +328,7 @@ export function resolvePlaceholder(name: string, title: string, bindings: string
     case 'workspace': return name_('workspace');
     case 'profile': return name_('profile');
     case 'totp': return name_('totp');
+    case 'password': return name_('password');
     case 'url': return bindingValue(bindings, 'url') ?? '';
     case 'domain': return bindingValue(bindings, 'domain') ?? '';
     case 'proxy': return proxy?.name ?? '';

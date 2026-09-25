@@ -5,6 +5,8 @@
   import { onMount } from 'svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
   import { t } from '$lib/i18n';
+  import { formatError } from '$lib/utils';
+  import { passwordErrorKey } from '$lib/password-error';
 
   let current = $state('');
   let next = $state('');
@@ -30,7 +32,8 @@
       next = '';
       confirm = '';
     } catch (e) {
-      error = String(e);
+      const key = passwordErrorKey(e);
+      error = key ? $t(key) : formatError(e);
     } finally {
       busy = false;
     }

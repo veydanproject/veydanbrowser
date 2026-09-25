@@ -9,6 +9,7 @@ import { proxiesStore } from './proxies.svelte';
 import { workspacesStore } from './workspaces.svelte';
 import { sshStore } from './ssh.svelte';
 import { totpStore } from './totp.svelte';
+import { passwordStore } from './passwords.svelte';
 import { notesStore } from './notes.svelte';
 import { locale } from '$lib/i18n';
 import { get } from 'svelte/store';
@@ -30,6 +31,12 @@ const reloaders: Record<string, () => Promise<unknown>> = {
   ssh_connection: () => sshStore.loadConnections(),
   ssh_key: () => sshStore.loadConnections(),
   totp: () => totpStore.loaded ? totpStore.refresh() : Promise.resolve(),
+  password: () => passwordStore.loaded ? passwordStore.refresh() : Promise.resolve(),
+  password_vault: async () => {
+    const { notesLock } = await import('$lib/store/notes-lock.svelte');
+    await notesLock.refresh();
+    if (passwordStore.loaded) await passwordStore.refresh();
+  },
   note_tag: () => notesStore.loaded ? notesStore.refreshTags() : Promise.resolve(),
   note_folder: () => notesStore.loaded ? notesStore.refreshFolders() : Promise.resolve(),
   note_smart_view: () => notesStore.loaded ? notesStore.refreshSmartViews() : Promise.resolve(),

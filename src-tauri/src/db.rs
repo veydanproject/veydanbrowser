@@ -859,5 +859,42 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS password_vault (
+            id               TEXT PRIMARY KEY NOT NULL,
+            vault_id         TEXT NOT NULL,
+            crypto_version   INTEGER NOT NULL DEFAULT 1,
+            kdf_algorithm    TEXT NOT NULL DEFAULT 'argon2id',
+            kdf_salt         TEXT NOT NULL,
+            kdf_memory       INTEGER NOT NULL,
+            kdf_iterations   INTEGER NOT NULL,
+            kdf_parallelism  INTEGER NOT NULL,
+            wrapped_key      TEXT NOT NULL,
+            created_at       TEXT NOT NULL,
+            updated_at       TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS passwords (
+            id           TEXT PRIMARY KEY NOT NULL,
+            title        TEXT NOT NULL,
+            username     TEXT,
+            url          TEXT,
+            password_enc TEXT NOT NULL,
+            note_enc     TEXT,
+            totp_ids     TEXT NOT NULL DEFAULT '[]',
+            tags         TEXT NOT NULL DEFAULT '[]',
+            vault_id     TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+    add_column_if_not_exists(pool, "passwords", "totp_ids", "TEXT NOT NULL DEFAULT '[]'").await?;
+
     Ok(())
 }

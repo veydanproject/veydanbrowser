@@ -8,7 +8,10 @@
   import type { TotpPreview } from '$lib/types';
   import { api, formatError } from '$lib/mobile/api';
   import { t } from '$lib/mobile/i18n';
-  import TotpLabelField from '$lib/components/mobile/TotpLabelField.svelte';
+  import EntityLabelField from '$lib/components/mobile/EntityLabelField.svelte';
+  import TotpNoteLinks from '$lib/components/TotpNoteLinks.svelte';
+  import { syncTotpNotes } from '$lib/totp-notes';
+  import { onMount } from 'svelte';
 
   type Mode = 'manual' | 'uri';
   let mode = $state<Mode>('manual');
@@ -28,8 +31,16 @@
   let preview = $state<TotpPreview | null>(null);
 
   let tags = $state<string[]>([]);
+  let notes = $state<{ id: string; title: string }[]>([]);
+  let noteIds = $state<string[]>([]);
   let error = $state('');
   let saving = $state(false);
+
+  onMount(() => {
+    api.notes.list().then((items) => {
+      notes = items.map((n) => ({ id: n.id, title: n.title }));
+    }).catch(() => {});
+  });
 
   // Live preview of a pasted otpauth link; parse errors stay silent until Save.
   $effect(() => {
@@ -52,11 +63,12 @@
 
     saving = true;
     try {
-      await api.totp.add(
+      const created = await api.totp.add(
         mode === 'manual'
           ? { name: name.trim(), issuer: issuer.trim() || null, secret, algorithm, digits, period, tags }
           : { name: name.trim(), issuer: issuer.trim() || null, uri: uri.trim(), tags },
       );
+      await syncTotpNotes(created.id, noteIds, []);
       goto('/totp', { replaceState: true });
     } catch (e) {
       error = formatError(e);
@@ -113,7 +125,8 @@
     <input id="issuer" bind:value={issuer} placeholder={$t('totp_field_issuer_placeholder')} autocomplete="off" />
   </div>
 
-  <TotpLabelField {tags} onchange={(next) => (tags = next)} />
+  <EntityLabelField {tags} onchange={(next) => (tags = next)} />
+  <TotpNoteLinks {notes} selected={noteIds} onchange={(ids) => (noteIds = ids)} />
 
   {#if mode === 'manual'}
     <div class="m-field">

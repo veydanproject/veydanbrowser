@@ -5,13 +5,15 @@
   import { onMount, tick } from 'svelte';
   import { notesStore } from '$lib/store/notes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
+  import { passwordStore } from '$lib/store/passwords.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { api, isNotesWindow } from '$lib/api';
   import type { NoteCreateInput } from '$lib/types';
   import { toNoteFilter, contextBindings, templateNotes, type ActiveFilter } from '$lib/notes-filter';
-  import { totpMatchesFilter } from '$lib/totp-tags';
+  import { entityMatchesFilter } from '$lib/entity-tags';
   import TotpNoteCodes from '$lib/components/TotpNoteCodes.svelte';
+  import PasswordNoteCodes from '$lib/components/passwords/PasswordNoteCodes.svelte';
   import TemplateSelect from '$lib/components/notes/TemplateSelect.svelte';
   import NoteLockGate from '$lib/components/notes/NoteLockGate.svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
@@ -95,6 +97,7 @@
   onMount(() => {
     notesStore.ensureLoaded();
     totpStore.ensureLoaded();
+    passwordStore.ensureLoaded();
     notesStore.refreshTrash();
     workspacesStore.ensureLoaded();
     profilesStore.ensureLoaded();
@@ -106,7 +109,10 @@
 
   const isTrash = $derived(activeFilter.type === 'trash');
   const matchedTotp = $derived(
-    totpStore.list.filter((entry) => totpMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
+    totpStore.list.filter((entry) => entityMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
+  );
+  const matchedPasswords = $derived(
+    passwordStore.list.filter((entry) => entityMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
   );
 
   // Ordering shared by list and table views; FTS results keep their relevance order
@@ -413,6 +419,9 @@
       <div class="list-scroll">
         {#if matchedTotp.length}
           <TotpNoteCodes entries={matchedTotp} />
+        {/if}
+        {#if matchedPasswords.length}
+          <PasswordNoteCodes entries={matchedPasswords} />
         {/if}
         {#if viewMode === 'table'}
           <NotesTable
