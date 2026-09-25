@@ -25,8 +25,8 @@ pub enum AppError {
     VaultMismatch,
     #[error("Could not decrypt this entry")]
     DecryptFailed,
-    #[error("Saved passwords must be deleted before the lock can be turned off")]
-    VaultHasEntries,
+    #[error("Recovery key does not match")]
+    RecoveryInvalid,
     #[error("{0}")]
     Other(String),
 }

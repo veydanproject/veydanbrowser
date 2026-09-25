@@ -28,6 +28,8 @@ import type {
   CaptureRule,
   NoteSmartView,
   NoteLockStatus,
+  LockSecret,
+  LockSetResult,
   SmartViewInput,
   NoteFolder,
   NoteHistoryEntry,
@@ -351,8 +353,17 @@ export const api = {
     import: (paths: string[], bindings: string[], password?: string) =>
       call<string[]>('note_import', { paths, bindings, password: password ?? null }),
     lockStatus: () => call<NoteLockStatus>('notes_lock_status'),
-    lockSet: (password: string | null, current?: string) =>
-      call<NoteLockStatus>('notes_lock_set', { password, current: current ?? null }),
+    lockSet: (secret: LockSecret | null, current?: string) =>
+      call<LockSetResult>('notes_lock_set', {
+        password: secret?.password ?? null,
+        kind: secret?.kind ?? null,
+        hint: secret?.hint ?? null,
+        current: current ?? null,
+      }),
+    lockRecoveryRegenerate: (current: string) => call<string>('notes_lock_recovery_regenerate', { current }),
+    lockRecoveryCheck: (code: string) => call<void>('notes_lock_recovery_check', { code }),
+    lockRecover: (code: string, secret: LockSecret) =>
+      call<LockSetResult>('notes_lock_recover', { code, ...secret }),
     lockTimeoutSet: (minutes: number) => call<NoteLockStatus>('notes_lock_timeout_set', { minutes }),
     lockUnlock: (password: string) => call<NoteLockStatus>('notes_lock_unlock', { password }),
     lockNow: () => call<NoteLockStatus>('notes_lock_lock'),

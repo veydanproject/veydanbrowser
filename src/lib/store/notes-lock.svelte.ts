@@ -2,13 +2,21 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 import { api } from '$lib/api';
-import type { NoteLockStatus } from '$lib/types';
+import type { LockSecret, NoteLockStatus } from '$lib/types';
 
 const TOUCH_INTERVAL_MS = 20_000;
 
 /** Lock state shared by every notes surface; the backend is the source of truth. */
 class NotesLockStore {
-  status = $state<NoteLockStatus>({ enabled: false, locked: false, timeout_min: 5, vault: 'none' });
+  status = $state<NoteLockStatus>({
+    enabled: false,
+    locked: false,
+    timeout_min: 5,
+    vault: 'none',
+    kind: 'password',
+    hint: null,
+    has_recovery: false,
+  });
   ready = $state(false);
 
   private _lastTouch = 0;
@@ -44,8 +52,26 @@ class NotesLockStore {
     this.status = status;
   }
 
-  async setPassword(password: string | null, current?: string) {
-    this.status = await api.notes.lockSet(password, current);
+  /** Enable, change or remove the lock. Returns the recovery key when one was just created. */
+  async setSecret(secret: LockSecret | null, current?: string): Promise<string | null> {
+    const { recovery_key, ...status } = await api.notes.lockSet(secret, current);
+    this.status = status;
+    return recovery_key;
+  }
+
+  /** New recovery key; the previous one stops working. */
+  async regenerateRecovery(current: string): Promise<string> {
+    const code = await api.notes.lockRecoveryRegenerate(current);
+    await this.refresh();
+    return code;
+  }
+
+  /** Replace the lock secret with the recovery key; returns the new recovery key. */
+  async recover(code: string, secret: LockSecret): Promise<string> {
+    const epoch = ++this._epoch;
+    const { recovery_key, ...status } = await api.notes.lockRecover(code, secret);
+    if (epoch === this._epoch) this.status = status;
+    return recovery_key ?? '';
   }
 
   async setTimeout(minutes: number) {

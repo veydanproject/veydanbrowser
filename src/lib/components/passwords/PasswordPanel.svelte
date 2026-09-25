@@ -10,7 +10,7 @@
   import PasswordList from './PasswordList.svelte';
   import PasswordCard from './PasswordCard.svelte';
   import PasswordEditModal from './PasswordEditModal.svelte';
-  import PasswordLockedHint from './PasswordLockedHint.svelte';
+  import PasswordLockBadge from './PasswordLockBadge.svelte';
 
   interface Props {
     profileId: string;
@@ -25,7 +25,7 @@
   const entries = $derived(passwordStore.byProfile(profileId));
   const selected = $derived(entries.find((entry) => entry.id === selectedId) ?? null);
   const editingEntry = $derived(passwordStore.list.find((entry) => entry.id === editingId) ?? null);
-  const canWrite = $derived(notesLock.status.enabled && !notesLock.locked && notesLock.status.vault !== 'mismatch');
+  const canWrite = $derived(!notesLock.locked && notesLock.status.vault !== 'mismatch');
 
   onMount(() => {
     void notesLock.refresh();
@@ -35,14 +35,13 @@
 
 <div class="panel">
   <div class="bar">
-    <span>{entries.length}</span>
+    <span class="count"><PasswordLockBadge size={9} />{entries.length}</span>
     {#if canWrite}
       <button class="btn btn-primary btn-sm" onclick={() => (creating = true)}>
         <Icon name="plus" size={14} /> {$t('pw_btn_add')}
       </button>
     {/if}
   </div>
-  <PasswordLockedHint />
   {#if selected}
     <button type="button" class="btn btn-ghost btn-sm" onclick={() => (selectedId = null)}>{$t('pw_back')}</button>
     <PasswordCard entry={selected} onedit={() => (editingId = selected.id)} ondeleted={() => (selectedId = null)} />
@@ -63,5 +62,6 @@
 <style>
   .panel { display: flex; flex-direction: column; gap: var(--sp-3); }
   .bar { display: flex; justify-content: space-between; align-items: center; color: var(--text-faint); font-size: 0.78rem; }
+  .count { display: inline-flex; align-items: center; gap: 2px; }
   .muted { color: var(--text-2); font-size: 0.85rem; }
 </style>

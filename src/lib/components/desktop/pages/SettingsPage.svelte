@@ -25,7 +25,7 @@
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import NoteCaptureRules from '$lib/components/notes/NoteCaptureRules.svelte';
   import NoteAttachmentPolicy from '$lib/components/notes/NoteAttachmentPolicy.svelte';
-  import NoteLockSettings from '$lib/components/notes/NoteLockSettings.svelte';
+  import LockSetupForm from '$lib/components/lock/LockSetupForm.svelte';
   import SyncSettings from '$lib/components/SyncSettings.svelte';
   import BugReportDialog from '$lib/components/BugReportDialog.svelte';
   import HotkeySettings from '$lib/components/desktop/HotkeySettings.svelte';
@@ -783,11 +783,11 @@
     <NoteCaptureRules />
   </div>
 
-  <!-- Notes lock -->
+  <!-- App lock -->
   <div class="card">
-    <div class="card-title">{$t('settings_lock_section')}</div>
+    <div class="card-title">{$t('settings_lock_section')} <span class="badge badge-warn">{$t('settings_sync_beta')}</span></div>
     <p class="muted">{$t('settings_lock_hint')}</p>
-    <NoteLockSettings />
+    <LockSetupForm />
   </div>
 
   <!-- Backup -->

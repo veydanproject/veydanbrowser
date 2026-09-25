@@ -61,9 +61,13 @@ const NO_LINKS: &[LinkSpec] = &[];
 pub const SETTING_ENTITY: &str = "setting";
 
 /// User preferences shared across devices; paths, credentials and sync state stay local.
+/// The lock hash rides inside `password_vault`, next to the wrap it belongs to.
 const SETTING_FILTER: &str =
     "key IN ('ui_locale', 'minimize_to_tray', 'close_to_tray', 'start_hidden',
     'notes_lock_timeout_min', 'notes_capture_rules', 'quick_capture_shortcut')";
+
+/// Lock keys once pushed as settings by a dev build; such ops are ignored.
+const LOCAL_ONLY_SETTINGS: &[&str] = &["notes_lock_hash", "lock_kind", "lock_hint"];
 
 pub const SPECS: &[TableSpec] = &[
     TableSpec {
@@ -275,6 +279,11 @@ pub const SPECS: &[TableSpec] = &[
             "kdf_iterations",
             "kdf_parallelism",
             "wrapped_key",
+            "recovery_salt",
+            "recovery_wrapped_key",
+            "lock_hash",
+            "lock_kind",
+            "lock_hint",
             "created_at",
             "updated_at",
         ],
@@ -1171,6 +1180,12 @@ pub async fn apply_remote(app: &AppHandle, ops: &[Op], scope: RowScope) -> CmdRe
             ..Default::default()
         };
 
+        if spec.entity == SETTING_ENTITY && LOCAL_ONLY_SETTINGS.contains(&id) {
+            st.deleted = true;
+            save_row_state(db, &st).await?;
+            continue;
+        }
+
         if op.deleted {
             if matches!(spec.delete, Delete::Ignore) {
                 continue;
@@ -1264,6 +1279,7 @@ pub async fn finish_apply(app: &AppHandle, outcome: &ApplyOutcome) {
     if outcome.changed.contains("password_vault") {
         let state = app.state::<AppState>();
         crate::vault::refresh_after_sync(&state).await;
+        crate::commands::notes::adopt_synced_lock(app, &state).await;
         let _ = app.emit("passwords://vault-changed", ());
     }
     if !outcome.changed.is_empty() {

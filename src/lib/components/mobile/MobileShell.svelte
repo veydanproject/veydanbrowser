@@ -14,6 +14,7 @@
   import BottomNav from '$lib/components/mobile/BottomNav.svelte';
   import HubSheet from '$lib/components/mobile/HubSheet.svelte';
   import NotesMoreSheet from '$lib/components/mobile/NotesMoreSheet.svelte';
+  import AppLockGate from '$lib/components/AppLockGate.svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
 
   let { children }: { children: Snippet } = $props();
@@ -46,16 +47,20 @@
 </script>
 
 <div class="shell">
-  <div class="screen">
-    {@render children()}
-  </div>
-  {#if kind}
-    <BottomNav {items} activeId={active} hubActive={hubOpen} onhub={() => (hubOpen = true)} />
-  {/if}
+  <AppLockGate>
+    <div class="screen">
+      {@render children()}
+    </div>
+    {#if kind}
+      <BottomNav {items} activeId={active} hubActive={hubOpen} onhub={() => (hubOpen = true)} />
+    {/if}
+  </AppLockGate>
 </div>
 
-<HubSheet open={hubOpen} onclose={() => (hubOpen = false)} />
-<NotesMoreSheet open={moreOpen} onclose={() => (moreOpen = false)} />
+{#if !notesLock.locked}
+  <HubSheet open={hubOpen} onclose={() => (hubOpen = false)} />
+  <NotesMoreSheet open={moreOpen} onclose={() => (moreOpen = false)} />
+{/if}
 
 <style>
   .shell {

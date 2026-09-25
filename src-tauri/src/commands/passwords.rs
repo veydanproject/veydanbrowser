@@ -167,6 +167,8 @@ pub async fn password_create(
     let totp_ids = clean_ids(req.totp_ids.unwrap_or_default());
     totp_all_exist(&state, &totp_ids).await?;
     let (key, vault_id) = vault::ensure_key(&state).await?;
+    // A row created here must tell peers which secret wraps it.
+    crate::commands::notes::publish_lock_meta(&state).await?;
     let id = Uuid::new_v4().to_string();
     let password_enc = encrypt_secret(&key, &id, "password", &req.password)?;
     let note_enc = match blank(req.note) {
@@ -378,6 +380,9 @@ pub async fn password_vault_reset(
     tx.commit().await.map_err(AppError::db)?;
     state.vault.lock();
     vault::open_with_password(&state, &password).await?;
+    // Recreate the row at once so peers see a rewrap, not a vanished lock.
+    vault::ensure_key(&state).await?;
+    crate::commands::notes::publish_lock_meta(&state).await?;
     state.notes_lock.touch();
     Ok(())
 }

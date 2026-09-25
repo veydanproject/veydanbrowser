@@ -28,6 +28,7 @@
   import { totpStore } from '$lib/store/totp.svelte';
   import { passwordStore } from '$lib/store/passwords.svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
+  import AppLockGate from '$lib/components/AppLockGate.svelte';
   import { updaterStore } from '$lib/store/updater.svelte';
   import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import { listen } from '@tauri-apps/api/event';
@@ -305,6 +306,7 @@
       <WindowControls />
     </div>
   {/if}
+  <AppLockGate>
   {#if !standaloneNotes}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <header class="topbar">
@@ -411,13 +413,14 @@
       </div>
     {/if}
   {/if}
+  </AppLockGate>
  </div>
 </div>
 
 {#if isCsd}
   <ResizeHandles />
 {/if}
-{#if !standaloneNotes}
+{#if !standaloneNotes && !notesLock.locked}
   <PasswordGenerator bind:open={pwgenOpen} />
   <TotpGenerator bind:open={totpOpen} context="global" />
   <PasswordDrawer bind:open={passwordsOpen} context="global" />

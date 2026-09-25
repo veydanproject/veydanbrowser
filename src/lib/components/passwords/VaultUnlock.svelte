@@ -50,10 +50,15 @@
 {#snippet form()}
   <form class="form" onsubmit={(e) => { e.preventDefault(); void submit(); }}>
     <input
-      type="password"
+      class:pin={notesLock.status.kind === 'pin'}
+      type={notesLock.status.kind === 'pin' ? 'text' : 'password'}
+      inputmode={notesLock.status.kind === 'pin' ? 'numeric' : 'text'}
+      pattern={notesLock.status.kind === 'pin' ? '[0-9]*' : undefined}
       bind:value={password}
       placeholder={$t('notes_lock_password')}
       autocomplete="off"
+      autocapitalize="off"
+      spellcheck="false"
     />
     {#if wrong}<p class="err">{$t('notes_lock_wrong')}</p>{/if}
     <button class="btn btn-primary" type="submit" disabled={!password || busy}>{$t('notes_lock_unlock')}</button>
@@ -83,4 +88,5 @@
     font: inherit;
   }
   .err { margin: 0; color: var(--danger-text); font-size: var(--fs-xs); }
+  input.pin { -webkit-text-security: disc; }
 </style>

@@ -9,6 +9,6 @@ export function passwordErrorKey(e: unknown): TranslationKey | null {
   if (hasErrorCode(e, 'vault_locked')) return 'pw_err_locked';
   if (hasErrorCode(e, 'vault_mismatch')) return 'pw_err_mismatch';
   if (hasErrorCode(e, 'decrypt_failed')) return 'pw_err_decrypt';
-  if (hasErrorCode(e, 'vault_has_entries')) return 'pw_err_has_entries';
+  if (hasErrorCode(e, 'recovery_invalid')) return 'lock_recovery_invalid';
   return null;
 }

@@ -15,6 +15,8 @@
     side?: 'right' | 'left';
     closeOnBackdrop?: boolean;
     onclose?: () => void;
+    /** Small marker rendered right after the title. */
+    titleBadge?: Snippet;
     /** Extra controls rendered in the header, before the close button. */
     actions?: Snippet;
     /** Fixed region between the header and the scrolling body (e.g. a tab bar or toolbar). */
@@ -30,6 +32,7 @@
     side = 'right',
     closeOnBackdrop = true,
     onclose,
+    titleBadge,
     actions,
     subheader,
     children,
@@ -76,6 +79,7 @@
       {#if title || actions}
         <header class="drawer-header">
           {#if title}<h2 class="drawer-title">{title}</h2>{/if}
+          {@render titleBadge?.()}
           <div class="drawer-actions">
             {@render actions?.()}
             <button class="drawer-close" onclick={close} aria-label="Close" title="Close">

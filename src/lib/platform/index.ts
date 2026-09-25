@@ -35,7 +35,7 @@ export const capabilities = {
 export const DESKTOP_ONLY_ROUTES = ['/workspace', '/proxies', '/terminal', '/files', '/notes/quick'];
 
 /** Route prefixes that exist only in the mobile UI. */
-export const MOBILE_ONLY_ROUTES = ['/search', '/tools', '/totp', '/notes/tags', '/settings/sync'];
+export const MOBILE_ONLY_ROUTES = ['/search', '/tools', '/totp', '/notes/tags', '/settings/sync', '/settings/lock'];
 
 function startsWithAny(pathname: string, prefixes: string[]): boolean {
   return prefixes.some((p) => pathname === p || pathname.startsWith(`${p}/`));

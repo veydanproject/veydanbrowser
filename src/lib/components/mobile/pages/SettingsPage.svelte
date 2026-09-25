@@ -16,6 +16,7 @@
   import { formatError } from '$lib/utils';
   import { notesStore } from '$lib/store/notes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
+  import { notesLock } from '$lib/store/notes-lock.svelte';
 
   const locales: { id: Locale; label: string }[] = [
     { id: 'en', label: 'English' },
@@ -55,6 +56,11 @@
     sync?.running ? $t('settings_sync_running')
     : sync?.enabled && sync.joined ? $t('settings_sync_connected')
     : $t('settings_sync_disconnected'),
+  );
+  const lockLabel = $derived(
+    !notesLock.status.enabled ? $t('settings_lock_status_off')
+    : notesLock.status.kind === 'pin' ? $t('lock_kind_pin')
+    : $t('lock_kind_password'),
   );
 
   function pickApp(id: string) {
@@ -122,6 +128,7 @@
   }
 
   onMount(() => {
+    void notesLock.refresh();
     void shared.system.hostInfo().then((h) => (info = h));
     void api.sync.status().then((s) => (sync = s)).catch(() => {});
     const un = onSyncStatus(() => api.sync.status().then((s) => (sync = s)).catch(() => {}));
@@ -153,6 +160,15 @@
       <span class="m-row-value">{localeLabel}</span>
       <span class="chev"><Icon name="chevron-right" size={16} /></span>
     </button>
+  </div>
+
+  <div class="m-section">{$t('settings_security')}</div>
+  <div class="m-list">
+    <a class="m-row" href="/settings/lock">
+      <span class="m-row-label">{$t('settings_lock_section')} <span class="badge badge-warn">{$t('settings_sync_beta')}</span></span>
+      <span class="m-row-value" class:ok={notesLock.status.enabled}>{notesLock.ready ? lockLabel : ''}</span>
+      <span class="chev"><Icon name="chevron-right" size={16} /></span>
+    </a>
   </div>
 
   <div class="m-section">{$t('settings_sync_section')}</div>

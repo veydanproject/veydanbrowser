@@ -6,7 +6,7 @@
   import { goto } from '$app/navigation';
   import Icon from '$lib/Icon.svelte';
   import PasswordList from '$lib/components/passwords/PasswordList.svelte';
-  import PasswordLockedHint from '$lib/components/passwords/PasswordLockedHint.svelte';
+  import PasswordLockBadge from '$lib/components/passwords/PasswordLockBadge.svelte';
   import { api, formatError, onSyncChanged } from '$lib/mobile/api';
   import { t } from '$lib/mobile/i18n';
   import { notesLock } from '$lib/store/notes-lock.svelte';
@@ -18,7 +18,7 @@
   let search = $state('');
   let error = $state('');
 
-  const canAdd = $derived(notesLock.status.enabled && !notesLock.locked && notesLock.status.vault !== 'mismatch');
+  const canAdd = $derived(!notesLock.locked && notesLock.status.vault !== 'mismatch');
 
   async function load() {
     try {
@@ -54,7 +54,7 @@
 <div class="m-page">
   <div class="m-header">
     <a class="m-ibtn" href="/" aria-label={$t('common_back')}><Icon name="chevron-left" size={24} /></a>
-    <h1 class="m-title">{$t('pw_title')}</h1>
+    <h1 class="m-title title-with-badge">{$t('pw_title')}<PasswordLockBadge size={11} /></h1>
     {#if canAdd}
       <a class="m-ibtn" href="/passwords/add" aria-label={$t('pw_btn_add')}><Icon name="plus" size={24} /></a>
     {/if}
@@ -66,7 +66,6 @@
     </div>
   </div>
   <div class="m-body">
-    <PasswordLockedHint />
     {#if error}<div class="m-error">{error}</div>{/if}
     {#if entries.length === 0}
       <div class="m-empty">
@@ -84,3 +83,7 @@
     {/if}
   </div>
 </div>
+
+<style>
+  .title-with-badge { display: flex; align-items: center; gap: 2px; }
+</style>

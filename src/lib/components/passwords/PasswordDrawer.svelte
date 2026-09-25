@@ -16,7 +16,7 @@
   import PasswordList from './PasswordList.svelte';
   import PasswordCard from './PasswordCard.svelte';
   import PasswordEditModal from './PasswordEditModal.svelte';
-  import PasswordLockedHint from './PasswordLockedHint.svelte';
+  import PasswordLockBadge from './PasswordLockBadge.svelte';
 
   interface Props {
     open?: boolean;
@@ -33,9 +33,7 @@
   /** null shows every workspace */
   let activeWorkspace = $state<string | null>(null);
 
-  const canWrite = $derived(
-    notesLock.status.enabled && !notesLock.locked && notesLock.status.vault !== 'mismatch',
-  );
+  const canWrite = $derived(!notesLock.locked && notesLock.status.vault !== 'mismatch');
   const selected = $derived(passwordStore.list.find((entry) => entry.id === selectedId) ?? null);
   const editingEntry = $derived(passwordStore.list.find((entry) => entry.id === editingId) ?? null);
 
@@ -50,7 +48,7 @@
   });
 
   $effect(() => {
-    if (notesLock.status.enabled && !notesLock.status.locked && passwordStore.loaded) {
+    if (!notesLock.locked && passwordStore.loaded) {
       void passwordStore.refresh();
     }
   });
@@ -119,6 +117,10 @@
 </script>
 
 <Drawer bind:open title={$t('pw_title')} width="var(--drawer-w-lg)">
+  {#snippet titleBadge()}
+    <PasswordLockBadge />
+  {/snippet}
+
   {#snippet actions()}
     <span class="count">{filtered.length}</span>
     {#if canWrite && !selected}
@@ -153,10 +155,6 @@
       {/if}
     {/if}
   {/snippet}
-
-  {#if !selected}
-    <PasswordLockedHint />
-  {/if}
 
   {#if selected}
     <button type="button" class="btn btn-ghost btn-sm back" onclick={() => (selectedId = null)}>

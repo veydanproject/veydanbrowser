@@ -876,6 +876,13 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     )
     .execute(pool)
     .await?;
+    // Second wrap of the vault key under the recovery code
+    add_column_if_not_exists(pool, "password_vault", "recovery_salt", "TEXT").await?;
+    add_column_if_not_exists(pool, "password_vault", "recovery_wrapped_key", "TEXT").await?;
+    // Lock hash travels with the wrap it matches, so peers never see one without the other
+    add_column_if_not_exists(pool, "password_vault", "lock_hash", "TEXT").await?;
+    add_column_if_not_exists(pool, "password_vault", "lock_kind", "TEXT").await?;
+    add_column_if_not_exists(pool, "password_vault", "lock_hint", "TEXT").await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS passwords (

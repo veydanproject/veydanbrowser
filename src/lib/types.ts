@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 export type AppError = {
-  code: 'db' | 'io' | 'browser' | 'proxy' | 'not_found' | 'conflict_changed' | 'vault_locked' | 'vault_mismatch' | 'decrypt_failed' | 'vault_has_entries' | 'other';
+  code: 'db' | 'io' | 'browser' | 'proxy' | 'not_found' | 'conflict_changed' | 'vault_locked' | 'vault_mismatch' | 'decrypt_failed' | 'recovery_invalid' | 'other';
   message: string;
 };
 
@@ -444,6 +444,23 @@ export interface NoteLockStatus {
   timeout_min: number;
   /** `none` until the first password, `ok` when the vault exists, `mismatch` when the lock cannot unwrap it */
   vault: 'none' | 'ok' | 'mismatch';
+  kind: LockKind;
+  hint: string | null;
+  /** A recovery key wraps the vault; a lost PIN/password can be replaced with it. */
+  has_recovery: boolean;
+}
+
+export type LockKind = 'pin' | 'password';
+
+export interface LockSecret {
+  password: string;
+  kind: LockKind;
+  hint: string | null;
+}
+
+/** Lock status plus the recovery key when one was just created; it is shown once. */
+export interface LockSetResult extends NoteLockStatus {
+  recovery_key: string | null;
 }
 
 export interface NoteSmartView {

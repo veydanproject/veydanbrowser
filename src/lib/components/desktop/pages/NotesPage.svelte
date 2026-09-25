@@ -15,7 +15,6 @@
   import TotpNoteCodes from '$lib/components/TotpNoteCodes.svelte';
   import PasswordNoteCodes from '$lib/components/passwords/PasswordNoteCodes.svelte';
   import TemplateSelect from '$lib/components/notes/TemplateSelect.svelte';
-  import NoteLockGate from '$lib/components/notes/NoteLockGate.svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
   import Icon from '$lib/Icon.svelte';
   import NotesList from '$lib/components/notes/NotesList.svelte';
@@ -293,7 +292,6 @@
 <NoteTransferDialog mode={transferMode} {exportIds} {importBindings} onclose={() => (transferMode = null)} />
 
 <div class="page page--fill notes-page">
-  <NoteLockGate>
   <!-- Body: 3 columns full height per redesign (search lives in the sidebar) -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="page-body" bind:this={pageBodyEl} class:is-dragging={dragging !== null}>
@@ -462,7 +460,6 @@
       <NoteEditor allTags={notesStore.allTags} folders={notesStore.folders} />
     </div>
   </div>
-  </NoteLockGate>
 </div>
 
 <!-- Create modal -->

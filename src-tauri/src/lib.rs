@@ -51,7 +51,8 @@ use commands::notes::{
     note_smart_view_delete, note_smart_view_list, note_smart_view_update, note_sync,
     note_tag_create, note_tag_delete, note_tag_list, note_tag_update, note_trash_empty,
     note_update, notes_attachment_policy_get, notes_attachment_policy_set, notes_lock_lock,
-    notes_lock_set, notes_lock_status, notes_lock_timeout_set, notes_lock_touch, notes_lock_unlock,
+    notes_lock_recover, notes_lock_recovery_check, notes_lock_recovery_regenerate, notes_lock_set,
+    notes_lock_status, notes_lock_timeout_set, notes_lock_touch, notes_lock_unlock,
 };
 #[cfg(desktop)]
 use commands::settings::{
@@ -410,6 +411,9 @@ fn run_mobile() {
             notes_lock_unlock,
             notes_lock_lock,
             notes_lock_touch,
+            notes_lock_recovery_regenerate,
+            notes_lock_recovery_check,
+            notes_lock_recover,
             note_history_list,
             note_history_get,
             note_history_diff,
@@ -771,6 +775,9 @@ fn run_desktop() {
             notes_lock_unlock,
             notes_lock_lock,
             notes_lock_touch,
+            notes_lock_recovery_regenerate,
+            notes_lock_recovery_check,
+            notes_lock_recover,
             note_open_window,
             note_history_list,
             note_history_get,

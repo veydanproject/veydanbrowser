@@ -13,7 +13,6 @@
   import { contextBindings, toNoteFilter, templateNotes, type ActiveFilter } from '$lib/notes-filter';
   import { binding, type EntityKind } from '$lib/bindings';
   import TemplateSelect from './TemplateSelect.svelte';
-  import NoteLockGate from './NoteLockGate.svelte';
   import Icon from '$lib/Icon.svelte';
   import NotesList from './NotesList.svelte';
   import ListBulkActions from './ListBulkActions.svelte';
@@ -335,7 +334,6 @@
         </div>
       </div>
 
-      <NoteLockGate>
       <!-- Body: sidebar + list + editor (same layout as the Notes screen) -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="panel-body" bind:this={panelBodyEl} class:is-dragging={dragging !== null}>
@@ -473,7 +471,6 @@
           </div>
         </div>
       {/if}
-      </NoteLockGate>
     </div>
   </div>
 {/if}

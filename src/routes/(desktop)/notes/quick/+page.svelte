@@ -6,7 +6,6 @@
   import { api } from '$lib/api';
   import { notesStore } from '$lib/store/notes.svelte';
   import Icon from '$lib/Icon.svelte';
-  import NoteLockGate from '$lib/components/notes/NoteLockGate.svelte';
   import { t } from '$lib/i18n';
 
   let text = $state('');
@@ -84,7 +83,6 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<NoteLockGate>
 <div class="quick">
   <textarea
     bind:this={textarea}
@@ -116,7 +114,6 @@
     </div>
   </div>
 </div>
-</NoteLockGate>
 
 <style>
   .quick {

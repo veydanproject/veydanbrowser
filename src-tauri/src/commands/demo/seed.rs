@@ -544,7 +544,7 @@ const DEMO_LOCK: &str = "demo";
 async fn seed_passwords(state: &AppState, pack: &DemoPack, now: &str) -> CmdResult<()> {
     let phc = crate::commands::notes::lock::hash_password(DEMO_LOCK)?;
     sqlx::query(
-        "INSERT INTO app_settings (key, value) VALUES ('notes_lock_hash', ?)
+        "INSERT INTO app_settings (key, value) VALUES ('notes_lock_hash', ?), ('lock_kind', 'password')
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
     .bind(&phc)
@@ -553,7 +553,7 @@ async fn seed_passwords(state: &AppState, pack: &DemoPack, now: &str) -> CmdResu
     .map_err(AppError::db)?;
 
     let (key, vault_id) = crate::vault::install_for_seed(state, DEMO_LOCK).await?;
-    state.notes_lock.touch();
+    state.notes_lock.open_session(&phc);
 
     let titles: Vec<(String, String)> = sqlx::query_as("SELECT id, title FROM notes WHERE deleted = 0")
         .fetch_all(&state.db)

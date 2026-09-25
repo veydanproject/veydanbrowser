@@ -73,10 +73,11 @@ pub use links::{
     note_backlinks, note_entity_notes, note_links, note_related, note_resolve_link,
 };
 pub use lock::{
-    notes_lock_lock, notes_lock_set, notes_lock_status, notes_lock_timeout_set, notes_lock_touch,
-    notes_lock_unlock, start_auto_lock, NotesLock,
+    notes_lock_lock, notes_lock_recover, notes_lock_recovery_check, notes_lock_recovery_regenerate,
+    notes_lock_set, notes_lock_status, notes_lock_timeout_set, notes_lock_touch, notes_lock_unlock,
+    start_auto_lock, NotesLock,
 };
-pub(crate) use lock::require_lock_password;
+pub(crate) use lock::{adopt_synced_lock, publish_lock_meta, require_lock_password};
 pub use nav::note_nav;
 #[cfg(desktop)]
 pub use quick_capture::{
