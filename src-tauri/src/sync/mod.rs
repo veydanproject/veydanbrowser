@@ -24,6 +24,7 @@ mod rows;
 mod state;
 
 pub use config::{check_install_marker, SyncConfig};
+#[cfg(desktop)]
 pub(crate) use rows::EVENT_CHANGED;
 
 use crate::error::{AppError, CmdResult};

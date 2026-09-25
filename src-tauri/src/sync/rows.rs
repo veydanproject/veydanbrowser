@@ -9,8 +9,8 @@
 //! A delete op carries an empty payload.
 
 use super::state::{load_row_state, load_row_states, save_row_state, RowSyncState};
-#[cfg(desktop)]
 use crate::commands::notes::TAG_PLACEHOLDER_COLOR;
+#[cfg(desktop)]
 use crate::commands::profiles::profile_delete;
 use crate::error::{AppError, CmdResult};
 use crate::AppState;
