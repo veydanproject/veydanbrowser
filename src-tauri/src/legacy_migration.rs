@@ -254,7 +254,7 @@ fn run(app: AppHandle) {
     // 6) Windows only: point the old shortcuts at this binary, drop the old install.
     // Failures here are warnings; the data is already migrated.
     emit_progress(&app, "shortcuts", 100, total, total);
-    let install = windows_install::finish();
+    let install = windows_install::cleanup();
 
     state.set(
         &app,
@@ -353,13 +353,54 @@ pub struct InstallOutcome {
     pub warnings: Vec<String>,
 }
 
+/// Regular startup: users who migrated before this step existed still have the
+/// old shortcuts and install. Runs off the main thread; nothing to report to the UI.
+pub fn cleanup_old_install_async() {
+    if !windows_install::leftovers_present() {
+        return;
+    }
+    std::thread::spawn(|| {
+        let out = windows_install::cleanup();
+        for w in &out.warnings {
+            eprintln!("legacy cleanup: {w}");
+        }
+    });
+}
+
 #[cfg(target_os = "windows")]
 mod windows_install {
     use super::{InstallOutcome, NEW_PRODUCT, OLD_IDENTIFIER, OLD_PRODUCT};
     use std::os::windows::process::CommandExt;
+    use std::path::PathBuf;
     use std::process::Command;
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    /// Cheap check before spawning PowerShell: any old shortcut or the old uninstaller.
+    pub fn leftovers_present() -> bool {
+        let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+        let lnk = format!("{OLD_PRODUCT}.lnk");
+        let mut candidates = Vec::new();
+        if let Some(appdata) = env("APPDATA") {
+            candidates.push(appdata.join(r"Microsoft\Windows\Start Menu\Programs").join(&lnk));
+            candidates.push(
+                appdata
+                    .join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
+                    .join(&lnk),
+            );
+        }
+        if let Some(home) = env("USERPROFILE") {
+            candidates.push(home.join("Desktop").join(&lnk));
+            candidates.push(home.join("OneDrive").join("Desktop").join(&lnk));
+        }
+        if let Some(local) = env("LOCALAPPDATA") {
+            candidates.push(local.join(OLD_PRODUCT).join("uninstall.exe"));
+        }
+        if let Some(pf) = env("ProgramFiles") {
+            candidates.push(pf.join(OLD_PRODUCT).join("uninstall.exe"));
+        }
+        candidates.iter().any(|p| p.exists())
+    }
 
     /// Retarget Veydan Browser shortcuts to this exe, then run the old uninstaller.
     /// One PowerShell script; each line of its output is a status flag or a warning.
@@ -423,7 +464,7 @@ foreach ($k in $keys) {
 }
 "#;
 
-    pub fn finish() -> InstallOutcome {
+    pub fn cleanup() -> InstallOutcome {
         let mut out = InstallOutcome {
             shortcuts_updated: false,
             old_uninstalled: false,
@@ -482,8 +523,12 @@ foreach ($k in $keys) {
 mod windows_install {
     use super::InstallOutcome;
 
+    pub fn leftovers_present() -> bool {
+        false
+    }
+
     /// Linux and macOS keep their launchers: the updater replaces the binary in place.
-    pub fn finish() -> InstallOutcome {
+    pub fn cleanup() -> InstallOutcome {
         InstallOutcome {
             shortcuts_updated: false,
             old_uninstalled: false,

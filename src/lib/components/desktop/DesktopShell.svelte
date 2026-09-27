@@ -122,6 +122,15 @@
     };
   }
 
+  /** Fresh webview profile (new install or app rename): take the language saved in the database. */
+  async function restoreLocale() {
+    if (!isTauri || localStorage.getItem('vb_locale')) return;
+    try {
+      const saved = await api.settings.getLocale();
+      if ((saved === 'en' || saved === 'ru') && saved !== get(locale)) locale.set(saved);
+    } catch {}
+  }
+
   // Tray menu and browser extension follow the app language
   function syncTrayLabels() {
     if (!isTauri) return;
@@ -221,7 +230,7 @@
     const unsubLocale = standaloneNotes
       ? () => {}
       : locale.subscribe(() => syncTrayLabels());
-    if (!standaloneNotes) syncTrayLabels();
+    if (!standaloneNotes) void restoreLocale().then(syncTrayLabels);
 
     const trayUnlisteners = standaloneNotes
       ? []

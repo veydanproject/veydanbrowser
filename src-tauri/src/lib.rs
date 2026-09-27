@@ -611,6 +611,8 @@ fn run_desktop() {
             app.manage(legacy_migration::MigrationState::none());
 
             init_desktop(app.handle(), data_dir)?;
+            // Data already migrated by an earlier version: old shortcuts / install may remain.
+            legacy_migration::cleanup_old_install_async();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
