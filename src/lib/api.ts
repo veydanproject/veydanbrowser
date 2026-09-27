@@ -566,6 +566,11 @@ export interface MigrationPending {
 export interface MigrationReport extends MigrationPending {
   integrity_ok: boolean;
   duration_ms: number;
+  /** Windows: shortcuts retargeted to Veydan Space */
+  shortcuts_updated: boolean;
+  /** Windows: old Veydan Browser install removed */
+  old_uninstalled: boolean;
+  warnings: string[];
 }
 
 export type MigrationPhase =
@@ -576,7 +581,7 @@ export type MigrationPhase =
   | { phase: 'failed'; message: string; backup_dir: string | null; data_intact: boolean };
 
 export interface MigrationProgress {
-  step: 'backup' | 'verify_backup' | 'move' | 'verify' | 'starting';
+  step: 'backup' | 'verify_backup' | 'move' | 'verify' | 'starting' | 'shortcuts';
   percent: number;
   done_bytes: number;
   total_bytes: number;

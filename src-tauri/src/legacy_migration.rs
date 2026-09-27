@@ -8,8 +8,11 @@
 //! folder must be moved by hand.
 //!
 //! Flow: backup (copy) -> verify backup -> move (rename) -> verify new dir +
-//! sqlite integrity_check -> init_desktop. Progress and phase changes are
-//! emitted as `migration://progress` and `migration://state`.
+//! sqlite integrity_check -> init_desktop -> shortcuts (Windows). Progress and
+//! phase changes are emitted as `migration://progress` and `migration://state`.
+//!
+//! The webview profile (localStorage: language, theme, layout) lives under the
+//! app identifier too and is copied before Tauri starts, see `migrate_webview_profile`.
 
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -19,8 +22,13 @@ use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 
 const OLD_IDENTIFIER: &str = "net.veydan.browser";
+const NEW_IDENTIFIER: &str = "net.veydan.space";
 const OLD_SUBDIR: &str = "VeydanBrowser";
 const NEW_SUBDIR: &str = "VeydanSpace";
+#[cfg(target_os = "windows")]
+const OLD_PRODUCT: &str = "Veydan Browser";
+#[cfg(target_os = "windows")]
+const NEW_PRODUCT: &str = "Veydan Space";
 
 struct Dirs {
     old: PathBuf,
@@ -46,6 +54,12 @@ pub struct Report {
     pub bytes: u64,
     pub integrity_ok: bool,
     pub duration_ms: u64,
+    /// Start menu / desktop / taskbar shortcuts now point at Veydan Space (Windows).
+    pub shortcuts_updated: bool,
+    /// The old Veydan Browser install was removed (Windows).
+    pub old_uninstalled: bool,
+    /// Non-fatal problems from the shortcut step; the data is already in place.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -237,6 +251,11 @@ fn run(app: AppHandle) {
         return;
     }
 
+    // 6) Windows only: point the old shortcuts at this binary, drop the old install.
+    // Failures here are warnings; the data is already migrated.
+    emit_progress(&app, "shortcuts", 100, total, total);
+    let install = windows_install::finish();
+
     state.set(
         &app,
         Phase::Done(Report {
@@ -247,8 +266,230 @@ fn run(app: AppHandle) {
             bytes: total,
             integrity_ok: true,
             duration_ms: started.elapsed().as_millis() as u64,
+            shortcuts_updated: install.shortcuts_updated,
+            old_uninstalled: install.old_uninstalled,
+            warnings: install.warnings,
         }),
     );
+}
+
+// ── Webview profile ──────────────────────────────────────────────────────────
+
+/// Platform app data root, the same one Tauri's `app_data_dir()` is built on.
+fn data_root() -> Option<PathBuf> {
+    dirs::data_dir()
+}
+
+/// True while the legacy folder exists and the new one does not (same rule as `detect`).
+fn legacy_pending() -> bool {
+    let Some(root) = data_root() else { return false };
+    let old = root.join(OLD_IDENTIFIER).join(OLD_SUBDIR);
+    let new = root.join(NEW_IDENTIFIER).join(NEW_SUBDIR);
+    old.is_dir() && !new.exists()
+}
+
+/// Where the webview keeps localStorage for one identifier.
+fn webview_storage_dir(identifier: &str) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        Some(
+            dirs::data_local_dir()?
+                .join(identifier)
+                .join("EBWebView")
+                .join("Default")
+                .join("Local Storage"),
+        )
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Some(
+            dirs::home_dir()?
+                .join("Library")
+                .join("WebKit")
+                .join(identifier)
+                .join("WebsiteData")
+                .join("LocalStorage"),
+        )
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Some(dirs::data_dir()?.join(identifier).join("localstorage"))
+    }
+}
+
+/// Copy the old webview localStorage into the new identifier's profile.
+/// Must run before Tauri creates a window: the new profile is still empty then.
+pub fn migrate_webview_profile() {
+    if !legacy_pending() {
+        return;
+    }
+    let (Some(old), Some(new)) = (
+        webview_storage_dir(OLD_IDENTIFIER),
+        webview_storage_dir(NEW_IDENTIFIER),
+    ) else {
+        return;
+    };
+    if !old.is_dir() || new.exists() {
+        return;
+    }
+    let tree = match walk(&old) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("legacy migration: webview profile scan failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = copy_tree(&old, &new, &tree, &mut |_, _| {}) {
+        eprintln!("legacy migration: webview profile copy failed: {e}");
+        let _ = std::fs::remove_dir_all(&new);
+    }
+}
+
+// ── Old install (Windows) ────────────────────────────────────────────────────
+
+pub struct InstallOutcome {
+    pub shortcuts_updated: bool,
+    pub old_uninstalled: bool,
+    pub warnings: Vec<String>,
+}
+
+#[cfg(target_os = "windows")]
+mod windows_install {
+    use super::{InstallOutcome, NEW_PRODUCT, OLD_IDENTIFIER, OLD_PRODUCT};
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    /// Retarget Veydan Browser shortcuts to this exe, then run the old uninstaller.
+    /// One PowerShell script; each line of its output is a status flag or a warning.
+    const SCRIPT: &str = r#"
+param([string]$Exe, [string]$OldName, [string]$NewName, [string]$OldId)
+$ErrorActionPreference = 'Continue'
+$dir = Split-Path -Parent $Exe
+$ws = New-Object -ComObject WScript.Shell
+$updated = $false
+function Retarget([string]$Folder) {
+  $old = Join-Path $Folder "$OldName.lnk"
+  if (-not (Test-Path -LiteralPath $old)) { return $false }
+  $new = Join-Path $Folder "$NewName.lnk"
+  try {
+    $s = $ws.CreateShortcut($old)
+    $s.TargetPath = $Exe
+    $s.WorkingDirectory = $dir
+    $s.IconLocation = "$Exe,0"
+    $s.Save()
+    if (Test-Path -LiteralPath $new) { Remove-Item -LiteralPath $old -Force }
+    else { Rename-Item -LiteralPath $old -NewName "$NewName.lnk" }
+    return $true
+  } catch {
+    Write-Output "WARN shortcut $old`: $($_.Exception.Message)"
+    return $false
+  }
+}
+$startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+$desktop = [Environment]::GetFolderPath('Desktop')
+$taskbar = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
+foreach ($f in @($startMenu, $desktop, $taskbar)) {
+  if (Retarget $f) { $updated = $true }
+}
+if (-not (Test-Path -LiteralPath (Join-Path $startMenu "$NewName.lnk"))) {
+  try {
+    $s = $ws.CreateShortcut((Join-Path $startMenu "$NewName.lnk"))
+    $s.TargetPath = $Exe
+    $s.WorkingDirectory = $dir
+    $s.IconLocation = "$Exe,0"
+    $s.Save()
+    $updated = $true
+  } catch { Write-Output "WARN start menu: $($_.Exception.Message)" }
+}
+if ($updated) { Write-Output 'SHORTCUTS_OK' }
+$keys = @(
+  "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$OldId",
+  "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$OldId"
+)
+foreach ($k in $keys) {
+  if (-not (Test-Path -LiteralPath $k)) { continue }
+  $cmd = (Get-ItemProperty -LiteralPath $k -ErrorAction SilentlyContinue).UninstallString
+  if (-not $cmd) { continue }
+  $uninst = $cmd.Trim('"')
+  if (-not (Test-Path -LiteralPath $uninst)) { Write-Output "WARN uninstaller missing: $uninst"; continue }
+  try {
+    $p = Start-Process -FilePath $uninst -ArgumentList '/S' -Wait -PassThru
+    if ($p.ExitCode -eq 0) { Write-Output 'UNINSTALL_OK' }
+    else { Write-Output "WARN uninstaller exit code $($p.ExitCode)" }
+  } catch { Write-Output "WARN uninstall: $($_.Exception.Message)" }
+  break
+}
+"#;
+
+    pub fn finish() -> InstallOutcome {
+        let mut out = InstallOutcome {
+            shortcuts_updated: false,
+            old_uninstalled: false,
+            warnings: Vec::new(),
+        };
+        let exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => {
+                out.warnings.push(format!("current exe: {e}"));
+                return out;
+            }
+        };
+        let script = std::env::temp_dir().join("veydan-space-migrate.ps1");
+        if let Err(e) = std::fs::write(&script, SCRIPT) {
+            out.warnings.push(format!("script write: {e}"));
+            return out;
+        }
+        let result = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .arg("-Exe")
+            .arg(&exe)
+            .arg("-OldName")
+            .arg(OLD_PRODUCT)
+            .arg("-NewName")
+            .arg(NEW_PRODUCT)
+            .arg("-OldId")
+            .arg(OLD_IDENTIFIER)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        let _ = std::fs::remove_file(&script);
+        let output = match result {
+            Ok(o) => o,
+            Err(e) => {
+                out.warnings.push(format!("powershell: {e}"));
+                return out;
+            }
+        };
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            match line.trim() {
+                "SHORTCUTS_OK" => out.shortcuts_updated = true,
+                "UNINSTALL_OK" => out.old_uninstalled = true,
+                l if l.starts_with("WARN ") => out.warnings.push(l[5..].to_string()),
+                _ => {}
+            }
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success() && !stderr.trim().is_empty() {
+            out.warnings.push(stderr.trim().to_string());
+        }
+        out
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod windows_install {
+    use super::InstallOutcome;
+
+    /// Linux and macOS keep their launchers: the updater replaces the binary in place.
+    pub fn finish() -> InstallOutcome {
+        InstallOutcome {
+            shortcuts_updated: false,
+            old_uninstalled: false,
+            warnings: Vec::new(),
+        }
+    }
 }
 
 fn fail(message: &str, backup_dir: Option<String>, data_intact: bool) -> Phase {

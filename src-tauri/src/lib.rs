@@ -585,6 +585,8 @@ fn run_desktop() {
         capture::host::run();
         return;
     }
+    // Before any window exists: the new identifier's webview profile is still empty.
+    legacy_migration::migrate_webview_profile();
     tauri::Builder::default()
         // Must be first: second launch is closed here before other plugins run.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {

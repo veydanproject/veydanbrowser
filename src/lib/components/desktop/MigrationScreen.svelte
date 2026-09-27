@@ -34,6 +34,7 @@
       move: $t('migration_step_move'),
       verify: $t('migration_step_verify'),
       starting: $t('migration_step_starting'),
+      shortcuts: $t('migration_step_shortcuts'),
     })[progress.step]
   );
 
@@ -112,7 +113,20 @@
         <li><Icon name="check" size={14} /> {$t('migration_check_files')}</li>
         <li><Icon name="check" size={14} /> {$t('migration_check_db')}</li>
         <li><Icon name="check" size={14} /> {$t('migration_duration', { s: (phase.duration_ms / 1000).toFixed(1) })}</li>
+        {#if phase.shortcuts_updated}
+          <li><Icon name="check" size={14} /> {$t('migration_check_shortcuts')}</li>
+        {/if}
+        {#if phase.old_uninstalled}
+          <li><Icon name="check" size={14} /> {$t('migration_check_uninstalled')}</li>
+        {/if}
       </ul>
+      {#if phase.warnings.length > 0}
+        <ul class="warnings">
+          {#each phase.warnings as warning}
+            <li><Icon name="alert-triangle" size={14} /> {warning}</li>
+          {/each}
+        </ul>
+      {/if}
       <dl class="facts">
         <dt>{$t('migration_to')}</dt>
         <dd class="path">{phase.new_dir}</dd>
@@ -266,6 +280,24 @@
     align-items: center;
     gap: 8px;
     color: var(--success-text);
+  }
+
+  .warnings {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: var(--fs-sm, 13px);
+  }
+
+  .warnings li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--warn-text);
+    word-break: break-word;
   }
 
   .error {
