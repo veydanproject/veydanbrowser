@@ -108,6 +108,7 @@ const devMocks: Record<string, unknown> = {
   ],
   sftp_session_list: [],
   update_supported: true,
+  migration_status: { phase: 'none' },
 };
 
 export async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -461,6 +462,13 @@ export const api = {
       call<void>('backup_restore', { path, password: password || null }),
   },
 
+  // Legacy Veydan Browser data migration. Remove in 4.0.
+  migration: {
+    status: () => call<MigrationPhase>('migration_status'),
+    start: () => call<void>('migration_start'),
+    quit: () => call<void>('migration_quit'),
+  },
+
   sync: {
     getConfig: () => call<SyncConfig>('sync_get_config'),
     setConfig: (cfg: SyncConfig) => call<void>('sync_set_config', { cfg }),
@@ -544,6 +552,34 @@ export interface BackupFileInfo {
   path: string;
   size: number;
   modified: string;
+}
+
+// Legacy Veydan Browser data migration. Remove in 4.0.
+export interface MigrationPending {
+  old_dir: string;
+  new_dir: string;
+  backup_dir: string;
+  files: number;
+  bytes: number;
+}
+
+export interface MigrationReport extends MigrationPending {
+  integrity_ok: boolean;
+  duration_ms: number;
+}
+
+export type MigrationPhase =
+  | { phase: 'none' }
+  | ({ phase: 'pending' } & MigrationPending)
+  | { phase: 'running' }
+  | ({ phase: 'done' } & MigrationReport)
+  | { phase: 'failed'; message: string; backup_dir: string | null; data_intact: boolean };
+
+export interface MigrationProgress {
+  step: 'backup' | 'verify_backup' | 'move' | 'verify' | 'starting';
+  percent: number;
+  done_bytes: number;
+  total_bytes: number;
 }
 
 export interface SyncConfig {

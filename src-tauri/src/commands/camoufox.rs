@@ -467,7 +467,7 @@ pub fn ensure_omni_patched(install_dir: &Path, app_data_dir: &Path) {
     }
 
     if let Err(e) = patch_omni_ja(install_dir) {
-        eprintln!("[Veydan Browser] omni.ja patch failed: {e}");
+        eprintln!("[Veydan Space] omni.ja patch failed: {e}");
         if policies_changed {
             clear_all_startup_caches(app_data_dir);
         }
@@ -522,9 +522,13 @@ pub fn patch_chrome_css(
         Err(e) => return Err(format!("read {}: {e}", css_path.display())),
     };
 
-    // Remove any previous Veydan Browser block (idempotent cleanup)
+    // Remove any previous Veydan block, current or legacy marker (idempotent cleanup)
     let mut patched = content.clone();
-    if let Some(start) = patched.find("\n/* Veydan Browser:") {
+    if let Some(start) = ["\n/* Veydan Space:", "\n/* Veydan Browser:"]
+        .iter()
+        .filter_map(|marker| patched.find(marker))
+        .min()
+    {
         patched.truncate(start);
     }
 
@@ -561,7 +565,7 @@ pub fn patch_chrome_css(
 
     patched.push_str(&format!(
         r#"
-/* Veydan Browser: UI overrides */
+/* Veydan Space: UI overrides */
 
 .browser-titlebar,
 #main-menubar {{
@@ -722,7 +726,7 @@ pub async fn camoufox_status(state: tauri::State<'_, AppState>) -> CmdResult<Cam
 #[tauri::command]
 pub async fn camoufox_latest_version() -> CmdResult<String> {
     let client = reqwest::Client::builder()
-        .user_agent("VeydanBrowser/1.0")
+        .user_agent("VeydanSpace/1.0")
         .build()?;
 
     let release: GhRelease = client
@@ -831,7 +835,7 @@ async fn run_download(
     mut cancel_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> Result<String, DownloadError> {
     let client = reqwest::Client::builder()
-        .user_agent("VeydanBrowser/1.0")
+        .user_agent("VeydanSpace/1.0")
         .build()
         .map_err(|e| e.to_string())?;
 

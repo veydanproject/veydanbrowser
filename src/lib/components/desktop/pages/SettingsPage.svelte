@@ -29,9 +29,93 @@
   import SyncSettings from '$lib/components/SyncSettings.svelte';
   import BugReportDialog from '$lib/components/BugReportDialog.svelte';
   import HotkeySettings from '$lib/components/desktop/HotkeySettings.svelte';
+  import SettingsNav, { type SettingsNavGroup } from '$lib/components/desktop/SettingsNav.svelte';
   import { formatCommand, keybindingOverrides } from '$lib/keybindings';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+  // Section index for the left nav; ids match card ids below
+  const navGroups = $derived<SettingsNavGroup[]>([
+    { label: $t('settings_group_browser'), items: [{ id: 'camoufox', label: 'Camoufox' }] },
+    {
+      label: $t('settings_group_general'),
+      items: [
+        { id: 'language', label: $t('settings_section_language') },
+        { id: 'theme', label: $t('settings_section_theme') },
+        { id: 'devtools', label: $t('inspector_developer_tools') },
+        { id: 'hotkeys', label: $t('hotkey_section') },
+        { id: 'tray', label: $t('settings_tray_section') },
+      ],
+    },
+    {
+      label: $t('settings_group_notes'),
+      items: [
+        { id: 'notes', label: $t('settings_notes_section') },
+        { id: 'attachments', label: $t('settings_att_section') },
+        { id: 'capture', label: $t('settings_capture_section') },
+      ],
+    },
+    { label: $t('settings_group_security'), items: [{ id: 'lock', label: $t('settings_lock_section') }] },
+    {
+      label: $t('settings_group_data'),
+      items: [
+        { id: 'backup', label: $t('settings_backup_section') },
+        { id: 'sync', label: $t('settings_sync_section') },
+      ],
+    },
+    {
+      label: $t('settings_group_about'),
+      items: [
+        { id: 'updates', label: $t('settings_update_section') },
+        { id: 'about', label: $t('settings_section_about') },
+      ],
+    },
+  ]);
+  let activeSection = $state('camoufox');
+  let sectionsEl = $state<HTMLElement | null>(null);
+  // Set on nav click; scroll-spy stays quiet until the smooth scroll settles
+  let navScrolling = false;
+
+  function scrollToSection(id: string) {
+    activeSection = id;
+    navScrolling = true;
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function scrollParent(el: HTMLElement): HTMLElement {
+    let p = el.parentElement;
+    while (p && !/auto|scroll/.test(getComputedStyle(p).overflowY)) p = p.parentElement;
+    return p ?? document.documentElement;
+  }
+
+  // Scroll-spy: active = last section above the 25% line, or the last one at the bottom
+  function observeSections(): () => void {
+    if (!sectionsEl) return () => {};
+    const sections = [...sectionsEl.querySelectorAll<HTMLElement>(':scope > [id]')];
+    const scroller = scrollParent(sectionsEl);
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const update = () => {
+      const line = scroller.getBoundingClientRect().top + scroller.clientHeight * 0.25;
+      const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+      const current = atBottom
+        ? sections.at(-1)
+        : sections.findLast((s) => s.getBoundingClientRect().top <= line) ?? sections[0];
+      if (current) activeSection = current.id;
+    };
+    const onScroll = () => {
+      if (!navScrolling) return update();
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => (navScrolling = false), 150);
+    };
+
+    update();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      clearTimeout(settleTimer);
+      scroller.removeEventListener('scroll', onScroll);
+    };
+  }
 
   const THEME_PRESETS = {
     chrome: {
@@ -240,6 +324,7 @@
   }
 
   onMount(async () => {
+    unlisteners.push(observeSections());
     camoufox = await api.camoufox.status().catch(() => null);
 
     if (isTauri) {
@@ -507,11 +592,14 @@
   }
 </script>
 
-<div class="page" style="--page-max: var(--page-max-narrow)">
+<div class="page settings-layout">
+  <SettingsNav groups={navGroups} active={activeSection} onselect={scrollToSection} />
+
+  <div class="settings-main" bind:this={sectionsEl}>
   <h1>{$t('settings_title')}</h1>
 
   <!-- Camoufox -->
-  <div class="card">
+  <div class="card" id="camoufox">
     <div class="card-title">Camoufox</div>
 
     {#if camoufox === null}
@@ -603,7 +691,7 @@
   </div>
 
   <!-- Language -->
-  <div class="card">
+  <div class="card" id="language">
     <div class="card-title">{$t('settings_section_language')}</div>
     <p class="muted">{$t('settings_language_label')}</p>
     <div class="lang-options">
@@ -622,7 +710,7 @@
   </div>
 
   <!-- Theme -->
-  <div class="card">
+  <div class="card" id="theme">
     <div class="card-title">{$t('settings_section_theme')}</div>
     <div class="theme-options">
       <button class="theme-opt" class:active={$theme === 'dark'} onclick={() => theme.set('dark')}>
@@ -667,7 +755,7 @@
   </div>
 
   <!-- Developer Tools -->
-  <div class="card">
+  <div class="card" id="devtools">
     <div class="card-title">{$t('inspector_developer_tools')}</div>
     <div class="dev-tools-row">
       <div class="dev-tools-info">
@@ -684,10 +772,12 @@
     </div>
   </div>
 
-  <HotkeySettings />
+  <div id="hotkeys">
+    <HotkeySettings />
+  </div>
 
   <!-- System tray -->
-  <div class="card">
+  <div class="card" id="tray">
     <div class="card-title">{$t('settings_tray_section')}</div>
     <div class="dev-tools-row">
       <div class="dev-tools-info">
@@ -734,7 +824,7 @@
   </div>
 
   <!-- Notes -->
-  <div class="card">
+  <div class="card" id="notes">
     <div class="card-title">{$t('settings_notes_section')}</div>
     <p class="muted">{$t('settings_notes_folder_hint')}</p>
     <div class="dir-row">
@@ -770,28 +860,28 @@
   </div>
 
   <!-- Note attachments -->
-  <div class="card">
+  <div class="card" id="attachments">
     <div class="card-title">{$t('settings_att_section')}</div>
     <p class="muted">{$t('settings_att_hint')}</p>
     <NoteAttachmentPolicy />
   </div>
 
   <!-- Browser capture rules -->
-  <div class="card">
+  <div class="card" id="capture">
     <div class="card-title">{$t('settings_capture_section')}</div>
     <p class="muted">{$t('settings_capture_hint')}</p>
     <NoteCaptureRules />
   </div>
 
   <!-- App lock -->
-  <div class="card">
+  <div class="card" id="lock">
     <div class="card-title">{$t('settings_lock_section')} <span class="badge badge-warn">{$t('settings_sync_beta')}</span></div>
     <p class="muted">{$t('settings_lock_hint')}</p>
     <LockSetupForm />
   </div>
 
   <!-- Backup -->
-  <div class="card">
+  <div class="card" id="backup">
     <div class="card-title">{$t('settings_backup_section')}</div>
     <p class="muted">{$t('settings_backup_hint')}</p>
 
@@ -945,14 +1035,14 @@
   </div>
 
   <!-- Sync (beta) -->
-  <div class="card">
+  <div class="card" id="sync">
     <div class="card-title">{$t('settings_sync_section')} <span class="badge badge-warn">{$t('settings_sync_beta')}</span></div>
     <p class="muted">{$t('settings_sync_hint')}</p>
     <SyncSettings />
   </div>
 
   <!-- App updates -->
-  <div class="card">
+  <div class="card" id="updates">
     <div class="card-title">{$t('settings_update_section')}</div>
 
     <div class="version-table">
@@ -1011,7 +1101,7 @@
   </div>
 
   <!-- About -->
-  <div class="card">
+  <div class="card" id="about">
     <div class="card-title">{$t('settings_section_about')}</div>
 
     <div class="about-head">
@@ -1089,6 +1179,7 @@
   </div>
   {#if dataMsg}<p class="ok-msg">{dataMsg}</p>{/if}
   {#if dataError}<div class="error-msg">{dataError}</div>{/if}
+  </div>
 </div>
 
 {#if pendingData}
@@ -1149,7 +1240,22 @@
 {/if}
 
 <style>
-  /* max-width comes from global .page via --page-max (set inline) */
+  /* Two columns: sticky nav + content rail of --page-max-narrow width */
+  .settings-layout {
+    --nav-w: 200px;
+    --page-max: calc(var(--page-max-narrow) + var(--nav-w) + var(--sp-8));
+    display: grid;
+    grid-template-columns: var(--nav-w) minmax(0, 1fr);
+    column-gap: var(--sp-8);
+    align-items: start;
+  }
+  .settings-main { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+  .settings-main > [id] { scroll-margin-top: var(--sp-3); }
+
+  @media (max-width: 960px) {
+    .settings-layout { --page-max: var(--page-max-narrow); grid-template-columns: minmax(0, 1fr); }
+    .settings-layout > :global(.settings-nav) { display: none; }
+  }
 
   /* bare h1 (not inside .page-header) — global .page-header h1 doesn't apply */
   h1 { font-size: var(--fs-2xl); font-weight: var(--fw-extrabold); letter-spacing: -0.6px; margin-bottom: var(--sp-2); }

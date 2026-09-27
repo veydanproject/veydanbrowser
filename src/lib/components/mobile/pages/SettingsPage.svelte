@@ -171,7 +171,7 @@
     </a>
   </div>
 
-  <div class="m-section">{$t('settings_sync_section')}</div>
+  <div class="m-section">{$t('settings_data')}</div>
   <div class="m-list">
     <a class="m-row" href="/settings/sync">
       <span class="m-row-label">{$t('settings_sync_section')}</span>

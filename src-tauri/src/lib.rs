@@ -15,6 +15,9 @@ mod db;
 pub mod error;
 #[cfg(desktop)]
 mod fingerprint;
+// Legacy Veydan Browser data migration. Remove in 4.0.
+#[cfg(desktop)]
+pub mod legacy_migration;
 #[cfg(desktop)]
 mod models;
 #[cfg(desktop)]
@@ -433,6 +436,148 @@ fn run_mobile() {
         .expect("error while running veydan");
 }
 
+/// Desktop initialization: DB, AppState, capture bridge, watchers, schedulers, tray.
+/// Called from setup, or after the legacy data migration has finished.
+#[cfg(desktop)]
+pub fn init_desktop(app: &tauri::AppHandle, data_dir: PathBuf) -> tauri::Result<()> {
+    std::fs::create_dir_all(&data_dir)?;
+    std::fs::create_dir_all(data_dir.join("profiles"))?;
+    ensure_notes_dirs(&data_dir)?;
+
+    let db_path = data_dir.join("profiles.db");
+    let db = tauri::async_runtime::block_on(db::init_pool(&db_path))
+        .expect("Failed to initialize database");
+    if let Err(e) = tauri::async_runtime::block_on(sync::check_install_marker(&db, &data_dir)) {
+        eprintln!("sync: install marker check failed: {e}");
+    }
+
+    // Load custom notes dir from settings (if set)
+    let notes_custom_dir = tauri::async_runtime::block_on(
+        sqlx::query_scalar::<_, String>(
+            "SELECT value FROM app_settings WHERE key = 'notes_custom_dir'",
+        )
+        .fetch_optional(&db),
+    )
+    .ok()
+    .flatten()
+    .map(PathBuf::from);
+
+    // Load tray-behavior settings
+    let tray_settings = Arc::new(TraySettings::default());
+    tauri::async_runtime::block_on(async {
+        tray_settings.minimize_to_tray.store(
+            read_bool_setting(&db, "minimize_to_tray").await,
+            Ordering::Relaxed,
+        );
+        tray_settings.close_to_tray.store(
+            read_bool_setting(&db, "close_to_tray").await,
+            Ordering::Relaxed,
+        );
+        tray_settings.start_hidden.store(
+            read_bool_setting(&db, "start_hidden").await,
+            Ordering::Relaxed,
+        );
+    });
+
+    app.manage(AppState {
+        db,
+        app_data_dir: data_dir.clone(),
+        notes_custom_dir: Arc::new(std::sync::RwLock::new(notes_custom_dir)),
+        notes_watcher: Arc::new(Mutex::new(None)),
+        notes_lock: commands::notes::NotesLock::default(),
+        vault: vault::VaultState::default(),
+        sync: Arc::new(SyncManager::default()),
+        browser: Arc::new(BrowserState::default()),
+        download: DownloadManager::default(),
+        ssh_sessions: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+        sftp_sessions: Arc::new(commands::sftp::SftpState::default()),
+        backup: Arc::new(BackupManager::default()),
+        tray_settings: tray_settings.clone(),
+        tray_labels: Arc::new(Mutex::new(TrayLabels::default())),
+        tray: Arc::new(Mutex::new(None)),
+    });
+    commands::notes::start_auto_lock(app.clone());
+
+    // Browser capture bridge: local socket + native messaging manifest
+    capture::server::start(app.clone());
+    if let Err(e) = capture::extension::register_native_host(&data_dir) {
+        eprintln!("capture: native host registration failed: {e}");
+    }
+
+    {
+        let state = app.state::<AppState>();
+        let custom_dir = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
+        // Attachments are served through the asset protocol from both dirs.
+        commands::notes::allow_asset_dir(app, &data_dir.join("notes").join("documents"));
+        if let Some(ref custom) = custom_dir {
+            commands::notes::allow_asset_dir(app, custom);
+        }
+        let watcher = commands::notes::start_notes_watcher(app.clone(), data_dir, custom_dir);
+        if let Ok(mut slot) = state.notes_watcher.lock() {
+            *slot = watcher;
+        };
+    }
+
+    commands::notes::register_quick_capture_shortcut(app);
+
+    // Scheduled backups: ticks every 60s, catches up missed runs on start.
+    start_backup_scheduler(app.clone());
+
+    // Sync (beta): idle until enabled and a vault is joined.
+    start_sync_scheduler(app.clone());
+
+    // ── System tray ──
+    let want_tray = tray_settings.minimize_to_tray.load(Ordering::Relaxed)
+        || tray_settings.close_to_tray.load(Ordering::Relaxed)
+        || tray_settings.start_hidden.load(Ordering::Relaxed);
+    if want_tray {
+        tray::apply_tray_async(app, true);
+    }
+    if tray_settings.start_hidden.load(Ordering::Relaxed) {
+        tray::hide_to_tray(app);
+    }
+
+    // Hide-on-close / minimize-to-tray. skip_taskbar only while stashed.
+    // On Linux, OS minimize is handled by the custom titlebar button
+    // (window_minimize); WindowEvent::Resized / is_minimized() are
+    // unreliable on GTK/Wayland.
+    if let Some(win) = app.get_webview_window("main") {
+        let handle = app.clone();
+        win.on_window_event(move |event| {
+            let state = handle.state::<AppState>();
+            match event {
+                #[cfg(not(target_os = "linux"))]
+                tauri::WindowEvent::Resized(_) => {
+                    if state.tray_settings.minimize_to_tray.load(Ordering::Relaxed) {
+                        if let Some(w) = handle.get_webview_window("main") {
+                            if w.is_minimized().unwrap_or(false) {
+                                let _ = w.unminimize();
+                                let _ = w.set_skip_taskbar(true);
+                                let _ = w.hide();
+                            }
+                        }
+                    }
+                }
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if state.tray_settings.close_to_tray.load(Ordering::Relaxed) {
+                        api.prevent_close();
+                        tray::hide_to_tray(&handle);
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
+
+    // Keep the tray's running-profiles submenu + tooltip in sync.
+    let tray_handle = app.clone();
+    app.listen("profiles://running-changed", move |_| {
+        tray::refresh_tray_async(&tray_handle);
+    });
+
+    Ok(())
+}
+
 #[cfg(desktop)]
 fn run_desktop() {
     // Started by the browser as the extension's native messaging host: no UI, just relay.
@@ -453,151 +598,17 @@ fn run_desktop() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
-            let data_dir = app_data_dir.join("VeydanBrowser");
-            std::fs::create_dir_all(&data_dir)?;
-            std::fs::create_dir_all(data_dir.join("profiles"))?;
-            ensure_notes_dirs(&data_dir)?;
+            let data_dir = app_data_dir.join("VeydanSpace");
 
-            let db_path = data_dir.join("profiles.db");
-            let db = tauri::async_runtime::block_on(db::init_pool(&db_path))
-                .expect("Failed to initialize database");
-            if let Err(e) =
-                tauri::async_runtime::block_on(sync::check_install_marker(&db, &data_dir))
-            {
-                eprintln!("sync: install marker check failed: {e}");
+            // Legacy Veydan Browser data found: the UI runs the migration and
+            // calls init_desktop afterwards.
+            if let Some(pending) = legacy_migration::detect(&app_data_dir) {
+                app.manage(legacy_migration::MigrationState::pending(pending));
+                return Ok(());
             }
+            app.manage(legacy_migration::MigrationState::none());
 
-            // Load custom notes dir from settings (if set)
-            let notes_custom_dir = tauri::async_runtime::block_on(
-                sqlx::query_scalar::<_, String>(
-                    "SELECT value FROM app_settings WHERE key = 'notes_custom_dir'",
-                )
-                .fetch_optional(&db),
-            )
-            .ok()
-            .flatten()
-            .map(PathBuf::from);
-
-            // Load tray-behavior settings
-            let tray_settings = Arc::new(TraySettings::default());
-            tauri::async_runtime::block_on(async {
-                tray_settings.minimize_to_tray.store(
-                    read_bool_setting(&db, "minimize_to_tray").await,
-                    Ordering::Relaxed,
-                );
-                tray_settings.close_to_tray.store(
-                    read_bool_setting(&db, "close_to_tray").await,
-                    Ordering::Relaxed,
-                );
-                tray_settings.start_hidden.store(
-                    read_bool_setting(&db, "start_hidden").await,
-                    Ordering::Relaxed,
-                );
-            });
-
-            app.manage(AppState {
-                db,
-                app_data_dir: data_dir.clone(),
-                notes_custom_dir: Arc::new(std::sync::RwLock::new(notes_custom_dir)),
-                notes_watcher: Arc::new(Mutex::new(None)),
-                notes_lock: commands::notes::NotesLock::default(),
-                vault: vault::VaultState::default(),
-                sync: Arc::new(SyncManager::default()),
-                browser: Arc::new(BrowserState::default()),
-                download: DownloadManager::default(),
-                ssh_sessions: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
-                sftp_sessions: Arc::new(commands::sftp::SftpState::default()),
-                backup: Arc::new(BackupManager::default()),
-                tray_settings: tray_settings.clone(),
-                tray_labels: Arc::new(Mutex::new(TrayLabels::default())),
-                tray: Arc::new(Mutex::new(None)),
-            });
-            commands::notes::start_auto_lock(app.handle().clone());
-
-            // Browser capture bridge: local socket + native messaging manifest
-            capture::server::start(app.handle().clone());
-            if let Err(e) = capture::extension::register_native_host(&data_dir) {
-                eprintln!("capture: native host registration failed: {e}");
-            }
-
-            {
-                let state = app.state::<AppState>();
-                let custom_dir = state.notes_custom_dir.read().ok().and_then(|g| g.clone());
-                // Attachments are served through the asset protocol from both dirs.
-                commands::notes::allow_asset_dir(
-                    app.handle(),
-                    &data_dir.join("notes").join("documents"),
-                );
-                if let Some(ref custom) = custom_dir {
-                    commands::notes::allow_asset_dir(app.handle(), custom);
-                }
-                let watcher = commands::notes::start_notes_watcher(
-                    app.handle().clone(),
-                    data_dir,
-                    custom_dir,
-                );
-                if let Ok(mut slot) = state.notes_watcher.lock() {
-                    *slot = watcher;
-                };
-            }
-
-            commands::notes::register_quick_capture_shortcut(app.handle());
-
-            // Scheduled backups: ticks every 60s, catches up missed runs on start.
-            start_backup_scheduler(app.handle().clone());
-
-            // Sync (beta): idle until enabled and a vault is joined.
-            start_sync_scheduler(app.handle().clone());
-
-            // ── System tray ──
-            let want_tray = tray_settings.minimize_to_tray.load(Ordering::Relaxed)
-                || tray_settings.close_to_tray.load(Ordering::Relaxed)
-                || tray_settings.start_hidden.load(Ordering::Relaxed);
-            if want_tray {
-                tray::apply_tray_async(app.handle(), true);
-            }
-            if tray_settings.start_hidden.load(Ordering::Relaxed) {
-                tray::hide_to_tray(app.handle());
-            }
-
-            // Hide-on-close / minimize-to-tray. skip_taskbar only while stashed.
-            // On Linux, OS minimize is handled by the custom titlebar button
-            // (window_minimize); WindowEvent::Resized / is_minimized() are
-            // unreliable on GTK/Wayland.
-            if let Some(win) = app.get_webview_window("main") {
-                let handle = app.handle().clone();
-                win.on_window_event(move |event| {
-                    let state = handle.state::<AppState>();
-                    match event {
-                        #[cfg(not(target_os = "linux"))]
-                        tauri::WindowEvent::Resized(_) => {
-                            if state.tray_settings.minimize_to_tray.load(Ordering::Relaxed) {
-                                if let Some(w) = handle.get_webview_window("main") {
-                                    if w.is_minimized().unwrap_or(false) {
-                                        let _ = w.unminimize();
-                                        let _ = w.set_skip_taskbar(true);
-                                        let _ = w.hide();
-                                    }
-                                }
-                            }
-                        }
-                        tauri::WindowEvent::CloseRequested { api, .. } => {
-                            if state.tray_settings.close_to_tray.load(Ordering::Relaxed) {
-                                api.prevent_close();
-                                tray::hide_to_tray(&handle);
-                            }
-                        }
-                        _ => {}
-                    }
-                });
-            }
-
-            // Keep the tray's running-profiles submenu + tooltip in sync.
-            let tray_handle = app.handle().clone();
-            app.listen("profiles://running-changed", move |_| {
-                tray::refresh_tray_async(&tray_handle);
-            });
-
+            init_desktop(app.handle(), data_dir)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -606,6 +617,10 @@ fn run_desktop() {
             open_url,
             clipboard_write_text,
             update_supported,
+            // Legacy data migration (remove in 4.0)
+            legacy_migration::migration_status,
+            legacy_migration::migration_start,
+            legacy_migration::migration_quit,
             // Demo / clear
             demo_seed,
             app_clear_data,

@@ -210,7 +210,7 @@ pub fn camoufox_user_chrome(color_left: &str, color_right: &str, label: &str) ->
     use crate::commands::camoufox::{build_stripe_bg, STRIPE_HEIGHT};
     let stripe_bg = build_stripe_bg(color_left, color_right, label);
     format!(
-        r#"/* Veydan Browser: per-profile color indicator — overrides chrome.css #TabsToolbar */
+        r#"/* Veydan Space: per-profile color indicator — overrides chrome.css #TabsToolbar */
 #TabsToolbar {{
   background-image: {stripe_bg} !important;
   background-size: 100% {STRIPE_HEIGHT}px !important;

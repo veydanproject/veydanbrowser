@@ -280,7 +280,7 @@
     <div class="titlebar">
       <div class="titlebar-title">
         <img src="/logo.png" alt="" class="titlebar-logo" />
-        <span>{standaloneNotes ? $t(windowLabel() === 'quick-capture' ? 'quick_capture_title' : 'nav_notes') : 'Veydan Browser'}</span>
+        <span>{standaloneNotes ? $t(windowLabel() === 'quick-capture' ? 'quick_capture_title' : 'nav_notes') : 'Veydan Space'}</span>
       </div>
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="titlebar-drag" onmousedown={onTitlebarMouseDown} ondblclick={onTitlebarDblClick}></div>
@@ -313,9 +313,9 @@
      <div class="topbar-inner">
       <a href="/" class="topbar-brand">
         <span class="brand-tile">
-          <img src="/logo.png" alt="Veydan Browser" class="brand-logo" />
+          <img src="/logo.png" alt="Veydan Space" class="brand-logo" />
         </span>
-        <span class="brand-name">Veydan Browser</span>
+        <span class="brand-name">Veydan Space</span>
       </a>
 
       <nav class="topbar-nav">

@@ -12,7 +12,7 @@ PUSH_PLATFORMS := $(strip $(foreach p,linux windows macos android ios,$(filter $
 
 clean:
 	@echo ">> Stopping running processes..."
-	@bash -c 'SELF=$$$$; pgrep -f "veydanbrowser" 2>/dev/null | while read pid; do [ "$$pid" != "$$SELF" ] && kill "$$pid" 2>/dev/null; done; exit 0'
+	@bash -c 'SELF=$$$$; pgrep -f "veydanspace" 2>/dev/null | while read pid; do [ "$$pid" != "$$SELF" ] && kill "$$pid" 2>/dev/null; done; exit 0'
 	@echo ">> Removing build artifacts..."
 	@rm -rf src-tauri/target
 	@rm -rf build

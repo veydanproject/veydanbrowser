@@ -46,7 +46,7 @@ pub struct TrayLabels {
     pub password_generator: String,
     #[serde(default = "default_quick_capture_label")]
     pub quick_capture: String,
-    /// "Veydan Browser — {n} running" — `{n}` is replaced with the live count.
+    /// "Veydan Space — {n} running" — `{n}` is replaced with the live count.
     pub tooltip: String,
 }
 
@@ -57,7 +57,7 @@ fn default_quick_capture_label() -> String {
 impl Default for TrayLabels {
     fn default() -> Self {
         Self {
-            show: "Show Veydan Browser".into(),
+            show: "Show Veydan Space".into(),
             hide: "Hide window".into(),
             quit: "Quit".into(),
             running: "Running profiles ({n})".into(),
@@ -72,7 +72,7 @@ impl Default for TrayLabels {
             section_notes: "Notes".into(),
             password_generator: "Password generator".into(),
             quick_capture: default_quick_capture_label(),
-            tooltip: "Veydan Browser — {n} running".into(),
+            tooltip: "Veydan Space — {n} running".into(),
         }
     }
 }
@@ -273,7 +273,7 @@ mod imp {
         }
 
         fn title(&self) -> String {
-            "Veydan Browser".into()
+            "Veydan Space".into()
         }
 
         fn category(&self) -> Category {

@@ -37,7 +37,7 @@
   function buildReport(info: HostInfo | null): string {
     const tr = get(t);
     const lines = [
-      'Veydan Browser',
+      'Veydan Space',
       '',
       `${tr('settings_about_version')}: ${info?.version || '—'}`,
       `${tr('settings_bug_os')}: ${info ? `${info.os}/${info.arch}` : '—'}`,

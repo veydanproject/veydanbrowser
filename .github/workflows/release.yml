@@ -166,7 +166,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Veydan Browser ${{ github.ref_name }}'
+          releaseName: 'Veydan Space ${{ github.ref_name }}'
           releaseBody: 'See the assets below to download and install this version.'
           releaseDraft: true
           prerelease: ${{ needs.verify-version.outputs.prerelease == 'true' }}
@@ -268,7 +268,7 @@ jobs:
             PRE=""
             if [ "$PRERELEASE" = "true" ]; then PRE="--prerelease"; fi
             gh release create "$GITHUB_REF_NAME" --draft $PRE \
-              --title "Veydan Browser $GITHUB_REF_NAME" \
+              --title "Veydan Space $GITHUB_REF_NAME" \
               --notes "See the assets below to download and install this version."
           fi
           gh release upload "$GITHUB_REF_NAME" "$SIGNED" --clobber

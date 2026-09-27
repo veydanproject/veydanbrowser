@@ -1,4 +1,4 @@
-# Veydan Browser — UI style guide
+# Veydan Space — UI style guide
 
 Single source of truth for styling. **Before adding CSS, check whether a token or
 primitive already exists.** New ad-hoc colours/sizes/components are how the UI

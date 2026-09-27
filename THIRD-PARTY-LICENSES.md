@@ -1,11 +1,11 @@
 # Third-Party Licenses & Acknowledgements
 
-VeydanBrowser is built on the shoulders of the open-source community. This
+Veydan Space is built on the shoulders of the open-source community. This
 software would not be possible without the following projects. We are deeply
 grateful to their authors and maintainers.
 
 This document lists every third-party dependency bundled or linked into
-VeydanBrowser, together with its license. It is provided to satisfy the
+Veydan Space, together with its license. It is provided to satisfy the
 attribution requirements of the MIT, Apache-2.0, BSD, ISC, MPL-2.0 and other
 licenses under which these components are distributed.
 
@@ -22,7 +22,7 @@ All bundled dependencies use permissive or file-level-copyleft licenses
 (MIT, Apache-2.0, BSD, ISC, Zlib, Unicode-3.0, MPL-2.0, CC0, BSL-1.0). **No GPL, LGPL,
 AGPL or SSPL code is included.** MPL-2.0 components (`cssparser`, `selectors`,
 `webpki-root-certs`, `lightningcss`, and related crates) are used unmodified;
-their file-level copyleft imposes no obligations on VeydanBrowser's own code.
+their file-level copyleft imposes no obligations on Veydan Space's own code.
 
 ---
 
@@ -944,6 +944,6 @@ registry cache. This file is regenerated as dependencies change.
 
 ---
 
-*Generated for VeydanBrowser. If you are an author of a listed project and
+*Generated for Veydan Space. If you are an author of a listed project and
 notice an attribution error, please open an issue — we want to credit you
 correctly.*

@@ -1,5 +1,5 @@
 [package]
-name = "veydanbrowser"
+name = "veydanspace"
 version = "3.1.4"
 description = "Anti-detect browser & fingerprint profile manager"
 authors = ["Veydan Project"]

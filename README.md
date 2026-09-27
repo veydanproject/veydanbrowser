@@ -1,8 +1,8 @@
-# Veydan Browser
+# Veydan Space
 
 > **Operations workspace for multi-account work** — isolated browser profiles, proxies, an SSH console, notes and 2FA tools, organized into workspaces in one local-first desktop app.
 
-Veydan Browser is a desktop workspace for people who operate many accounts, proxies and servers in parallel. Everything the daily workflow needs lives in one place: **workspaces** with Kanban, table and topology views; **isolated browser profiles**; **proxy management** with one-click health checks; a full **SSH terminal** with saved connections, an **SSH key manager** and 2FA/TOTP auto-fill; a dual-pane **SFTP file manager**; **Markdown notes** with search and version history; and built-in **TOTP and password tools**.
+Veydan Space is a desktop workspace for people who operate many accounts, proxies and servers in parallel. Everything the daily workflow needs lives in one place: **workspaces** with Kanban, table and topology views; **isolated browser profiles**; **proxy management** with one-click health checks; a full **SSH terminal** with saved connections, an **SSH key manager** and 2FA/TOTP auto-fill; a dual-pane **SFTP file manager**; **Markdown notes** with search and version history; and built-in **TOTP and password tools**.
 
 Browser profiles are powered by [Camoufox](https://camoufox.com/) (a hardened, anti-fingerprinting Firefox fork): each profile is a fully separated identity — its own fingerprint, user agent, timezone, locale, WebRTC policy, geolocation, cookies and proxy — so accounts never cross-contaminate. That isolation is one feature of the toolkit, not the whole product.
 
@@ -121,6 +121,22 @@ make clean        # stop running instances and remove build artifacts
 make update       # run the update script
 ```
 
+### Migrating from Veydan Browser
+Veydan Browser was renamed to Veydan Space; the desktop app id changed from
+`net.veydan.browser` to `net.veydan.space`, so the data folder moved.
+
+- **3.x:** on first start Veydan Space detects the old folder, creates a full
+  backup next to it (`net.veydan.browser-backup-<timestamp>`), moves the data,
+  verifies files and database integrity, and shows a report.
+- **4.0 and later:** automatic migration is removed. Move the folder by hand
+  while both apps are closed:
+
+| OS | From | To |
+|---|---|---|
+| Linux | `~/.local/share/net.veydan.browser/VeydanBrowser` | `~/.local/share/net.veydan.space/VeydanSpace` |
+| macOS | `~/Library/Application Support/net.veydan.browser/VeydanBrowser` | `~/Library/Application Support/net.veydan.space/VeydanSpace` |
+| Windows | `%APPDATA%\net.veydan.browser\VeydanBrowser` | `%APPDATA%\net.veydan.space\VeydanSpace` |
+
 ---
 
 ## Project structure
@@ -144,11 +160,11 @@ src-tauri/              Rust / Tauri backend
 
 Copyright © 2026 **Veydan Project**.
 
-Veydan Browser is **source-available** software, licensed under the
+Veydan Space is **source-available** software, licensed under the
 [PolyForm Perimeter License 1.0.1](https://polyformproject.org/licenses/perimeter/1.0.1).
 
 - ✅ Free to read, build, run, modify and redistribute for almost any purpose.
-- ❌ You may **not** use it to provide a product that competes with Veydan Browser.
+- ❌ You may **not** use it to provide a product that competes with Veydan Space.
 
 This is not OSI "open source" — it is open and free with a no-compete boundary.
 See the [`LICENSE`](LICENSE) file for the full, legally binding terms, or

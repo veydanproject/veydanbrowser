@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the release binary and install/refresh it under ~/.local/share/veydanbrowser.
-# The menu entry (veydanbrowser.desktop) launches the *installed* copy, so a
+# Build the release binary and install/refresh it under ~/.local/share/veydanspace.
+# The menu entry (veydanspace.desktop) launches the *installed* copy, so a
 # running app keeps working while we build and is picked up on next launch.
 set -e
 
@@ -10,12 +10,12 @@ export SCRIPT_DIR
 # One-time .dev-prefix setup + build env vars + project-local toolchain.
 source "$SCRIPT_DIR/build-env.sh"
 
-APP_ID="veydanbrowser"
+APP_ID="veydanspace"
 INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$APP_ID"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS_BASE="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
 
-echo ">> Building Veydan Browser $(cat "$SCRIPT_DIR/VERSION") (release)..."
+echo ">> Building Veydan Space $(cat "$SCRIPT_DIR/VERSION") (release)..."
 pnpm tauri build --no-bundle
 
 echo ">> Installing into $INSTALL_DIR ..."
@@ -44,15 +44,15 @@ for entry in "32x32:32x32.png" "64x64:64x64.png" "128x128:128x128.png" \
   cp -f "$file" "$ICONS_BASE/$size/apps/$APP_ID.png"
 done
 
-# Menu entry. The deb package ships /usr/share/applications/Veydan Browser.desktop
+# Menu entry. The deb package ships /usr/share/applications/Veydan Space.desktop
 # pointing at the (root-owned, non-updatable) /usr/bin binary; per the XDG spec a
 # user-local file with the SAME desktop-file ID shadows it, so the "Veydan
 # Browser" menu entry launches our freshly installed build instead.
 mkdir -p "$APPS_DIR"
-cat > "$APPS_DIR/Veydan Browser.desktop" << EOF
+cat > "$APPS_DIR/Veydan Space.desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=Veydan Browser
+Name=Veydan Space
 Comment=Multi-Accounting Workspace
 Exec=$INSTALL_DIR/run.sh %U
 Icon=$APP_ID

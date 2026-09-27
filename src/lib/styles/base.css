@@ -2,7 +2,7 @@
 /* SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 */
 
 /* ============================================================================
- * Veydan Browser — base layer + global primitives
+ * Veydan Space — base layer + global primitives
  * Imported once from src/routes/+layout.svelte, after tokens.css.
  *
  * Everything here is GLOBAL. Components should reuse these classes instead of
