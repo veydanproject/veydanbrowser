@@ -240,6 +240,14 @@ fn run(app: AppHandle) {
         );
         return;
     }
+    // Absolute paths inside the database still name the old folder.
+    if let Err(e) = rewrite_paths(&dirs.new, &dirs.old) {
+        state.set(
+            &app,
+            fail(&format!("path update failed: {e}"), Some(backup_str), false),
+        );
+        return;
+    }
 
     // 5) Regular startup on the new folder.
     emit_progress(&app, "starting", 100, total, total);
@@ -633,6 +641,55 @@ pub fn compare_trees(a: &Path, b: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Old data folder for a given new one: same parent, old identifier and subdir.
+fn old_dir_for(data_dir: &Path) -> Option<PathBuf> {
+    let parent = data_dir.parent()?.parent()?;
+    Some(parent.join(OLD_IDENTIFIER).join(OLD_SUBDIR))
+}
+
+/// Profile dirs, note files and path settings are stored absolute. After the
+/// folder moved, every value under `old` is re-rooted onto `data_dir`.
+pub fn rewrite_paths(data_dir: &Path, old: &Path) -> Result<(), String> {
+    let db_path = data_dir.join("profiles.db");
+    if !db_path.is_file() {
+        return Ok(());
+    }
+    let old_prefix = old.to_string_lossy().to_string();
+    let new_prefix = data_dir.to_string_lossy().to_string();
+    if old_prefix == new_prefix {
+        return Ok(());
+    }
+    let conn = rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?;
+    // `|` as the LIKE escape: backslashes are path separators on Windows.
+    let like = format!(
+        "{}%",
+        old_prefix
+            .replace('|', "||")
+            .replace('%', "|%")
+            .replace('_', "|_")
+    );
+    let statements = [
+        "UPDATE profiles SET profile_path = ? || substr(profile_path, ?) WHERE profile_path LIKE ? ESCAPE '|'",
+        "UPDATE notes SET file_path = ? || substr(file_path, ?) WHERE file_path LIKE ? ESCAPE '|'",
+        "UPDATE app_settings SET value = ? || substr(value, ?) WHERE value LIKE ? ESCAPE '|'",
+    ];
+    // substr is 1-based: keep everything after the old prefix.
+    let tail_start = (old_prefix.chars().count() + 1) as i64;
+    for sql in statements {
+        conn.execute(sql, rusqlite::params![new_prefix, tail_start, like])
+            .map_err(|e| format!("{sql}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Regular startup: a database migrated by an earlier version may still hold old paths.
+pub fn rewrite_paths_if_needed(data_dir: &Path) {
+    let Some(old) = old_dir_for(data_dir) else { return };
+    if let Err(e) = rewrite_paths(data_dir, &old) {
+        eprintln!("legacy migration: path update failed: {e}");
+    }
 }
 
 pub fn integrity_check(db_path: &Path) -> Result<(), String> {

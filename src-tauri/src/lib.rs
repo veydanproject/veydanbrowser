@@ -610,6 +610,8 @@ fn run_desktop() {
             }
             app.manage(legacy_migration::MigrationState::none());
 
+            // Earlier migrations left absolute paths pointing at the old folder.
+            legacy_migration::rewrite_paths_if_needed(&data_dir);
             init_desktop(app.handle(), data_dir)?;
             // Data already migrated by an earlier version: old shortcuts / install may remain.
             legacy_migration::cleanup_old_install_async();
