@@ -9,6 +9,8 @@ class ProfilesStore {
   loading = $state(false);
   loaded = $state(false);
   private _promise: Promise<void> | null = null;
+  /** Bumped per refresh so an older response cannot overwrite a newer list. */
+  private _generation = 0;
 
   async ensureLoaded() {
     if (this.loaded) return;
@@ -18,12 +20,15 @@ class ProfilesStore {
   }
 
   async refresh() {
+    const generation = ++this._generation;
     this.loading = true;
     try {
-      this.list = await api.profiles.list();
+      const list = await api.profiles.list();
+      if (generation !== this._generation) return;
+      this.list = list;
       this.loaded = true;
     } finally {
-      this.loading = false;
+      if (generation === this._generation) this.loading = false;
     }
   }
 

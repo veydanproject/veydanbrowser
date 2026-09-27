@@ -224,7 +224,7 @@
         if (newTotpId) totp = await api.totp.list();
       }
       await passwordStore.refresh();
-      await passwordStore.dropStaleNoteBindings(id, tags);
+      await passwordStore.syncNoteBindings(id, tags);
       totpIds = next;
       addTotp = false;
       totpSecret = '';
@@ -308,7 +308,7 @@
     try {
       entry = await api.passwords.update(id, { tags: next });
       await passwordStore.refresh();
-      await passwordStore.dropStaleNoteBindings(id, next);
+      await passwordStore.syncNoteBindings(id, next);
     } catch (e) {
       tags = prev;
       fail(e);

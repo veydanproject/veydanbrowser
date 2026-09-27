@@ -73,19 +73,39 @@ class PasswordStore {
     if (note?.bindings.includes(binding)) await notesStore.removeNoteBinding(noteId, binding);
   }
 
-  /** Notes keep a password binding only while the password still tags them. */
-  async dropStaleNoteBindings(passwordId: string, tags: string[]) {
+  /** Mirror `note:{id}` tags onto notes as `password:{id}`; notes no longer tagged lose it. */
+  async syncNoteBindings(passwordId: string, tags: string[]) {
     await notesStore.ensureLoaded();
     const linked = new Set(tags.filter((t) => t.startsWith('note:')).map((t) => t.slice(5)));
     const binding = `password:${passwordId}`;
     const stale = notesStore.list.filter((n) => n.bindings.includes(binding) && !linked.has(n.id));
-    if (stale.length === 0) return;
-    await Promise.all(stale.map((n) => api.notes.noteRemoveBinding(n.id, binding)));
+    const missing = notesStore.list.filter((n) => linked.has(n.id) && !n.bindings.includes(binding));
+    if (stale.length === 0 && missing.length === 0) return;
+    // One note at a time: each call rewrites the shared notes manifest.
+    for (const n of stale) await api.notes.noteRemoveBinding(n.id, binding);
+    for (const n of missing) await api.notes.noteAddBinding(n.id, binding);
     const active = notesStore.activeNote;
     if (active && stale.some((n) => n.id === active.id)) {
       notesStore.activeNote = { ...active, bindings: active.bindings.filter((b) => b !== binding) };
+    } else if (active && missing.some((n) => n.id === active.id)) {
+      notesStore.activeNote = { ...active, bindings: [...active.bindings, binding] };
     }
     await notesStore.refresh();
+  }
+
+  /** Link from the note side: tag the password first so the note binding is not seen as stale. */
+  async linkNote(passwordId: string, noteId: string) {
+    await this.ensureLoaded();
+    const entry = this.list.find((e) => e.id === passwordId);
+    if (!entry) return;
+    const tag = `note:${noteId}`;
+    if (!entry.tags.includes(tag)) {
+      await api.passwords.update(passwordId, { tags: [...entry.tags, tag] });
+      await this.refresh();
+    }
+    const binding = `password:${passwordId}`;
+    if (notesStore.loaded) await notesStore.addNoteBinding(noteId, binding);
+    else await api.notes.noteAddBinding(noteId, binding);
   }
 }
 

@@ -2,6 +2,9 @@
 <!-- SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1 -->
 
 <script lang="ts">
+  import { portal } from '$lib/portal';
+  import { backdropDismiss } from '$lib/backdrop';
+
   interface Props {
     open: boolean;
     title: string;
@@ -32,8 +35,8 @@
 <svelte:window onkeydown={handleKeydown} />
 
 {#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <div class="overlay" onclick={oncancel} onkeydown={(e) => e.key === 'Enter' && oncancel()} role="presentation" tabindex="-1">
+  <!-- Portalled to body so it stacks above drawers, which live on body too -->
+  <div class="overlay" use:portal use:backdropDismiss={oncancel} role="presentation">
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
     <div
       class="modal"

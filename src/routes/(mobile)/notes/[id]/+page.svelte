@@ -35,7 +35,7 @@
   import type { CaptureFile, MediaItem, MediaKind } from '$lib/media/types';
   import ChipMark from '$lib/components/notes/ChipMark.svelte';
   import { extractWikiTargets, unclosedMarkAt, unclosedWikiAt, wikiCloseOf, wikiMarkup, TPL_CLOSE, TPL_OPEN } from '$lib/tiptap-ext';
-  import { isEntityBinding } from '$lib/bindings';
+  import { isEntityBinding, parseBinding } from '$lib/bindings';
   import { contextKeys } from '$lib/notes-context';
   import { passwordStore } from '$lib/store/passwords.svelte';
   import { TEMPLATES_FOLDER } from '$lib/notes-filter';
@@ -734,6 +734,13 @@
     }
   }
 
+  /** Password links are stored on the password too; other bindings go straight onto the note. */
+  function bindEntity(binding: string): Promise<void> {
+    const parsed = parseBinding(binding);
+    if (parsed?.kind === 'password' && parsed.value) return passwordStore.linkNote(parsed.value, id);
+    return api.notes.addBinding(id, binding);
+  }
+
   async function addBinding(binding: string) {
     if (binding.startsWith('workspace:')) {
       await setWorkspace(binding.slice('workspace:'.length), true);
@@ -750,7 +757,7 @@
     }
     busy = true;
     try {
-      await api.notes.addBinding(id, binding);
+      await bindEntity(binding);
       await refreshMeta();
       sheet = 'none';
     } catch (e) {
@@ -875,6 +882,11 @@
           const n = await api.notes.create(title, content, tags, bindingsToApply);
           id = n.id;
           for (const folderId of foldersToApply) await api.notes.addFolder(id, folderId);
+          // Draft password links now get their `note:id` tag on the password side
+          for (const b of bindingsToApply) {
+            const parsed = parseBinding(b);
+            if (parsed?.kind === 'password' && parsed.value) await passwordStore.linkNote(parsed.value, id);
+          }
           const fresh = await api.notes.get(id);
           urls = new AttachmentUrls(id);
           chips = fresh.chips;
@@ -946,7 +958,7 @@
     }
     busy = true;
     try {
-      if (on) await api.notes.addBinding(id, binding);
+      if (on) await bindEntity(binding);
       else await api.notes.removeBinding(id, binding);
       await refreshMeta();
     } catch (e) {

@@ -186,16 +186,33 @@ pub(crate) fn write_note_file(
     atomic_write(path, &full)
 }
 
-/// Atomic write: write to .tmp, fsync, rename
+/// Atomic write: unique tmp next to the target, fsync, rename.
+/// A shared `*.tmp` name races when several notes update the manifest at once.
 pub(crate) fn atomic_write(path: &PathBuf, content: &str) -> Result<(), AppError> {
     use std::io::Write;
-    let tmp = path.with_extension("tmp");
-    let mut f = std::fs::File::create(&tmp).map_err(AppError::io)?;
-    f.write_all(content.as_bytes()).map_err(AppError::io)?;
-    f.sync_all().map_err(AppError::io)?;
-    drop(f);
-    std::fs::rename(&tmp, path).map_err(AppError::io)?;
-    Ok(())
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(AppError::io)?;
+        }
+    }
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("note");
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
+    let write = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if write.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    write.map_err(AppError::io)
 }
 
 /// Parse frontmatter + body from file content.

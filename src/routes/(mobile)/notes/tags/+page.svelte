@@ -8,6 +8,7 @@
   import NotesBurger from '$lib/components/mobile/NotesBurger.svelte';
   import { api, formatError, type NoteTag } from '$lib/mobile/api';
   import { t } from '$lib/mobile/i18n';
+  import { compareLabel } from '$lib/label-order';
   import { NAV_COLORS } from '$lib/mobile/nav-colors';
   import { longpress } from '$lib/mobile/longpress';
   import NavEditSheet from '$lib/components/mobile/NavEditSheet.svelte';
@@ -29,7 +30,7 @@
 
   async function load() {
     try {
-      tags = await api.notes.tags();
+      tags = (await api.notes.tags()).sort((a, b) => compareLabel(a.name, b.name));
     } catch (e) {
       error = formatError(e);
     }

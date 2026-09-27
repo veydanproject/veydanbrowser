@@ -37,11 +37,31 @@
   let { profile, proxy, workspaceId, columns, isRunning, onclose, onchange, onsync, onedit, onrawdata }: Props = $props();
 
   let activeTab = $state<'info' | 'totp' | 'passwords' | 'notes' | 'ssh'>('info');
+  let tabsEl = $state<HTMLDivElement | null>(null);
+  const drawerBase = 440;
+  let drawerWidth = $state(drawerBase);
   let notesOpen = $state(false);
   let noteToOpen = $state<string | null>(null);
 
   $effect(() => {
     if (!notesOpen) noteToOpen = null;
+  });
+
+  // Grow the drawer just enough for the tab labels and their counts.
+  $effect(() => {
+    totpCount;
+    passwordCount;
+    $locale;
+    const bar = tabsEl;
+    if (!bar) return;
+    const styles = getComputedStyle(bar);
+    const pad = parseFloat(styles.paddingLeft) + parseFloat(styles.paddingRight);
+    const gap = parseFloat(styles.columnGap || styles.gap) || 0;
+    let content = pad;
+    const tabs = [...bar.children] as HTMLElement[];
+    for (const tab of tabs) content += tab.getBoundingClientRect().width;
+    content += gap * Math.max(0, tabs.length - 1);
+    drawerWidth = Math.min(640, Math.max(drawerBase, Math.ceil(content + 8)));
   });
 
   const profileNotes = $derived(
@@ -174,14 +194,14 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-<Drawer open title={profile.name} {onclose}>
+<Drawer open title={profile.name} width="{drawerWidth}px" {onclose}>
   {#snippet actions()}
     <span class="status-badge" class:running={isRunning}>
       {isRunning ? $t('status_running') : $t('status_stopped')}
     </span>
   {/snippet}
   {#snippet subheader()}
-    <div class="tab-bar">
+    <div class="tab-bar psp-tabs" bind:this={tabsEl}>
       <button class="tab" class:active={activeTab === 'info'} onclick={() => (activeTab = 'info')}>
         <Icon name="info" size={12} /> Info
       </button>
@@ -648,9 +668,31 @@
     padding: var(--sp-2) 0.65rem;
   }
 
-  .panel-actions { display: flex; flex-direction: column; gap: 9px; }
-  .panel-actions .btn { width: 100%; justify-content: center; height: 46px; border-radius: var(--radius-field); }
-  .panel-actions .btn-main { height: 48px; font-size: 0.95rem; font-weight: var(--fw-bold); }
+  .psp-tabs { overflow: visible; }
+  .psp-tabs :global(.tab) { flex-shrink: 0; }
+
+  .panel-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .panel-actions .btn {
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+    height: 36px;
+    padding: 0 12px;
+    border-radius: var(--radius);
+    font-size: 0.82rem;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .panel-actions .btn-main,
+  .panel-actions .btn-delete {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
+  .panel-actions .btn-main { height: 42px; font-size: 0.92rem; font-weight: var(--fw-bold); }
   .btn-delete { color: var(--danger-text) !important; }
   .btn-delete:hover:not(:disabled) { background: var(--danger-bg) !important; border-color: var(--danger-border) !important; }
 

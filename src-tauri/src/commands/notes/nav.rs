@@ -143,7 +143,7 @@ pub async fn note_nav(state: tauri::State<'_, AppState>) -> CmdResult<NoteNav> {
     }
 
     let ws_rows: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT id, name, color FROM workspaces ORDER BY name")
+        sqlx::query_as("SELECT id, name, color FROM workspaces ORDER BY is_default DESC, created_at ASC")
             .fetch_all(db)
             .await
             .map_err(AppError::db)?;
@@ -165,9 +165,6 @@ pub async fn note_nav(state: tauri::State<'_, AppState>) -> CmdResult<NoteNav> {
     let mut profiles_of: HashMap<String, Vec<NavChild>> = HashMap::new();
     for (id, name, ws_id) in pr_rows {
         let count = *pr_count.get(&id).unwrap_or(&0);
-        if count == 0 {
-            continue;
-        }
         if let Some(ws_id) = ws_id {
             profiles_of
                 .entry(ws_id)

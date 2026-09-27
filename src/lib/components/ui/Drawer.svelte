@@ -4,6 +4,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { portal } from '$lib/portal';
+  import { backdropDismiss } from '$lib/backdrop';
   import { acquireScrollLock, releaseScrollLock } from '$lib/scrollLock';
   import Icon from '$lib/Icon.svelte';
 
@@ -61,13 +62,13 @@
 <svelte:window onkeydown={onKeydown} />
 
 {#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
   <div
     class="drawer-backdrop"
     use:portal
+    use:backdropDismiss={() => closeOnBackdrop && close()}
     role="presentation"
-    onclick={() => closeOnBackdrop && close()}
   >
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
     <div
       class="drawer {side}"
       style={width ? `width:${width}` : undefined}

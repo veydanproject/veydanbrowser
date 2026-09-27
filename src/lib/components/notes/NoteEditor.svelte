@@ -64,6 +64,13 @@
     });
     for (const binding of stale) void notesStore.removeNoteBinding(current.id, binding);
   });
+
+  /** Password links are stored on the password too; other bindings go straight onto the note. */
+  function bindEntity(noteId: string, binding: string): Promise<void> {
+    const parsed = parseBinding(binding);
+    if (parsed?.kind === 'password' && parsed.value) return passwordStore.linkNote(parsed.value, noteId);
+    return notesStore.addNoteBinding(noteId, binding);
+  }
   const saveStatus = $derived(notesStore.saveStatus);
   const externalChange = $derived(notesStore.externalChange);
 
@@ -758,7 +765,7 @@
         activeFolderIds={notesStore.list.find(n => n.id === note.id)?.folder_ids ?? []}
         onaddFolder={(folderId) => notesStore.addNoteFolder(note!.id, folderId)}
         activeBindings={note.bindings}
-        onaddBinding={(binding) => notesStore.addNoteBinding(note!.id, binding)}
+        onaddBinding={(binding) => bindEntity(note!.id, binding)}
       />
       <div class="header-right">
         <span class="updated-at">{formatUpdatedAt(note.updated_at)}</span>
@@ -813,7 +820,7 @@
         {mentions}
         focus={contextFocus}
         {readonly}
-        onbind={(b) => notesStore.addNoteBinding(note!.id, b)}
+        onbind={(b) => bindEntity(note!.id, b)}
         onunbind={(b) => notesStore.removeNoteBinding(note!.id, b)}
       />
     {/if}

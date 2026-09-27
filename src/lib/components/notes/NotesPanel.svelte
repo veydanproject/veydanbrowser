@@ -4,6 +4,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { portal } from '$lib/portal';
+  import { backdropDismiss } from '$lib/backdrop';
   import { acquireScrollLock, releaseScrollLock } from '$lib/scrollLock';
   import { notesStore } from '$lib/store/notes.svelte';
   import { workspacesStore } from '$lib/store/workspaces.svelte';
@@ -20,11 +21,8 @@
   import NoteFilters from './NoteFilters.svelte';
   import NoteTransferDialog, { type TransferMode } from './NoteTransferDialog.svelte';
   import NoteSyncButton from './NoteSyncButton.svelte';
-  import TotpNoteCodes from '$lib/components/TotpNoteCodes.svelte';
-  import PasswordNoteCodes from '$lib/components/passwords/PasswordNoteCodes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
   import { passwordStore } from '$lib/store/passwords.svelte';
-  import { entityMatchesFilter } from '$lib/entity-tags';
   import { t } from '$lib/i18n';
 
   interface Props {
@@ -46,14 +44,6 @@
   const hasTemplates = $derived(templateNotes(notesStore.list, notesStore.folders).length > 0);
   let activeFilter = $state<ActiveFilter>({ type: 'all' });
   let sidebarVisible = $state(true);
-
-  // TOTP codes tagged with the open profile / workspace, same as the full notes page
-  const matchedTotp = $derived(
-    totpStore.list.filter((entry) => entityMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
-  );
-  const matchedPasswords = $derived(
-    passwordStore.list.filter((entry) => entityMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
-  );
 
   // Resizable columns
   function loadColWidths(): { sidebar: number; list: number } {
@@ -294,11 +284,11 @@
 <NoteTransferDialog mode={transferMode} {exportIds} {importBindings} onclose={() => (transferMode = null)} />
 
 {#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="overlay"
     use:portal
-    onclick={(e) => { if (e.target === e.currentTarget) open = false; }}
+    use:backdropDismiss={() => (open = false)}
     onkeydown={onKeydown}
     role="presentation"
     tabindex="-1"
@@ -413,12 +403,6 @@
             </div>
           </div>
           <div class="list-scroll">
-            {#if matchedTotp.length}
-              <TotpNoteCodes entries={matchedTotp} />
-            {/if}
-            {#if matchedPasswords.length}
-              <PasswordNoteCodes entries={matchedPasswords} />
-            {/if}
             <NotesList
               notes={displayList}
               activeId={notesStore.activeNoteId}
@@ -448,8 +432,7 @@
 
       <!-- Create modal -->
       {#if showCreate}
-        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-        <div class="create-overlay" onclick={(e) => { if (e.target === e.currentTarget) showCreate = false; }} role="presentation">
+        <div class="create-overlay" use:backdropDismiss={() => (showCreate = false)} role="presentation">
           <div class="create-card">
             <h4>{$t('notes_create_title')}</h4>
             <input

@@ -9,11 +9,9 @@
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { api, isNotesWindow } from '$lib/api';
+  import { backdropDismiss } from '$lib/backdrop';
   import type { NoteCreateInput } from '$lib/types';
   import { toNoteFilter, contextBindings, templateNotes, type ActiveFilter } from '$lib/notes-filter';
-  import { entityMatchesFilter } from '$lib/entity-tags';
-  import TotpNoteCodes from '$lib/components/TotpNoteCodes.svelte';
-  import PasswordNoteCodes from '$lib/components/passwords/PasswordNoteCodes.svelte';
   import TemplateSelect from '$lib/components/notes/TemplateSelect.svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
   import Icon from '$lib/Icon.svelte';
@@ -107,12 +105,6 @@
   });
 
   const isTrash = $derived(activeFilter.type === 'trash');
-  const matchedTotp = $derived(
-    totpStore.list.filter((entry) => entityMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
-  );
-  const matchedPasswords = $derived(
-    passwordStore.list.filter((entry) => entityMatchesFilter(entry.tags, activeFilter.type, activeFilter.id)),
-  );
 
   // Ordering shared by list and table views; FTS results keep their relevance order
   let sort = $state<NoteSort>(loadSort());
@@ -415,12 +407,6 @@
         </div>
       </div>
       <div class="list-scroll">
-        {#if matchedTotp.length}
-          <TotpNoteCodes entries={matchedTotp} />
-        {/if}
-        {#if matchedPasswords.length}
-          <PasswordNoteCodes entries={matchedPasswords} />
-        {/if}
         {#if viewMode === 'table'}
           <NotesTable
             notes={displayList}
@@ -432,7 +418,7 @@
             activeId={notesStore.activeNoteId}
             onselect={handleSelectNote}
           />
-        {:else if displayList.length > 0 || matchedTotp.length === 0}
+        {:else}
         <NotesList
           notes={displayList}
           activeId={notesStore.activeNoteId}
@@ -464,8 +450,7 @@
 
 <!-- Create modal -->
 {#if showCreate && !notesLock.locked}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
-  <div class="create-overlay" onclick={(e) => { if (e.target === e.currentTarget) showCreate = false; }} role="presentation">
+  <div class="create-overlay" use:backdropDismiss={() => (showCreate = false)} role="presentation">
     <div class="create-card">
       <h4>{$t('notes_create_title')}</h4>
       <input
@@ -586,15 +571,17 @@
     flex-direction: column;
     overflow: hidden;
     min-width: 140px;
+    container-type: inline-size;
   }
 
   .list-header {
     padding: var(--sp-5) var(--sp-4) var(--sp-3);
     display: flex;
+    flex-wrap: wrap;
     /* Field and buttons sit on one line, vertically centred against the two-line title */
     align-items: center;
     justify-content: space-between;
-    gap: var(--sp-3);
+    gap: var(--sp-2) var(--sp-3);
     flex-shrink: 0;
   }
 
@@ -607,7 +594,7 @@
   }
   .list-sub { font-size: 0.78rem; color: var(--text-faint); }
 
-  .list-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .list-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 1; min-width: 0; }
   .sort-ctl { display: flex; align-items: center; }
   .sort-ctl .icon-btn { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; border-left: 0; }
   /* Compact CustomSelect matching the 36px header controls */
@@ -619,8 +606,8 @@
   }
   .sort-select :global(.trigger:focus), .sort-select :global(.trigger.open) { box-shadow: none; }
   .palette-field {
-    flex: 1;
-    min-width: 90px;
+    flex: 1 1 120px;
+    min-width: 0;
     height: 36px;
     display: inline-flex;
     align-items: center;
@@ -666,6 +653,17 @@
     flex-shrink: 0;
   }
   .btn-new:hover { filter: brightness(1.08); }
+
+  /* Narrow list column: title on its own line, the field shrinks to an icon */
+  @container (max-width: 560px) {
+    .list-title-group { flex: 1 1 100%; }
+    .list-actions { margin-left: auto; }
+  }
+  @container (max-width: 420px) {
+    .palette-placeholder, .palette-field kbd { display: none; }
+    .palette-field { flex: 0 0 36px; width: 36px; justify-content: center; padding: 0; }
+    .sort-select { width: 84px; }
+  }
 
   .list-scroll {
     flex: 1;

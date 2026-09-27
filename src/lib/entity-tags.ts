@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-import { binding, parseBinding } from '$lib/bindings';
+import { parseBinding } from '$lib/bindings';
 
 /** `kind:value` bindings share the tags array with free labels. */
 export function isSystemTag(tag: string): boolean {
@@ -32,17 +32,3 @@ export function mergeTags(locked: string[], bindings: string[], labels: string[]
   for (const tag of labels) if (!isSystemTag(tag)) push(tag);
   return out;
 }
-
-/**
- * An entry belongs in the notes list only for the open tag, profile, or workspace.
- * Empty tags never match. All / pinned / folder / trash do not match.
- */
-export function entityMatchesFilter(tags: string[], kind: string, id?: string | null): boolean {
-  if (!id || tags.length === 0) return false;
-  if (kind === 'tag') return userLabels(tags).includes(id);
-  if (kind === 'profile' || kind === 'workspace') return tags.includes(binding(kind, id));
-  return false;
-}
-
-/** Same filter, kept for existing TOTP call sites. */
-export const totpMatchesFilter = entityMatchesFilter;

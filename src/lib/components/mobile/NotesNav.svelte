@@ -3,12 +3,14 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import Icon from '$lib/Icon.svelte';
   import { api as shared } from '$lib/api';
   import { api, formatError, type NoteListFilter, type NoteNav, type NavChild } from '$lib/mobile/api';
   import { NAV_COLORS } from '$lib/mobile/nav-colors';
   import { longpress } from '$lib/mobile/longpress';
   import { t } from '$lib/mobile/i18n';
+  import { compareLabel } from '$lib/label-order';
   import NavEditSheet from './NavEditSheet.svelte';
   import SmartViewSheet from './SmartViewSheet.svelte';
   import BottomSheet from './BottomSheet.svelte';
@@ -54,6 +56,8 @@
       if (pid && map.has(pid)) map.get(pid)!.children.push(node);
       else roots.push(node);
     }
+    roots.sort((a, b) => compareLabel(a.item.name, b.item.name));
+    for (const node of map.values()) node.children.sort((a, b) => compareLabel(a.item.name, b.item.name));
     const rollup = (n: FolderNode): number => {
       n.total = n.item.count + n.children.reduce((s, c) => s + rollup(c), 0);
       return n.total;
@@ -63,6 +67,7 @@
   });
 
   const hasBrowser = $derived(!!nav && (nav.workspaces.length > 0 || nav.counts.global > 0));
+  const workspaces = $derived([...(nav?.workspaces ?? [])].sort((a, b) => compareLabel(a.name, b.name)));
 
   function swatch(color: string | undefined): string {
     const c = (color ?? '').trim();
@@ -74,6 +79,32 @@
     if (next.has(key)) next.delete(key);
     else next.add(key);
     collapsed = next;
+  }
+
+  function keysFolded(keys: string[]): boolean {
+    return keys.length > 0 && keys.every((key) => collapsed.has(key));
+  }
+
+  function toggleKeys(keys: string[]) {
+    const fold = keysFolded(keys);
+    const next = new Set(collapsed);
+    for (const key of keys) {
+      if (fold) next.delete(key);
+      else next.add(key);
+    }
+    collapsed = next;
+  }
+
+  function folderChildKeys(): string[] {
+    const keys: string[] = [];
+    const walk = (nodes: FolderNode[]) => {
+      for (const node of nodes) {
+        if (node.children.length > 0) keys.push(`folder:${node.item.id}`);
+        walk(node.children);
+      }
+    };
+    walk(spaces);
+    return keys;
   }
 
   function pick(kind: string, id?: string) {
@@ -184,27 +215,15 @@
           </button>
         </section>
 
-        <section>
-          <div class="label-row">
-            <span class="m-label">{$t('notes_filter_folders')}</span>
-            <button type="button" class="m-ibtn small" onclick={() => openNewFolder()} aria-label={$t('notes_create_folder')}>
-              <Icon name="plus" size={16} />
-            </button>
-          </div>
-          {#each spaces as node (node.item.id)}
-            {@render space(node)}
-          {/each}
-          {#if !spaces.length}
-            <span class="empty">{$t('notes_filter_folders_empty')}</span>
-          {/if}
-        </section>
-
         {#if hasBrowser}
           <section>
-            <button type="button" class="label-row" onclick={() => toggle('browser')}>
+            <div class="label-row">
               <span class="m-label">{$t('notes_browser_section')}</span>
-              <Icon name={collapsed.has('browser') ? 'chevron-right' : 'chevron-down'} size={16} />
-            </button>
+              <span class="head-actions">
+                {@render foldChevs('browser', () => workspaces.filter((ws) => (ws.profiles ?? []).length > 0).map((ws) => `ws:${ws.id}`))}
+                <span class="plus-slot"></span>
+              </span>
+            </div>
             {#if !collapsed.has('browser')}
               {#if nav.counts.global > 0}
                 <button class="item" class:on={active('global')} onclick={() => pick('global')}>
@@ -213,44 +232,69 @@
                   <span class="n">{nav.counts.global}</span>
                 </button>
               {/if}
-              {#each nav.workspaces as ws (ws.id)}
-                <button class="item" class:on={active('workspace', ws.id)} onclick={() => pick('workspace', ws.id)}>
-                  <span class="m-dot" style:background={swatch(ws.color)}></span>
-                  <span class="name">{ws.name}</span>
-                  {#if ws.count > 0}<span class="n">{ws.count}</span>{/if}
-                </button>
-                {#each ws.profiles ?? [] as p (p.id)}
-                  <button class="item child" class:on={active('profile', p.id)} onclick={() => pick('profile', p.id)}>
-                    <Icon name="browser" size={16} />
-                    <span class="name">{p.name}</span>
-                    <span class="n">{p.count}</span>
+              {#each workspaces as ws (ws.id)}
+                {@const profiles = (ws.profiles ?? []).toSorted((a, b) => compareLabel(a.name, b.name))}
+                <div class="ws-row">
+                  <button class="item" class:on={active('workspace', ws.id)} onclick={() => pick('workspace', ws.id)}>
+                    <span class="m-dot" style:background={swatch(ws.color)}></span>
+                    <span class="name">{ws.name}</span>
+                    {#if ws.count > 0}<span class="n">{ws.count}</span>{/if}
                   </button>
-                {/each}
+                  {#if profiles.length > 0}
+                    <button type="button" class="ws-chev" onclick={() => toggle(`ws:${ws.id}`)} aria-label={$t('notes_ws_fold_profiles')}>
+                      <Icon name={collapsed.has(`ws:${ws.id}`) ? 'chevron-right' : 'chevron-down'} size={16} />
+                    </button>
+                  {/if}
+                </div>
+                {#if !collapsed.has(`ws:${ws.id}`)}
+                  {#each profiles as p (p.id)}
+                    <button class="item child" class:on={active('profile', p.id)} onclick={() => pick('profile', p.id)}>
+                      <Icon name="browser" size={16} />
+                      <span class="name">{p.name}</span>
+                      <span class="n">{p.count}</span>
+                    </button>
+                  {/each}
+                {/if}
               {/each}
             {/if}
           </section>
         {/if}
 
-        {#if nav.sites.length}
-          <section>
-            <div class="m-label">{$t('notes_filter_sites')}</div>
-            {#each nav.sites as s (s.id)}
-              <button class="item" class:on={active('domain', s.id)} onclick={() => pick('domain', s.id)}>
-                <Icon name="globe" size={18} />
-                <span class="name">{s.name}</span>
-                <span class="n">{s.count}</span>
-              </button>
-            {/each}
-          </section>
-        {/if}
+        <section>
+          <div class="label-row">
+            <span class="m-label">{$t('notes_filter_folders')}</span>
+            <span class="head-actions">
+              {@render foldChevs('folders', folderChildKeys)}
+              <span class="plus-slot">
+                <button type="button" class="m-ibtn small" onclick={() => openNewFolder()} aria-label={$t('notes_create_folder')}>
+                  <Icon name="plus" size={16} />
+                </button>
+              </span>
+            </span>
+          </div>
+          {#if !collapsed.has('folders')}
+          {#each spaces as node (node.item.id)}
+            {@render space(node)}
+          {/each}
+          {#if !spaces.length}
+            <span class="empty">{$t('notes_filter_folders_empty')}</span>
+          {/if}
+          {/if}
+        </section>
 
         <section>
           <div class="label-row">
             <span class="m-label">{$t('notes_smart_title')}</span>
-            <button type="button" class="m-ibtn small" onclick={openNewSmart} aria-label={$t('notes_smart_new')}>
-              <Icon name="plus" size={16} />
-            </button>
+            <span class="head-actions">
+              {@render foldChevs('smart', () => [])}
+              <span class="plus-slot">
+                <button type="button" class="m-ibtn small" onclick={openNewSmart} aria-label={$t('notes_smart_new')}>
+                  <Icon name="plus" size={16} />
+                </button>
+              </span>
+            </span>
           </div>
+          {#if !collapsed.has('smart')}
           {#each nav.smart as view (view.id)}
             <button
               class="item"
@@ -265,6 +309,35 @@
           {#if !nav.smart.length}
             <span class="empty">{$t('notes_smart_empty')}</span>
           {/if}
+          {/if}
+        </section>
+
+        {#if nav.sites.length}
+          <section>
+            <div class="label-row">
+              <span class="m-label">{$t('notes_filter_sites')}</span>
+              <span class="head-actions">
+                {@render foldChevs('sites', () => [])}
+                <span class="plus-slot"></span>
+              </span>
+            </div>
+            {#if !collapsed.has('sites')}
+            {#each nav.sites as s (s.id)}
+              <button class="item" class:on={active('domain', s.id)} onclick={() => pick('domain', s.id)}>
+                <Icon name="globe" size={18} />
+                <span class="name">{s.name}</span>
+                <span class="n">{s.count}</span>
+              </button>
+            {/each}
+            {/if}
+          </section>
+        {/if}
+
+        <section>
+          <button type="button" class="label-row" onclick={() => { onclose(); void goto('/notes/tags'); }}>
+            <span class="m-label">{$t('notes_tags')}</span>
+            <Icon name="chevron-right" size={16} />
+          </button>
         </section>
 
         <div class="brand">
@@ -310,22 +383,58 @@
   />
 {/if}
 
+{#snippet foldChevs(sectionKey: string, childKeys: () => string[])}
+  {@const nested = childKeys()}
+  {@const folded = keysFolded(nested)}
+  <span class="ws-chevs">
+    {#if nested.length > 0}
+      <button
+        type="button"
+        class="label-hit"
+        onclick={() => toggleKeys(nested)}
+        aria-label={folded ? $t('notes_ws_unfold_profiles') : $t('notes_ws_fold_profiles')}
+      >
+        <Icon name={folded ? 'chevrons-right' : 'chevrons-down'} size={16} />
+      </button>
+    {:else}
+      <span class="label-hit"></span>
+    {/if}
+    <button
+      type="button"
+      class="label-hit"
+      onclick={() => toggle(sectionKey)}
+      aria-label={collapsed.has(sectionKey) ? $t('notes_ws_unfold') : $t('notes_ws_fold')}
+    >
+      <Icon name={collapsed.has(sectionKey) ? 'chevron-right' : 'chevron-down'} size={16} />
+    </button>
+  </span>
+{/snippet}
+
 {#snippet space(node: FolderNode)}
   {@const f = node.item}
   <div class="space">
-    <button
-      class="item space-row"
-      class:on={active('folder', f.id)}
-      onclick={() => pick('folder', f.id)}
-      {@attach longpress(() => (menu = { kind: 'folder', id: f.id, name: f.name, color: f.color }))}
-    >
-      <span class="m-dot" style:background={swatch(f.color)}></span>
-      <span class="name">{f.name}</span>
-      <span class="n">{node.total}</span>
-    </button>
-    {#each node.children as child (child.item.id)}
-      {@render folderNode(child, 1, f.color)}
-    {/each}
+    <div class="ws-row">
+      <button
+        class="item space-row"
+        class:on={active('folder', f.id)}
+        onclick={() => pick('folder', f.id)}
+        {@attach longpress(() => (menu = { kind: 'folder', id: f.id, name: f.name, color: f.color }))}
+      >
+        <span class="m-dot" style:background={swatch(f.color)}></span>
+        <span class="name">{f.name}</span>
+        <span class="n">{node.total}</span>
+      </button>
+      {#if node.children.length > 0}
+        <button type="button" class="ws-chev" onclick={() => toggle(`folder:${f.id}`)} aria-label={$t('notes_ws_fold')}>
+          <Icon name={collapsed.has(`folder:${f.id}`) ? 'chevron-right' : 'chevron-down'} size={16} />
+        </button>
+      {/if}
+    </div>
+    {#if !collapsed.has(`folder:${f.id}`)}
+      {#each node.children as child (child.item.id)}
+        {@render folderNode(child, 1, f.color)}
+      {/each}
+    {/if}
   </div>
 {/snippet}
 
@@ -342,9 +451,11 @@
     <span class="name">{f.name}</span>
     <span class="n">{node.total}</span>
   </button>
-  {#each node.children as child (child.item.id)}
-    {@render folderNode(child, depth + 1, spaceColor)}
-  {/each}
+  {#if !collapsed.has(`folder:${f.id}`)}
+    {#each node.children as child (child.item.id)}
+      {@render folderNode(child, depth + 1, spaceColor)}
+    {/each}
+  {/if}
 {/snippet}
 
 <style>
@@ -429,6 +540,41 @@
     padding: var(--sp-2) var(--sp-3);
     color: var(--text-3);
     font-size: var(--fs-sm);
+  }
+  .plus-slot {
+    width: 40px;
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .head-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+  .head-actions .ws-chevs { margin-left: 0; }
+  .ws-chevs { display: inline-flex; align-items: center; gap: 12px; margin-left: auto; }
+  .label-hit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+  }
+  .ws-row { display: flex; align-items: center; }
+  .ws-row .item { flex: 1; min-width: 0; }
+  .ws-chev {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    background: none;
+    color: var(--text-3);
+    flex-shrink: 0;
   }
   .label-row {
     display: flex;

@@ -67,8 +67,9 @@
   const profileHits = $derived(
     q ? profiles.filter((p) => !bindings.includes(`profile:${p.id}`) && p.name.toLowerCase().includes(q)) : [],
   );
+  // Notes are offered right away like tags; the empty query shows the first few.
   const noteHits = $derived(
-    q ? notes.filter((n) => !bindings.includes(`note:${n.id}`) && n.title.toLowerCase().includes(q)).slice(0, 6) : [],
+    notes.filter((n) => !bindings.includes(`note:${n.id}`) && n.title.toLowerCase().includes(q)).slice(0, 6),
   );
   const canCreate = $derived(query.trim().length > 0 && !tags.some((t) => t.name === query.trim()));
 
@@ -154,7 +155,7 @@
         </button>
       {/each}
       {#each noteHits as n (n.id)}
-        <button type="button" class="hit" disabled={busy} onpointerdown={(e) => { e.preventDefault(); onaddBinding(`note:${n.id}`); }}>
+        <button type="button" class="hit" disabled={busy} onpointerdown={(e) => e.preventDefault()} onclick={() => onaddBinding(`note:${n.id}`)}>
           <span class="dot muted"></span>
           <span class="name">{n.title}</span>
           <span class="kind">{$t('notes_kind_note')}</span>

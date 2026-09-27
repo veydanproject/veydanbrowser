@@ -75,7 +75,7 @@
         throw e;
       });
       await passwordStore.refresh();
-      await passwordStore.dropStaleNoteBindings(created.id, tags);
+      await passwordStore.syncNoteBindings(created.id, tags);
       goto(`/passwords/${created.id}`, { replaceState: true });
     } catch (e) {
       const key = passwordErrorKey(e);

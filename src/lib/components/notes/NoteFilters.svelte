@@ -9,6 +9,7 @@
   import { workspacesStore } from '$lib/store/workspaces.svelte';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { notesStore } from '$lib/store/notes.svelte';
+  import { compareLabel } from '$lib/label-order';
   import { t } from '$lib/i18n';
 
   const TAG_COLORS = [
@@ -35,6 +36,34 @@
     const next = new Set(collapsed);
     if (next.has(key)) next.delete(key); else next.add(key);
     collapsed = next;
+  }
+
+  function keysFolded(keys: string[]): boolean {
+    return keys.length > 0 && keys.every((key) => collapsed.has(key));
+  }
+
+  function toggleKeys(keys: string[]) {
+    const fold = keysFolded(keys);
+    const next = new Set(collapsed);
+    for (const key of keys) {
+      if (fold) next.delete(key);
+      else next.add(key);
+    }
+    collapsed = next;
+  }
+
+  function walkFolders(nodes: FolderNode[], keys: string[]) {
+    for (const node of nodes) {
+      if (node.children.length > 0) keys.push(`folder:${node.folder.id}`);
+      walkFolders(node.children, keys);
+    }
+  }
+
+  function walkTags(nodes: TagNode[], keys: string[]) {
+    for (const node of nodes) {
+      if (node.children.length > 0) keys.push(`tag:${node.fullPath}`);
+      walkTags(node.children, keys);
+    }
   }
 
   // ── Tag popup ─────────────────────────────────────────────────────────────────
@@ -235,8 +264,8 @@
       if (f.parent_id && nodeMap.has(f.parent_id)) nodeMap.get(f.parent_id)!.children.push(node);
       else roots.push(node);
     }
-    roots.sort((a, b) => a.folder.name.localeCompare(b.folder.name));
-    for (const node of nodeMap.values()) node.children.sort((a, b) => a.folder.name.localeCompare(b.folder.name));
+    roots.sort((a, b) => compareLabel(a.folder.name, b.folder.name));
+    for (const node of nodeMap.values()) node.children.sort((a, b) => compareLabel(a.folder.name, b.folder.name));
 
     // Propagate child counts to parents (post-order)
     function sumChildren(node: FolderNode): number {
@@ -284,7 +313,13 @@
         }
       }
     }
-    return [...roots.values()].sort((a, b) => a.label.localeCompare(b.label));
+    const sortTree = (nodes: TagNode[]) => {
+      nodes.sort((a, b) => compareLabel(a.label, b.label));
+      for (const node of nodes) sortTree(node.children);
+    };
+    const sorted = [...roots.values()];
+    sortTree(sorted);
+    return sorted;
   });
 
   // ── Workspace tree ────────────────────────────────────────────────────────────
@@ -296,9 +331,10 @@
       );
       const profiles = profilesStore.byWorkspace(ws.id)
         .map(p => ({ ...p, noteCount: notes.filter(n => n.bindings.includes(`profile:${p.id}`) && !n.archived).length }))
-        .filter(p => p.noteCount > 0);
+        .sort((a, b) => compareLabel(a.name, b.name));
       return { ...ws, noteCount: wsNotes.length, profiles };
     }).filter(ws => ws.noteCount > 0 || ws.profiles.length > 0)
+      .sort((a, b) => compareLabel(a.name, b.name))
   );
 
   // ── Smart views ───────────────────────────────────────────────────────────────
@@ -576,9 +612,8 @@
   <!-- Воркспейсы -->
   {#if workspaceTree.length > 0}
     <div class="filter-section">
-      <div class="section-label-row">
-        <span class="section-label">{$t('notes_filter_workspaces')}</span>
-      </div>
+      {@render foldHead($t('notes_filter_workspaces'), 'workspaces', () => workspaceTree.filter((ws) => ws.profiles.length > 0).map((ws) => `ws:${ws.id}`))}
+      {#if !collapsed.has('workspaces')}
       {#each workspaceTree as ws (ws.id)}
         <div class="tree-node">
           <div class="tree-row">
@@ -604,17 +639,47 @@
           {/if}
         </div>
       {/each}
+      {/if}
     </div>
   {/if}
+
+  <!-- Папки -->
+  <div class="filter-section">
+    <div class="section-label-row">
+      <span class="section-label">Папки</span>
+      <span class="head-actions">
+        {@render foldChevs('folders', () => { const keys: string[] = []; walkFolders(folderTree, keys); return keys; })}
+        <span class="plus-slot">
+          <button class="btn-add-area" onclick={() => openFolderModal()} title="Новая папка">
+            <Icon name="plus" size={11} />
+          </button>
+        </span>
+      </span>
+    </div>
+    {#if !collapsed.has('folders')}
+    {#each folderTree as node (node.folder.id)}
+      {@render folderNode(node, 0)}
+    {/each}
+    {#if folderTree.length === 0}
+      <span class="empty-hint">Папок пока нет</span>
+    {/if}
+    {/if}
+  </div>
 
   <!-- Умные списки -->
   <div class="filter-section">
     <div class="section-label-row">
       <span class="section-label">{$t('notes_smart_title')}</span>
-      <button class="btn-add-area" onclick={() => openSmartDialog(null)} title={$t('notes_smart_new')}>
-        <Icon name="plus" size={11} />
-      </button>
+      <span class="head-actions">
+        {@render foldChevs('smart', () => [])}
+        <span class="plus-slot">
+          <button class="btn-add-area" onclick={() => openSmartDialog(null)} title={$t('notes_smart_new')}>
+            <Icon name="plus" size={11} />
+          </button>
+        </span>
+      </span>
     </div>
+    {#if !collapsed.has('smart')}
     {#each notesStore.smartViews as view (view.id)}
       <div class="tree-node">
         <div class="tree-row folder-row" role="group"
@@ -651,17 +716,13 @@
     {#if notesStore.smartViews.length === 0}
       <span class="empty-hint">{$t('notes_smart_empty')}</span>
     {/if}
+    {/if}
   </div>
 
   <!-- Сайты -->
   {#if siteList.length > 0}
     <div class="filter-section">
-      <div class="section-label-row">
-        <button class="section-label section-toggle" onclick={() => toggle('sites')}>
-          {$t('notes_filter_sites')}
-          <Icon name={collapsed.has('sites') ? 'chevron-right' : 'chevron-down'} size={10} />
-        </button>
-      </div>
+      {@render foldHead($t('notes_filter_sites'), 'sites', () => [])}
       {#if !collapsed.has('sites')}
         {#each siteList as site (site.domain)}
           <button class={filterClass('domain', site.domain)} onclick={() => onfilter({ type: 'domain', id: site.domain })}>
@@ -674,38 +735,64 @@
     </div>
   {/if}
 
-  <!-- Папки -->
-  <div class="filter-section">
-    <div class="section-label-row">
-      <span class="section-label">Папки</span>
-      <button class="btn-add-area" onclick={() => openFolderModal()} title="Новая папка">
-        <Icon name="plus" size={11} />
-      </button>
-    </div>
-    {#each folderTree as node (node.folder.id)}
-      {@render folderNode(node, 0)}
-    {/each}
-    {#if folderTree.length === 0}
-      <span class="empty-hint">Папок пока нет</span>
-    {/if}
-  </div>
-
   <!-- Теги -->
   <div class="filter-section">
     <div class="section-label-row">
       <span class="section-label">{$t('notes_areas_title')}</span>
-      <button class="btn-add-area" onclick={() => openPopup()} title={$t('notes_areas_new')}>
-        <Icon name="plus" size={11} />
-      </button>
+      <span class="head-actions">
+        {@render foldChevs('tags', () => { const keys: string[] = []; walkTags(tagTree, keys); return keys; })}
+        <span class="plus-slot">
+          <button class="btn-add-area" onclick={() => openPopup()} title={$t('notes_areas_new')}>
+            <Icon name="plus" size={11} />
+          </button>
+        </span>
+      </span>
     </div>
+    {#if !collapsed.has('tags')}
     {#each tagTree as node (node.fullPath)}
       {@render tagNode(node, 0)}
     {/each}
     {#if tagTree.length === 0}
       <span class="empty-hint">{$t('notes_areas_empty')}</span>
     {/if}
+    {/if}
   </div>
 </div>
+
+{#snippet foldChevs(sectionKey: string, childKeys: () => string[])}
+  {@const nested = childKeys()}
+  {@const folded = keysFolded(nested)}
+  <span class="ws-chevs">
+    {#if nested.length > 0}
+      <button
+        class="collapse-trigger chev-slot"
+        onclick={() => toggleKeys(nested)}
+        title={folded ? $t('notes_ws_unfold_profiles') : $t('notes_ws_fold_profiles')}
+      >
+        <Icon name={folded ? 'chevrons-right' : 'chevrons-down'} size={12} />
+      </button>
+    {:else}
+      <span class="chev-slot"></span>
+    {/if}
+    <button
+      class="collapse-trigger chev-slot"
+      onclick={() => toggle(sectionKey)}
+      title={collapsed.has(sectionKey) ? $t('notes_ws_unfold') : $t('notes_ws_fold')}
+    >
+      <Icon name={collapsed.has(sectionKey) ? 'chevron-right' : 'chevron-down'} size={10} />
+    </button>
+  </span>
+{/snippet}
+
+{#snippet foldHead(label: string, sectionKey: string, childKeys: () => string[])}
+  <div class="section-label-row">
+    <span class="section-label">{label}</span>
+    <span class="head-actions">
+      {@render foldChevs(sectionKey, childKeys)}
+      <span class="plus-slot"></span>
+    </span>
+  </div>
+{/snippet}
 
 <SmartViewDialog open={smartDialogOpen} view={smartEditing} onclose={() => (smartDialogOpen = false)} />
 
@@ -871,6 +958,26 @@
     border: 0;
     background: none;
     cursor: pointer;
+  }
+  .head-actions { display: inline-flex; align-items: center; margin-left: auto; }
+  .head-actions .ws-chevs { margin-left: 0; }
+  .ws-chevs { display: inline-flex; align-items: center; margin-left: auto; }
+  .chev-slot {
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    padding: 0;
+  }
+  .plus-slot {
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
   }
 
   /* Nav item — базовый элемент списка */

@@ -237,7 +237,7 @@
         if (newTotpId) await totpStore.refresh();
       }
       await passwordStore.refresh();
-      if (savedId) await passwordStore.dropStaleNoteBindings(savedId, tags);
+      if (savedId) await passwordStore.syncNoteBindings(savedId, tags);
       await notesLock.refresh();
       onclose();
     } catch (e) {
