@@ -9,7 +9,7 @@
 
 [workspace]
 resolver = "2"
-members = ["core", "store", "identity", "runtime", "testkit"]
+members = ["core", "store", "identity", "transport", "runtime", "testkit"]
 
 [workspace.package]
 version = "0.1.0"
@@ -27,10 +27,13 @@ tokio = { version = "1", default-features = false }
 zeroize = "1"
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros"] }
 tempfile = "3"
+nostr-sdk = { version = "0.45", default-features = false, features = ["ring", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 nostr = { version = "0.45", default-features = false, features = ["std", "nip06", "nip44", "nip49", "nip59", "os-rng"] }
 
 messenger-core = { path = "core" }
 messenger-store = { path = "store" }
 messenger-identity = { path = "identity" }
+messenger-transport = { path = "transport" }
 messenger-runtime = { path = "runtime" }
 messenger-testkit = { path = "testkit" }
