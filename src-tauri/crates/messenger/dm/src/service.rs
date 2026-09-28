@@ -1,0 +1,916 @@
+// SPDX-FileCopyrightText: 2026 Veydan Project
+// SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
+
+//! Chats and messages. Everything here is local state plus event
+//! building; sending is the runtime's job (it enqueues the returned
+//! `Outbound`s and reports the outbox id back with `attach_outbox`).
+
+use crate::view::{preview, ChatView, MessageView, ReplyPreview};
+use crate::wrap::wrap;
+use messenger_contacts::{ContactService, ProfileService};
+use messenger_core::envelope::{T_CONTROL, T_DELETE, T_EDIT, T_MEDIA, T_TEXT};
+use messenger_core::traits::UiEvent;
+use messenger_core::{
+    Clock, Context, DmInbound, Effect, Envelope, EventSource, MessengerError, Outbound, PubKey, RelayUrl, Result,
+};
+use messenger_store::chats::{self, ChatRow};
+use messenger_store::messages::{self as repo, MessageRow, NewMessage};
+use messenger_store::{dm_routes, Store};
+use nostr::key::Keys;
+use nostr::nips::nip19::ToBech32;
+use nostr::prelude::PublicKey;
+use std::sync::Arc;
+
+pub const UI_EVENT_DM_MESSAGE: &str = "dm.message";
+pub const UI_EVENT_DM_UPDATED: &str = "dm.updated";
+pub const UI_EVENT_CHATS_UPDATED: &str = "chats.updated";
+
+/// Plaintext budget of one message. NIP-44 caps the padded plaintext at
+/// 64 KiB and the rumor JSON wraps the text, so stay well below.
+pub const MAX_TEXT_BYTES: usize = 32 * 1024;
+/// An outgoing message is shown as failed after this many publish attempts;
+/// the outbox itself keeps retrying.
+pub const FAILED_AFTER_ATTEMPTS: i64 = 3;
+
+/// A message that is stored locally and ready to be published.
+#[derive(Clone, Debug)]
+pub struct Prepared {
+    /// The visible message this action concerns (for edits and deletes:
+    /// the target after the change).
+    pub message: MessageView,
+    /// Row that tracks the publish status (the message itself, or the
+    /// hidden edit/delete row).
+    pub tracking_id: String,
+    pub to_peer: Outbound,
+    pub to_self: Option<Outbound>,
+}
+
+#[derive(Clone)]
+pub struct DmService {
+    store: Store,
+    contacts: ContactService,
+    profiles: ProfileService,
+    clock: Arc<dyn Clock>,
+}
+
+impl DmService {
+    pub fn new(store: Store, contacts: ContactService, profiles: ProfileService, clock: Arc<dyn Clock>) -> Self {
+        Self { store, contacts, profiles, clock }
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    // ─── Chats ──────────────────────────────────────────────────────────────
+
+    pub async fn list_chats(&self, include_archived: bool) -> Result<Vec<ChatView>> {
+        let rows = chats::list(&self.store, include_archived).await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(self.chat_view(r).await?);
+        }
+        Ok(out)
+    }
+
+    pub async fn chat(&self, chat_id: &str) -> Result<Option<ChatView>> {
+        match chats::get(&self.store, chat_id).await? {
+            Some(r) => Ok(Some(self.chat_view(r).await?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Open (creating if needed) the DM chat with `peer`.
+    pub async fn open_chat(&self, peer: &PubKey) -> Result<ChatView> {
+        let row = chats::ensure_dm(&self.store, peer.as_hex()).await?;
+        self.chat_view(row).await
+    }
+
+    pub async fn mark_read(&self, chat_id: &str) -> Result<()> {
+        chats::mark_read(&self.store, chat_id).await
+    }
+
+    pub async fn set_pinned(&self, chat_id: &str, pinned: bool) -> Result<()> {
+        chats::set_pinned(&self.store, chat_id, pinned).await
+    }
+
+    pub async fn set_archived(&self, chat_id: &str, archived: bool) -> Result<()> {
+        chats::set_archived(&self.store, chat_id, archived).await
+    }
+
+    pub async fn delete_chat(&self, chat_id: &str) -> Result<()> {
+        chats::delete(&self.store, chat_id).await
+    }
+
+    pub async fn total_unread(&self) -> Result<i64> {
+        chats::total_unread(&self.store).await
+    }
+
+    async fn chat_view(&self, r: ChatRow) -> Result<ChatView> {
+        let peer = r.peer_pubkey.as_deref().and_then(PubKey::parse);
+        let (mut title, mut picture, mut is_contact, mut is_muted) = (String::new(), None, false, false);
+        let mut npub = None;
+        if let Some(pk) = &peer {
+            npub = PublicKey::from_hex(pk.as_hex()).ok().and_then(|p| p.to_bech32().ok());
+            if let Some(c) = self.contacts.get(pk).await? {
+                title = c.label();
+                picture = c.profile.as_ref().and_then(|p| p.picture.clone());
+                is_contact = true;
+                is_muted = c.is_muted;
+            } else if let Some(p) = self.profiles.get(pk).await? {
+                title = p.label();
+                picture = p.picture.clone();
+            }
+            if title.trim().is_empty() {
+                let n = npub.clone().unwrap_or_else(|| pk.as_hex().to_string());
+                title = format!("{}…{}", &n[..12.min(n.len())], &n[n.len().saturating_sub(4)..]);
+            }
+        }
+        Ok(ChatView {
+            id: r.id,
+            kind: r.kind,
+            peer_pubkey: r.peer_pubkey,
+            peer_npub: npub,
+            title,
+            picture,
+            is_contact,
+            is_muted,
+            unread: r.unread,
+            last_message_at: r.last_message_at,
+            last_preview: r.last_preview,
+            pinned: r.pinned,
+            archived: r.archived,
+            mode: "full_chat".into(),
+            can_send: true,
+        })
+    }
+
+    // ─── Messages ───────────────────────────────────────────────────────────
+
+    pub async fn messages(&self, chat_id: &str, before: Option<i64>, limit: i64) -> Result<Vec<MessageView>> {
+        let rows = repo::list(&self.store, chat_id, before, limit.clamp(1, 500)).await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(self.message_view(r).await?);
+        }
+        Ok(out)
+    }
+
+    pub async fn message(&self, id: &str) -> Result<Option<MessageView>> {
+        match repo::get(&self.store, id).await? {
+            Some(r) => Ok(Some(self.message_view(r).await?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn message_view(&self, r: MessageRow) -> Result<MessageView> {
+        let reply = match &r.reply_to_id {
+            Some(id) => repo::get(&self.store, id).await?.filter(|t| !t.is_hidden).map(|t| ReplyPreview {
+                id: t.id,
+                sender_pubkey: t.sender_pubkey,
+                text: t.text.as_deref().map(preview),
+            }),
+            None => None,
+        };
+        Ok(MessageView::from_row(r, reply))
+    }
+
+    /// Where to deliver DMs for `peer`, best first.
+    pub async fn hints(&self, peer: &PubKey) -> Result<Vec<RelayUrl>> {
+        Ok(dm_routes::for_peer(&self.store, peer.as_hex())
+            .await?
+            .iter()
+            .filter_map(|u| RelayUrl::parse(u))
+            .collect())
+    }
+
+    /// Application time for the next outgoing rumor: never earlier than
+    /// the newest message in the chat, so order survives clock skew and
+    /// several sends within one second.
+    async fn next_created_at(&self, chat_id: &str) -> Result<i64> {
+        let now = self.clock.now().secs();
+        Ok(match repo::last_created_at(&self.store, chat_id).await? {
+            Some(last) if last >= now => last + 1,
+            _ => now,
+        })
+    }
+
+    async fn publish_pair(
+        &self,
+        keys: &Keys,
+        peer: &PubKey,
+        content: &str,
+        created_at: i64,
+        reply_to: Option<&str>,
+    ) -> Result<(String, String, Outbound, Option<Outbound>)> {
+        let w = wrap(keys, peer, content, created_at, reply_to)?;
+        let hint_relays = self.hints(peer).await?;
+        let wire_id = w.to_peer.id.as_hex().to_string();
+        let to_peer = Outbound::PublishToInbox { recipient: peer.clone(), event: w.to_peer, hint_relays };
+        let to_self = w.to_self.map(|event| Outbound::PublishOwn { event });
+        Ok((w.rumor_id.as_hex().to_string(), wire_id, to_peer, to_self))
+    }
+
+    fn me(keys: &Keys) -> String {
+        keys.public_key().to_hex()
+    }
+
+    /// Store an outgoing text message and build its wraps.
+    pub async fn prepare_text(&self, keys: &Keys, peer: &PubKey, text: &str, reply_to: Option<&str>) -> Result<Prepared> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(MessengerError::Invalid("message is empty".into()));
+        }
+        if text.len() > MAX_TEXT_BYTES {
+            return Err(MessengerError::Invalid(format!("message is longer than {} KiB", MAX_TEXT_BYTES / 1024)));
+        }
+        let envelope = Envelope::text(text);
+        self.prepare_visible(keys, peer, envelope, repo::CT_TEXT, Some(text.to_string()), reply_to, None).await
+    }
+
+    /// Store an outgoing message of any visible type (media uses this).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepare_visible(
+        &self,
+        keys: &Keys,
+        peer: &PubKey,
+        envelope: Envelope,
+        content_type: &str,
+        text: Option<String>,
+        reply_to: Option<&str>,
+        media_json: Option<String>,
+    ) -> Result<Prepared> {
+        let chat = chats::ensure_dm(&self.store, peer.as_hex()).await?;
+        if let Some(id) = reply_to {
+            match repo::get(&self.store, id).await? {
+                Some(t) if t.chat_id == chat.id && !t.is_hidden => {}
+                _ => return Err(MessengerError::Invalid("reply target is not in this chat".into())),
+            }
+        }
+        let content = envelope.encode();
+        let created_at = self.next_created_at(&chat.id).await?;
+        let (id, wire_id, to_peer, to_self) = self.publish_pair(keys, peer, &content, created_at, reply_to).await?;
+        repo::insert(
+            &self.store,
+            &NewMessage {
+                id: id.clone(),
+                chat_id: chat.id.clone(),
+                wire_id: Some(wire_id),
+                direction: repo::DIR_OUT.into(),
+                status: repo::STATUS_QUEUED.into(),
+                content_type: content_type.into(),
+                text: text.clone(),
+                envelope_json: content,
+                sender_pubkey: Self::me(keys),
+                reply_to_id: reply_to.map(String::from),
+                target_id: None,
+                created_at,
+                is_hidden: false,
+                outbox_local_id: None,
+                media_json,
+            },
+        )
+        .await?;
+        let line = text.as_deref().map(preview).unwrap_or_else(|| format!("[{content_type}]"));
+        chats::touch(&self.store, &chat.id, created_at, Some(&line), false).await?;
+        let message = self.message(&id).await?.ok_or_else(|| MessengerError::Storage("message vanished".into()))?;
+        Ok(Prepared { message, tracking_id: id, to_peer, to_self })
+    }
+
+    async fn own_target(&self, keys: &Keys, message_id: &str) -> Result<(MessageRow, PubKey)> {
+        let row = repo::get(&self.store, message_id)
+            .await?
+            .filter(|r| !r.is_hidden)
+            .ok_or_else(|| MessengerError::Invalid("unknown message".into()))?;
+        if row.sender_pubkey != Self::me(keys) {
+            return Err(MessengerError::Invalid("only your own messages can be changed for everyone".into()));
+        }
+        if row.deleted_at.is_some() {
+            return Err(MessengerError::Invalid("message is deleted".into()));
+        }
+        let chat = chats::get(&self.store, &row.chat_id)
+            .await?
+            .ok_or_else(|| MessengerError::Storage("chat missing".into()))?;
+        let peer = chat
+            .peer_pubkey
+            .as_deref()
+            .and_then(PubKey::parse)
+            .ok_or_else(|| MessengerError::Storage("chat has no peer".into()))?;
+        Ok((row, peer))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn insert_hidden(
+        &self,
+        keys: &Keys,
+        chat_id: &str,
+        id: &str,
+        wire_id: &str,
+        content_type: &str,
+        content: String,
+        target: &str,
+        created_at: i64,
+    ) -> Result<()> {
+        repo::insert(
+            &self.store,
+            &NewMessage {
+                id: id.into(),
+                chat_id: chat_id.into(),
+                wire_id: Some(wire_id.into()),
+                direction: repo::DIR_OUT.into(),
+                status: repo::STATUS_QUEUED.into(),
+                content_type: content_type.into(),
+                text: None,
+                envelope_json: content,
+                sender_pubkey: Self::me(keys),
+                reply_to_id: None,
+                target_id: Some(target.into()),
+                created_at,
+                is_hidden: true,
+                outbox_local_id: None,
+                media_json: None,
+            },
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Replace the text of one of our messages, locally and for the peer.
+    pub async fn prepare_edit(&self, keys: &Keys, message_id: &str, text: &str) -> Result<Prepared> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(MessengerError::Invalid("message is empty".into()));
+        }
+        if text.len() > MAX_TEXT_BYTES {
+            return Err(MessengerError::Invalid("message is too long".into()));
+        }
+        let (row, peer) = self.own_target(keys, message_id).await?;
+        if row.content_type != repo::CT_TEXT {
+            return Err(MessengerError::Invalid("only text messages can be edited".into()));
+        }
+        let content = Envelope::edit(message_id, text).encode();
+        let created_at = self.next_created_at(&row.chat_id).await?;
+        let (id, wire_id, to_peer, to_self) = self.publish_pair(keys, &peer, &content, created_at, None).await?;
+        self.insert_hidden(keys, &row.chat_id, &id, &wire_id, repo::CT_EDIT, content, message_id, created_at).await?;
+        repo::set_text(&self.store, message_id, text, created_at).await?;
+        chats::recompute_last(&self.store, &row.chat_id).await?;
+        let message = self.message(message_id).await?.ok_or_else(|| MessengerError::Storage("message vanished".into()))?;
+        Ok(Prepared { message, tracking_id: id, to_peer, to_self })
+    }
+
+    /// Retract one of our messages for everyone.
+    pub async fn prepare_delete(&self, keys: &Keys, message_id: &str) -> Result<Prepared> {
+        let (row, peer) = self.own_target(keys, message_id).await?;
+        let content = Envelope::delete(message_id).encode();
+        let created_at = self.next_created_at(&row.chat_id).await?;
+        let (id, wire_id, to_peer, to_self) = self.publish_pair(keys, &peer, &content, created_at, None).await?;
+        self.insert_hidden(keys, &row.chat_id, &id, &wire_id, repo::CT_DELETE, content, message_id, created_at).await?;
+        repo::mark_deleted(&self.store, message_id, created_at).await?;
+        chats::recompute_last(&self.store, &row.chat_id).await?;
+        let message = self.message(message_id).await?.ok_or_else(|| MessengerError::Storage("message vanished".into()))?;
+        Ok(Prepared { message, tracking_id: id, to_peer, to_self })
+    }
+
+    /// Hide a message on this device only (works for incoming ones too).
+    pub async fn delete_local(&self, message_id: &str) -> Result<()> {
+        let row = repo::get(&self.store, message_id)
+            .await?
+            .ok_or_else(|| MessengerError::Invalid("unknown message".into()))?;
+        repo::mark_deleted(&self.store, message_id, self.clock.now().secs()).await?;
+        chats::recompute_last(&self.store, &row.chat_id).await
+    }
+
+    /// Link a row to the outbox entry that publishes it.
+    pub async fn attach_outbox(&self, tracking_id: &str, local_id: &str) -> Result<()> {
+        repo::set_outbox_local_id(&self.store, tracking_id, Some(local_id)).await
+    }
+
+    /// Outbox id of a failed/queued message, for a manual retry.
+    pub async fn outbox_id_for_retry(&self, message_id: &str) -> Result<String> {
+        let row = repo::get(&self.store, message_id)
+            .await?
+            .ok_or_else(|| MessengerError::Invalid("unknown message".into()))?;
+        let id = row.outbox_local_id.ok_or_else(|| MessengerError::Invalid("message was never queued".into()))?;
+        repo::set_status(&self.store, message_id, repo::STATUS_QUEUED, None).await?;
+        Ok(id)
+    }
+
+    /// Pull publish results from the outbox into message statuses.
+    /// Returns UI events for every visible message that changed.
+    pub async fn sync_statuses(&self) -> Result<Vec<UiEvent>> {
+        let (sent, failed) = repo::sync_outbox_status(&self.store, FAILED_AFTER_ATTEMPTS).await?;
+        let mut events = Vec::new();
+        for id in sent.into_iter().chain(failed) {
+            if let Some(row) = repo::get(&self.store, &id).await? {
+                if !row.is_hidden {
+                    events.push(updated(&row.chat_id, &row.id));
+                }
+            }
+        }
+        Ok(events)
+    }
+
+    // ─── Inbound ────────────────────────────────────────────────────────────
+
+    pub async fn apply_inbound(&self, msg: DmInbound, ctx: &Context) -> Result<Vec<Effect>> {
+        let me = &ctx.my_pubkey;
+        let from_me = &msg.sender == me;
+        let peer = if from_me {
+            msg.recipients.iter().find(|p| *p != me).cloned().unwrap_or_else(|| me.clone())
+        } else {
+            msg.sender.clone()
+        };
+        let historical =
+            msg.created_at < ctx.session_started_at || matches!(msg.envelope.source, EventSource::Sync { .. });
+        let chat = chats::ensure_dm(&self.store, peer.as_hex()).await?;
+        let id = msg.rumor_id.as_hex().to_string();
+
+        // Other NIP-17 clients send bare text; read it as a text message.
+        let envelope = Envelope::parse(&msg.content).unwrap_or_else(|_| Envelope::text(&msg.content));
+        let (content_type, text, hidden, target, media_json): (String, Option<String>, bool, Option<String>, Option<String>) =
+            match envelope.t.as_str() {
+                T_TEXT => (repo::CT_TEXT.into(), envelope.as_text().map(String::from), false, None, None),
+                T_EDIT => (repo::CT_EDIT.into(), None, true, envelope.str_field("target").map(String::from), None),
+                T_DELETE => (repo::CT_DELETE.into(), None, true, envelope.str_field("target").map(String::from), None),
+                T_CONTROL => (repo::CT_CONTROL.into(), None, true, None, None),
+                T_MEDIA => (
+                    repo::CT_MEDIA.into(),
+                    envelope.str_field("caption").map(String::from),
+                    false,
+                    None,
+                    Some(serde_json::Value::Object(envelope.fields.clone()).to_string()),
+                ),
+                other => (other.to_string(), envelope.str_field("text").map(String::from), false, None, None),
+            };
+
+        let inserted = repo::insert(
+            &self.store,
+            &NewMessage {
+                id: id.clone(),
+                chat_id: chat.id.clone(),
+                wire_id: Some(msg.envelope.wire_id.as_hex().to_string()),
+                direction: if from_me { repo::DIR_OUT.into() } else { repo::DIR_IN.into() },
+                status: if from_me { repo::STATUS_SENT.into() } else { repo::STATUS_RECEIVED.into() },
+                content_type: content_type.clone(),
+                text: text.clone(),
+                envelope_json: msg.content.clone(),
+                sender_pubkey: msg.sender.as_hex().to_string(),
+                reply_to_id: msg.reply_to.as_ref().map(|e| e.as_hex().to_string()),
+                target_id: target.clone(),
+                created_at: msg.created_at.secs(),
+                is_hidden: hidden,
+                outbox_local_id: None,
+                media_json,
+            },
+        )
+        .await?;
+
+        if !inserted {
+            // Another copy of something we already hold. Our own self-copy
+            // coming back proves a relay stored the message.
+            if from_me {
+                if let Some(row) = repo::get(&self.store, &id).await? {
+                    if row.status == repo::STATUS_QUEUED || row.status == repo::STATUS_FAILED {
+                        repo::set_status(&self.store, &id, repo::STATUS_SENT, None).await?;
+                        if !row.is_hidden {
+                            return Ok(vec![Effect::Emit(updated(&row.chat_id, &id))]);
+                        }
+                    }
+                }
+            }
+            return Ok(vec![]);
+        }
+
+        if hidden {
+            let Some(target) = target else { return Ok(vec![]) };
+            return self.apply_change(&chat.id, &content_type, &target, &msg, text_of(&envelope)).await;
+        }
+
+        // Edits or a delete that overtook this message on the wire.
+        for p in repo::pending_for_target(&self.store, &id).await? {
+            if p.sender_pubkey != msg.sender.as_hex() || p.created_at < msg.created_at.secs() {
+                continue;
+            }
+            match p.content_type.as_str() {
+                repo::CT_EDIT => {
+                    if let Some(t) = Envelope::parse(&p.envelope_json).ok().and_then(|e| e.str_field("text").map(String::from)) {
+                        repo::set_text(&self.store, &id, &t, p.created_at).await?;
+                    }
+                }
+                repo::CT_DELETE => repo::mark_deleted(&self.store, &id, p.created_at).await?,
+                _ => {}
+            }
+        }
+
+        let line = text.as_deref().map(preview).unwrap_or_else(|| format!("[{content_type}]"));
+        let live_incoming = !from_me && !historical;
+        chats::touch(&self.store, &chat.id, msg.created_at.secs(), Some(&line), live_incoming).await?;
+        chats::recompute_last(&self.store, &chat.id).await?;
+
+        let view = self.message(&id).await?.ok_or_else(|| MessengerError::Storage("message vanished".into()))?;
+        let mut effects = vec![Effect::Emit(UiEvent {
+            name: UI_EVENT_DM_MESSAGE.into(),
+            payload: serde_json::json!({ "chat_id": chat.id, "message": view, "historical": historical }),
+        })];
+        if live_incoming && !view.deleted && !self.contacts.is_muted(&peer).await? {
+            let title = self.chat(&chat.id).await?.map(|c| c.title).unwrap_or_default();
+            effects.push(Effect::Notify { title, body: Some(line), chat_id: Some(chat.id.clone()) });
+        }
+        Ok(effects)
+    }
+
+    /// An edit or delete arrived: apply it when the target is here and
+    /// belongs to the same author. Otherwise the hidden row waits.
+    async fn apply_change(
+        &self,
+        chat_id: &str,
+        content_type: &str,
+        target: &str,
+        msg: &DmInbound,
+        new_text: Option<String>,
+    ) -> Result<Vec<Effect>> {
+        let Some(row) = repo::get(&self.store, target).await? else { return Ok(vec![]) };
+        if row.is_hidden || row.chat_id != chat_id || row.sender_pubkey != msg.sender.as_hex() {
+            return Ok(vec![]);
+        }
+        if row.deleted_at.is_some() {
+            return Ok(vec![]);
+        }
+        let at = msg.created_at.secs();
+        match content_type {
+            repo::CT_EDIT => {
+                // Last edit wins; an older edit replayed later changes nothing.
+                if row.edited_at.is_some_and(|e| e > at) {
+                    return Ok(vec![]);
+                }
+                let Some(t) = new_text.filter(|t| !t.trim().is_empty() && t.len() <= MAX_TEXT_BYTES) else {
+                    return Ok(vec![]);
+                };
+                repo::set_text(&self.store, target, t.trim(), at).await?;
+            }
+            repo::CT_DELETE => repo::mark_deleted(&self.store, target, at).await?,
+            _ => return Ok(vec![]),
+        }
+        chats::recompute_last(&self.store, chat_id).await?;
+        Ok(vec![Effect::Emit(updated(chat_id, target))])
+    }
+}
+
+fn text_of(e: &Envelope) -> Option<String> {
+    e.str_field("text").map(String::from)
+}
+
+fn updated(chat_id: &str, message_id: &str) -> UiEvent {
+    UiEvent {
+        name: UI_EVENT_DM_UPDATED.into(),
+        payload: serde_json::json!({ "chat_id": chat_id, "message_id": message_id }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use messenger_core::inbound::Envelope as WireEnvelope;
+    use messenger_core::outbound::WireEvent;
+    use messenger_core::{EventId, Timestamp};
+    use nostr::nips::nip59::UnwrappedGift;
+    use nostr::prelude::Event;
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    struct TestClock(AtomicI64);
+    impl Clock for TestClock {
+        fn now(&self) -> Timestamp {
+            Timestamp(self.0.load(Ordering::SeqCst))
+        }
+    }
+
+    /// One participant: own store, own keys.
+    struct Party {
+        keys: Keys,
+        dm: DmService,
+        contacts: ContactService,
+        clock: Arc<TestClock>,
+        session_started_at: i64,
+    }
+
+    impl Party {
+        async fn new() -> Self {
+            Self::with_keys(Keys::generate()).await
+        }
+
+        async fn with_keys(keys: Keys) -> Self {
+            let store = Store::open_in_memory().await.unwrap();
+            let profiles = ProfileService::new(store.clone());
+            let contacts = ContactService::new(store.clone(), profiles.clone());
+            let clock = Arc::new(TestClock(AtomicI64::new(1_000_000)));
+            let dm = DmService::new(store, contacts.clone(), profiles, clock.clone());
+            Self { keys, dm, contacts, clock, session_started_at: 999_000 }
+        }
+
+        fn pk(&self) -> PubKey {
+            PubKey::parse(&self.keys.public_key().to_hex()).unwrap()
+        }
+
+        fn ctx(&self) -> Context {
+            Context { my_pubkey: self.pk(), session_started_at: Timestamp(self.session_started_at), clock: self.clock.clone() }
+        }
+
+        /// Open a wrap the way ingress does and hand it to the service.
+        async fn receive(&self, event: &WireEvent) -> Vec<Effect> {
+            self.receive_from(event, false).await
+        }
+
+        async fn receive_from(&self, event: &WireEvent, via_sync: bool) -> Vec<Effect> {
+            let ev: Event = serde_json::from_value(event.json.clone()).unwrap();
+            let u = UnwrappedGift::from_gift_wrap(&self.keys, &ev).expect("addressed to this party");
+            let mut rumor = u.rumor.clone();
+            rumor.ensure_id();
+            let url = RelayUrl::parse("wss://r.example").unwrap();
+            let msg = DmInbound {
+                envelope: WireEnvelope {
+                    wire_id: event.id.clone(),
+                    source: if via_sync { EventSource::Sync { url } } else { EventSource::Relay { url } },
+                    wire_created_at: Timestamp(ev.created_at.as_secs() as i64),
+                },
+                rumor_id: EventId::parse(&rumor.id.unwrap().to_hex()).unwrap(),
+                sender: PubKey::parse(&u.sender.to_hex()).unwrap(),
+                recipients: rumor
+                    .tags
+                    .iter()
+                    .filter(|t| t.kind() == "p")
+                    .filter_map(|t| t.as_slice().get(1))
+                    .filter_map(|s| PubKey::parse(s))
+                    .collect(),
+                created_at: Timestamp(rumor.created_at.as_secs() as i64),
+                content: rumor.content.clone(),
+                reply_to: rumor
+                    .tags
+                    .iter()
+                    .filter(|t| t.kind() == "e")
+                    .filter_map(|t| t.as_slice().get(1))
+                    .filter_map(|s| EventId::parse(s))
+                    .next(),
+            };
+            self.dm.apply_inbound(msg, &self.ctx()).await.unwrap()
+        }
+    }
+
+    fn peer_event(p: &Prepared) -> WireEvent {
+        match &p.to_peer {
+            Outbound::PublishToInbox { event, .. } => event.clone(),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    fn self_event(p: &Prepared) -> WireEvent {
+        match p.to_self.as_ref().expect("self copy") {
+            Outbound::PublishOwn { event } => event.clone(),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    fn names(effects: &[Effect]) -> Vec<String> {
+        effects
+            .iter()
+            .map(|e| match e {
+                Effect::Emit(u) => u.name.clone(),
+                Effect::Notify { .. } => "notify".into(),
+                Effect::Send(_) => "send".into(),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn conversation_both_ways_with_reply_and_unread() {
+        let alice = Party::new().await;
+        let bob = Party::new().await;
+
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "  hello bob ", None).await.unwrap();
+        assert_eq!(p.message.text.as_deref(), Some("hello bob"));
+        assert_eq!(p.message.status, "queued");
+        assert_eq!(p.message.direction, "out");
+
+        let fx = bob.receive(&peer_event(&p)).await;
+        assert_eq!(names(&fx), vec!["dm.message", "notify"]);
+        let chat = bob.dm.open_chat(&alice.pk()).await.unwrap();
+        assert_eq!(chat.unread, 1);
+        assert_eq!(chat.last_preview.as_deref(), Some("hello bob"));
+        let msgs = bob.dm.messages(&chat.id, None, 50).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id, p.message.id, "same id on both sides");
+        assert_eq!(msgs[0].direction, "in");
+
+        // Same wrap from a second relay: nothing happens.
+        assert!(bob.receive(&peer_event(&p)).await.is_empty());
+        assert_eq!(bob.dm.open_chat(&alice.pk()).await.unwrap().unread, 1);
+
+        bob.clock.0.store(1_000_010, Ordering::SeqCst);
+        let r = bob.dm.prepare_text(&bob.keys, &alice.pk(), "hi alice", Some(&p.message.id)).await.unwrap();
+        assert_eq!(r.message.reply_to.as_ref().unwrap().text.as_deref(), Some("hello bob"));
+        alice.receive(&peer_event(&r)).await;
+        let a_chat = alice.dm.open_chat(&bob.pk()).await.unwrap();
+        let a_msgs = alice.dm.messages(&a_chat.id, None, 50).await.unwrap();
+        assert_eq!(a_msgs.iter().map(|m| m.text.clone().unwrap()).collect::<Vec<_>>(), vec!["hello bob", "hi alice"]);
+        assert_eq!(a_msgs[1].reply_to.as_ref().unwrap().id, p.message.id);
+        assert_eq!(a_chat.unread, 1);
+        alice.dm.mark_read(&a_chat.id).await.unwrap();
+        assert_eq!(alice.dm.total_unread().await.unwrap(), 0);
+
+        assert!(alice.dm.prepare_text(&alice.keys, &bob.pk(), "x", Some(&"00".repeat(32))).await.is_err(), "unknown reply target");
+        assert!(alice.dm.prepare_text(&alice.keys, &bob.pk(), "   ", None).await.is_err());
+        let huge = "a".repeat(MAX_TEXT_BYTES + 1);
+        assert!(alice.dm.prepare_text(&alice.keys, &bob.pk(), &huge, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn created_at_is_monotonic_within_a_chat() {
+        let alice = Party::new().await;
+        let bob = Party::new().await;
+        let mut last = 0;
+        for i in 0..5 {
+            let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), &format!("m{i}"), None).await.unwrap();
+            assert!(p.message.created_at > last, "strictly increasing within one second");
+            last = p.message.created_at;
+        }
+        // A peer message from the "future" (clock skew) pushes ours after it.
+        bob.clock.0.store(1_000_500, Ordering::SeqCst);
+        let ahead = bob.dm.prepare_text(&bob.keys, &alice.pk(), "from the future", None).await.unwrap();
+        alice.receive(&peer_event(&ahead)).await;
+        let next = alice.dm.prepare_text(&alice.keys, &bob.pk(), "after", None).await.unwrap();
+        assert!(next.message.created_at > ahead.message.created_at);
+        let chat = alice.dm.open_chat(&bob.pk()).await.unwrap();
+        let texts: Vec<_> = alice.dm.messages(&chat.id, None, 50).await.unwrap().into_iter().map(|m| m.text.unwrap()).collect();
+        assert_eq!(texts.last().unwrap(), "after");
+    }
+
+    #[tokio::test]
+    async fn edit_and_delete_reach_the_peer_and_forgeries_do_not() {
+        let alice = Party::new().await;
+        let bob = Party::new().await;
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "frist", None).await.unwrap();
+        bob.receive(&peer_event(&p)).await;
+
+        let e = alice.dm.prepare_edit(&alice.keys, &p.message.id, "first").await.unwrap();
+        assert_eq!(e.message.text.as_deref(), Some("first"));
+        assert!(e.message.edited_at.is_some());
+        assert_ne!(e.tracking_id, p.message.id);
+        assert_eq!(names(&bob.receive(&peer_event(&e)).await), vec!["dm.updated"]);
+        let chat = bob.dm.open_chat(&alice.pk()).await.unwrap();
+        let m = &bob.dm.messages(&chat.id, None, 50).await.unwrap()[0];
+        assert_eq!(m.text.as_deref(), Some("first"));
+        assert!(m.edited_at.is_some());
+        assert_eq!(chat.last_preview.as_deref(), Some("first"));
+        assert_eq!(chat.unread, 1, "an edit is not a new message");
+
+        // Bob cannot edit or delete Alice's message.
+        assert!(bob.dm.prepare_edit(&bob.keys, &p.message.id, "hacked").await.is_err());
+        let forged = wrap(&bob.keys, &alice.pk(), &Envelope::edit(&p.message.id, "hacked").encode(), 1_000_100, None).unwrap();
+        assert!(alice.receive(&forged.to_peer).await.is_empty());
+        let a_chat = alice.dm.open_chat(&bob.pk()).await.unwrap();
+        assert_eq!(alice.dm.messages(&a_chat.id, None, 50).await.unwrap()[0].text.as_deref(), Some("first"));
+
+        let d = alice.dm.prepare_delete(&alice.keys, &p.message.id).await.unwrap();
+        assert!(d.message.deleted && d.message.text.is_none());
+        bob.receive(&peer_event(&d)).await;
+        let m = &bob.dm.messages(&chat.id, None, 50).await.unwrap()[0];
+        assert!(m.deleted && m.text.is_none());
+        assert!(bob.dm.open_chat(&alice.pk()).await.unwrap().last_preview.is_none());
+        assert!(alice.dm.prepare_edit(&alice.keys, &p.message.id, "again").await.is_err(), "deleted stays deleted");
+
+        // Bob may hide it locally regardless.
+        let p2 = alice.dm.prepare_text(&alice.keys, &bob.pk(), "second", None).await.unwrap();
+        bob.receive(&peer_event(&p2)).await;
+        bob.dm.delete_local(&p2.message.id).await.unwrap();
+        assert!(bob.dm.message(&p2.message.id).await.unwrap().unwrap().deleted);
+    }
+
+    #[tokio::test]
+    async fn edit_that_overtakes_its_target_is_applied_on_arrival() {
+        let alice = Party::new().await;
+        let bob = Party::new().await;
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "v1", None).await.unwrap();
+        let e = alice.dm.prepare_edit(&alice.keys, &p.message.id, "v2").await.unwrap();
+        assert!(bob.receive(&peer_event(&e)).await.is_empty(), "target unknown yet");
+        bob.receive(&peer_event(&p)).await;
+        let chat = bob.dm.open_chat(&alice.pk()).await.unwrap();
+        let msgs = bob.dm.messages(&chat.id, None, 50).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].text.as_deref(), Some("v2"));
+    }
+
+    #[tokio::test]
+    async fn second_device_and_relogin_rebuild_history_from_copies() {
+        let alice = Party::new().await;
+        let bob = Party::new().await;
+        let a1 = alice.dm.prepare_text(&alice.keys, &bob.pk(), "one", None).await.unwrap();
+        bob.receive(&peer_event(&a1)).await;
+        bob.clock.0.store(1_000_020, Ordering::SeqCst);
+        let b1 = bob.dm.prepare_text(&bob.keys, &alice.pk(), "two", None).await.unwrap();
+        alice.receive(&peer_event(&b1)).await;
+
+        // Our own self-copy coming back marks the message as sent.
+        assert_eq!(names(&alice.receive(&self_event(&a1)).await), vec!["dm.updated"]);
+        assert_eq!(alice.dm.message(&a1.message.id).await.unwrap().unwrap().status, "sent");
+        assert!(alice.receive(&self_event(&a1)).await.is_empty(), "idempotent");
+
+        // Alice's second device (same key, empty store) started later and
+        // gets everything through history sync.
+        let mut device2 = Party::with_keys(alice.keys.clone()).await;
+        device2.session_started_at = 2_000_000;
+        let fx = device2.receive_from(&self_event(&a1), true).await;
+        assert_eq!(names(&fx), vec!["dm.message"], "history never notifies");
+        device2.receive_from(&peer_event(&b1), true).await;
+        let chat = device2.dm.open_chat(&bob.pk()).await.unwrap();
+        assert_eq!(chat.unread, 0, "history does not count as unread");
+        let msgs = device2.dm.messages(&chat.id, None, 50).await.unwrap();
+        assert_eq!(msgs.iter().map(|m| (m.direction.as_str(), m.text.as_deref().unwrap())).collect::<Vec<_>>(), vec![("out", "one"), ("in", "two")]);
+        assert_eq!(msgs[0].status, "sent");
+        assert_eq!(msgs[0].id, a1.message.id);
+    }
+
+    #[tokio::test]
+    async fn plain_text_from_other_clients_unknown_types_and_mute() {
+        let alice = Party::new().await;
+        let bob = Party::new().await;
+        bob.contacts.add(&bob.pk(), alice.pk().as_hex(), Some("Al")).await.unwrap();
+
+        let bare = wrap(&alice.keys, &bob.pk(), "just text, no envelope", 1_000_001, None).unwrap();
+        assert_eq!(names(&bob.receive(&bare.to_peer).await), vec!["dm.message", "notify"]);
+        let sticker = wrap(&alice.keys, &bob.pk(), r#"{"v":1,"t":"sticker","pack":"p","text":"alt"}"#, 1_000_002, None).unwrap();
+        bob.receive(&sticker.to_peer).await;
+        let control = wrap(&alice.keys, &bob.pk(), &Envelope::control("dm_accept").encode(), 1_000_003, None).unwrap();
+        assert!(bob.receive(&control.to_peer).await.is_empty(), "control rows are hidden");
+
+        let chat = bob.dm.open_chat(&alice.pk()).await.unwrap();
+        assert_eq!(chat.title, "Al");
+        assert!(chat.is_contact);
+        let msgs = bob.dm.messages(&chat.id, None, 50).await.unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].text.as_deref(), Some("just text, no envelope"));
+        assert_eq!(msgs[1].content_type, "sticker");
+
+        bob.contacts
+            .update(&alice.pk(), &messenger_contacts::ContactPatch { is_muted: Some(true), ..Default::default() })
+            .await
+            .unwrap();
+        let quiet = wrap(&alice.keys, &bob.pk(), &Envelope::text("psst").encode(), 1_000_004, None).unwrap();
+        assert_eq!(names(&bob.receive(&quiet.to_peer).await), vec!["dm.message"], "muted peers do not notify");
+        assert_eq!(bob.dm.open_chat(&alice.pk()).await.unwrap().unread, 3);
+    }
+
+    #[tokio::test]
+    async fn pagination_notes_to_self_and_chat_flags() {
+        let me = Party::new().await;
+        let memo = me.dm.prepare_text(&me.keys, &me.pk(), "note", None).await.unwrap();
+        assert!(memo.to_self.is_none());
+        assert!(me.receive(&peer_event(&memo)).await.len() <= 1);
+        let chat = me.dm.open_chat(&me.pk()).await.unwrap();
+        assert_eq!(me.dm.messages(&chat.id, None, 50).await.unwrap().len(), 1);
+        assert_eq!(chat.unread, 0);
+
+        let bob = Party::new().await;
+        for i in 0..25 {
+            me.dm.prepare_text(&me.keys, &bob.pk(), &format!("m{i}"), None).await.unwrap();
+        }
+        let c = me.dm.open_chat(&bob.pk()).await.unwrap();
+        let page1 = me.dm.messages(&c.id, None, 10).await.unwrap();
+        assert_eq!(page1.first().unwrap().text.as_deref(), Some("m15"));
+        let page2 = me.dm.messages(&c.id, Some(page1[0].created_at), 10).await.unwrap();
+        assert_eq!(page2.first().unwrap().text.as_deref(), Some("m5"));
+        assert_eq!(page2.last().unwrap().text.as_deref(), Some("m14"));
+
+        me.dm.set_pinned(&c.id, true).await.unwrap();
+        assert_eq!(me.dm.list_chats(false).await.unwrap()[0].id, c.id);
+        me.dm.set_archived(&c.id, true).await.unwrap();
+        assert_eq!(me.dm.list_chats(false).await.unwrap().len(), 1);
+        me.dm.delete_chat(&c.id).await.unwrap();
+        assert!(me.dm.chat(&c.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn routes_become_hints() {
+        use crate::handler::DmRoutesHandler;
+        use messenger_core::{Handler, MetaInbound};
+        let alice = Party::new().await;
+        let bob = Party::new().await;
+        let h = DmRoutesHandler::new(alice.dm.store().clone());
+        h.handle(
+            MetaInbound::DmRelays {
+                author: bob.pk(),
+                created_at: Timestamp(5),
+                relays: vec!["wss://inbox.example/".into(), "not a url".into(), "wss://inbox.example".into()],
+            },
+            &alice.ctx(),
+        )
+        .await
+        .unwrap();
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "x", None).await.unwrap();
+        match p.to_peer {
+            Outbound::PublishToInbox { hint_relays, recipient, .. } => {
+                assert_eq!(recipient, bob.pk());
+                assert_eq!(hint_relays.iter().map(|u| u.as_str()).collect::<Vec<_>>(), vec!["wss://inbox.example"]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
