@@ -1,23 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-//! A session = a signer + a live ingress loop + an outbox pump. It exists
-//! only while the runtime holds signing keys; the runtime restarts it when
-//! the signer or the relay pool changes.
+//! A session = a signer + a live ingress loop + an outbox pump + one
+//! history catch-up. It exists only while the runtime holds signing keys;
+//! the runtime restarts it when the signer or the relay pool changes.
 
 use async_trait::async_trait;
-use messenger_core::traits::{SystemClock, UiEvent};
-use messenger_core::{Ack, Context, DmInbound, Effect, Envelope, Handler, Outbound, PubKey, Result, Timestamp, Transport};
+use messenger_core::traits::{RelayState, SystemClock, UiEvent};
 use messenger_core::Clock;
+use messenger_core::{Ack, Context, Outbound, PubKey, Result, Scope, SubId, SyncItem, Timestamp, Transport};
+use messenger_dm::DmService;
 use messenger_ingress::{filters, Dispatcher, EffectSink, IngressLoop, Outbox};
-use messenger_store::Store;
+use messenger_store::{cursors, events_raw, settings, Store};
 use messenger_transport::RelayPool;
 use nostr::key::Keys;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
-pub const UI_EVENT_INBOUND_DM: &str = "inbound.dm";
+pub const UI_EVENT_HISTORY_SYNCED: &str = "history.synced";
+
+/// How long the history task waits for a first relay connection.
+const HISTORY_WAIT_FOR_RELAY: Duration = Duration::from_secs(60);
+const PUMP_INTERVAL: Duration = Duration::from_secs(5);
+/// Setting that remembers when this device was last online.
+const KEY_LAST_SEEN: &str = "session.last_seen";
+const LAST_SEEN_EVERY_TICKS: u64 = 6;
 
 /// Effects go to the outbox (with an immediate pump) and to the UI channel.
 pub struct RuntimeSink {
@@ -48,42 +57,17 @@ impl EffectSink for RuntimeSink {
     }
 }
 
-/// Stage 3 placeholder: surfaces DMs to the UI feed. Stage 5 replaces it
-/// with the real DM handler (relationship matrix, storage, chats).
-pub struct DebugDmHandler;
-
-#[async_trait]
-impl Handler<DmInbound> for DebugDmHandler {
-    async fn handle(&self, msg: DmInbound, ctx: &Context) -> Result<Vec<Effect>> {
-        let historical = msg.created_at < ctx.session_started_at;
-        let (kind, text) = match Envelope::parse(&msg.content) {
-            Ok(env) => (env.t.clone(), env.as_text().map(String::from)),
-            Err(_) => ("raw".to_string(), Some(msg.content.clone())),
-        };
-        Ok(vec![Effect::Emit(UiEvent {
-            name: UI_EVENT_INBOUND_DM.into(),
-            payload: serde_json::json!({
-                "sender": msg.sender.as_hex(),
-                "rumor_id": msg.rumor_id.as_hex(),
-                "created_at": msg.created_at.secs(),
-                "historical": historical,
-                "type": kind,
-                "text": text,
-                "source": msg.envelope.source,
-            }),
-        })])
-    }
-}
-
 pub struct Session {
     pub keys: Keys,
     pub started_at: Timestamp,
     ingress: IngressLoop,
     pump: JoinHandle<()>,
+    history: JoinHandle<()>,
 }
 
 impl Session {
-    /// Subscribe to the inbox, start the ingress loop and the outbox pump.
+    /// Subscribe to the inbox, start the ingress loop, the outbox pump and
+    /// the history catch-up.
     pub async fn start(
         store: Store,
         pool: Arc<RelayPool>,
@@ -91,6 +75,7 @@ impl Session {
         outbox: Outbox,
         ui: broadcast::Sender<UiEvent>,
         dispatcher: Arc<Dispatcher>,
+        dm: DmService,
     ) -> Result<Self> {
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let started_at = clock.now();
@@ -98,26 +83,29 @@ impl Session {
 
         let since = Timestamp(started_at.secs() - filters::DM_LIVE_MARGIN_SECS);
         pool.send(Outbound::Subscribe {
-            id: messenger_core::SubId(filters::SUB_DM_LIVE.into()),
+            id: SubId(filters::SUB_DM_LIVE.into()),
             filter: filters::dm_inbox(&me, since),
-            scope: messenger_core::Scope::Own,
+            scope: Scope::Own,
         })
         .await?;
 
-        let sink: Arc<dyn EffectSink> = Arc::new(RuntimeSink { pool: pool.clone(), outbox: outbox.clone(), ui });
-        let ctx = Context { my_pubkey: me, session_started_at: started_at, clock };
-        let ingress = IngressLoop::spawn(pool.events(), store, Some(keys.clone()), dispatcher, ctx, sink);
-
-        let pump_pool = pool.clone();
-        let pump = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                if let Err(e) = outbox.pump(pump_pool.as_ref()).await {
-                    eprintln!("messenger outbox: pump failed: {e}");
-                }
+        // What arrived while we were offline counts as unread; on a fresh
+        // database (no previous session) restored history does not.
+        if let Ok(Some(last_seen)) = settings::get(&store, KEY_LAST_SEEN).await {
+            if let Ok(at) = last_seen.parse::<i64>() {
+                dm.set_unread_floor(at);
             }
-        });
-        Ok(Self { keys, started_at, ingress, pump })
+        }
+        let _ = settings::set(&store, KEY_LAST_SEEN, &started_at.secs().to_string()).await;
+
+        let sink: Arc<dyn EffectSink> =
+            Arc::new(RuntimeSink { pool: pool.clone(), outbox: outbox.clone(), ui: ui.clone() });
+        let ctx = Context { my_pubkey: me.clone(), session_started_at: started_at, clock };
+        let ingress = IngressLoop::spawn(pool.events(), store.clone(), Some(keys.clone()), dispatcher, ctx, sink);
+
+        let pump = tokio::spawn(pump_loop(store.clone(), pool.clone(), outbox, dm, ui.clone()));
+        let history = tokio::spawn(history_catch_up(store, pool, me, started_at, ui));
+        Ok(Self { keys, started_at, ingress, pump, history })
     }
 
     pub fn stats(&self) -> (u64, u64, u64, u64, u64) {
@@ -127,11 +115,82 @@ impl Session {
     pub fn stop(&self) {
         self.ingress.abort();
         self.pump.abort();
+        self.history.abort();
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// Retry what is due, then turn publish results into message statuses.
+async fn pump_loop(store: Store, pool: Arc<RelayPool>, outbox: Outbox, dm: DmService, ui: broadcast::Sender<UiEvent>) {
+    let mut tick: u64 = 0;
+    loop {
+        tokio::time::sleep(PUMP_INTERVAL).await;
+        tick += 1;
+        if tick.is_multiple_of(LAST_SEEN_EVERY_TICKS) {
+            let now = SystemClock.now().secs();
+            let _ = settings::set(&store, KEY_LAST_SEEN, &now.to_string()).await;
+        }
+        if let Err(e) = outbox.pump(pool.as_ref()).await {
+            eprintln!("messenger outbox: pump failed: {e}");
+        }
+        match dm.sync_statuses().await {
+            Ok(events) => {
+                for ev in events {
+                    let _ = ui.send(ev);
+                }
+            }
+            Err(e) => eprintln!("messenger dm: status sync failed: {e}"),
+        }
+    }
+}
+
+/// One history reconciliation per session: everything addressed to us
+/// since the last completed catch-up (minus the gift-wrap time jitter), or
+/// from the beginning on a fresh database.
+async fn history_catch_up(
+    store: Store,
+    pool: Arc<RelayPool>,
+    me: PubKey,
+    started_at: Timestamp,
+    ui: broadcast::Sender<UiEvent>,
+) {
+    let deadline = tokio::time::Instant::now() + HISTORY_WAIT_FOR_RELAY;
+    loop {
+        let connected = pool.status().await.relays.iter().any(|r| r.state == RelayState::Connected);
+        if connected && !pool.is_silent() {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let cursor = cursors::get(&store, filters::CURSOR_DM_INBOX, cursors::ANY_RELAY).await.ok().flatten();
+    let since = cursor.map(|c| c - filters::DM_LIVE_MARGIN_SECS).unwrap_or(0).max(0);
+    let local = events_raw::items_since(&store, 1059, since, 20_000)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, at)| SyncItem { id, created_at: Timestamp(at) })
+        .collect();
+    let result = pool
+        .send(Outbound::Sync { scope: Scope::Own, filter: filters::dm_history(&me, Timestamp(since)), local })
+        .await;
+    match result {
+        Ok(_) => {
+            let _ = cursors::advance(&store, filters::CURSOR_DM_INBOX, cursors::ANY_RELAY, started_at.secs()).await;
+            let _ = ui.send(UiEvent { name: UI_EVENT_HISTORY_SYNCED.into(), payload: serde_json::json!({ "since": since }) });
+        }
+        Err(e) => {
+            let _ = ui.send(UiEvent {
+                name: "error".into(),
+                payload: serde_json::json!({ "family": "history", "error": e.to_string() }),
+            });
+        }
     }
 }

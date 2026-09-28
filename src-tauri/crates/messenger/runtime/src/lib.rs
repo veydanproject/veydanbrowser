@@ -15,17 +15,19 @@ pub mod session;
 use messenger_core::outbound::WireEvent;
 use messenger_core::traits::{RelayState, SystemClock, UiEvent};
 use messenger_contacts::{ContactService, MetaHandler, Nip05Service, ProfileService, ReqwestFetcher};
-use messenger_core::{Clock, Envelope, EventId, MessengerConfig, MessengerError, Outbound, PubKey, Result, Scope, SecretStore, SubId, Transport};
+use messenger_core::{Clock, EventId, MessengerConfig, MessengerError, Outbound, PubKey, Result, Scope, SecretStore, SubId, Transport};
+use messenger_dm::{DmHandler, DmRoutesHandler, DmService, Prepared};
 use messenger_identity::IdentityService;
-use messenger_ingress::{filters, Dispatcher, Outbox};
-use messenger_store::Store;
+use messenger_ingress::{filters, Dispatcher, Fanout, Outbox};
+use messenger_store::{settings, Store};
 use nostr::key::Keys;
-use nostr::nips::nip17::PrivateDirectMessageBuilder;
 use nostr::prelude::*;
 use serde::{Deserialize, Serialize};
-use session::{DebugDmHandler, Session};
+use session::Session;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
+
+pub use messenger_dm::{ChatView, MessageView};
 
 pub use messenger_contacts::book::ContactPatch;
 pub use messenger_contacts::{ContactView, ProfileInput, ProfileView};
@@ -70,6 +72,7 @@ pub struct MessengerRuntime {
     profiles: ProfileService,
     contacts: ContactService,
     nip05: Nip05Service,
+    dm: DmService,
     outbox: Outbox,
     dispatcher: Arc<Dispatcher>,
     ui: broadcast::Sender<UiEvent>,
@@ -78,6 +81,7 @@ pub struct MessengerRuntime {
 
 impl MessengerRuntime {
     pub async fn start(config: MessengerConfig, secrets: Arc<dyn SecretStore>) -> Result<Self> {
+        messenger_transport::ensure_crypto_provider();
         let store = Store::open(&config).await?;
         let identity = IdentityService::new(store.clone(), secrets.clone());
         let signer = load_signer(&identity).await;
@@ -86,10 +90,14 @@ impl MessengerRuntime {
         let profiles = ProfileService::new(store.clone());
         let contacts = ContactService::new(store.clone(), profiles.clone());
         let nip05 = Nip05Service::new(Arc::new(ReqwestFetcher::new()));
+        let dm = DmService::new(store.clone(), contacts.clone(), profiles.clone(), Arc::new(SystemClock));
         let dispatcher = Arc::new(
             Dispatcher::new()
-                .with_dm(Arc::new(DebugDmHandler))
-                .with_meta(Arc::new(MetaHandler::new(profiles.clone(), contacts.clone()))),
+                .with_dm(Arc::new(DmHandler::new(dm.clone())))
+                .with_meta(Arc::new(Fanout::new(vec![
+                    Arc::new(MetaHandler::new(profiles.clone(), contacts.clone())),
+                    Arc::new(DmRoutesHandler::new(store.clone())),
+                ]))),
         );
         let (ui, _) = broadcast::channel(256);
         let rt = Self {
@@ -101,6 +109,7 @@ impl MessengerRuntime {
             profiles,
             contacts,
             nip05,
+            dm,
             outbox,
             dispatcher,
             ui,
@@ -172,10 +181,46 @@ impl MessengerRuntime {
             self.outbox.clone(),
             self.ui.clone(),
             self.dispatcher.clone(),
+            self.dm.clone(),
         )
         .await?;
         *self.session.lock().await = Some(session);
         self.resubscribe_meta().await?;
+        if let Err(e) = self.publish_dm_relays(false).await {
+            eprintln!("messenger: inbox relay list not published: {e}");
+        }
+        Ok(())
+    }
+
+    /// Tell the world where we read DMs (kind 10050): our enabled write
+    /// relays. Published only when the set changed, unless `force`.
+    pub async fn publish_dm_relays(&self, force: bool) -> Result<()> {
+        const KEY: &str = "dm.relays_published";
+        let keys = self.session_keys().await?;
+        let mut urls: Vec<String> = self
+            .relays
+            .list()
+            .await?
+            .into_iter()
+            .filter(|r| r.enabled && r.read)
+            .map(|r| r.url)
+            .collect();
+        urls.sort();
+        let fingerprint = format!("{}|{}", keys.public_key().to_hex(), urls.join(","));
+        if urls.is_empty() || (!force && settings::get(&self.store, KEY).await?.as_deref() == Some(fingerprint.as_str())) {
+            return Ok(());
+        }
+        let mut builder = EventBuilder::new(Kind::InboxRelays, "");
+        for u in &urls {
+            builder = builder.tag(Tag::parse(["relay", u.as_str()]).map_err(|e| MessengerError::Invalid(e.to_string()))?);
+        }
+        let event = builder.finalize(&keys).map_err(|e| MessengerError::Crypto(e.to_string()))?;
+        let event = WireEvent {
+            id: EventId::parse(&event.id.to_hex()).expect("event id is hex"),
+            json: serde_json::to_value(&event)?,
+        };
+        self.outbox.enqueue(Outbound::PublishOwn { event }).await?;
+        settings::set(&self.store, KEY, &fingerprint).await?;
         Ok(())
     }
 
@@ -203,6 +248,101 @@ impl MessengerRuntime {
             scope: Scope::Own,
         })
         .await?;
+        // Where contacts and chat peers want their DMs delivered.
+        let mut peers = authors;
+        for c in self.dm.list_chats(true).await? {
+            if let Some(pk) = c.peer_pubkey.as_deref().and_then(PubKey::parse) {
+                if !peers.contains(&pk) {
+                    peers.push(pk);
+                }
+            }
+        }
+        pool.send(Outbound::Subscribe {
+            id: SubId(filters::SUB_DM_RELAYS.into()),
+            filter: filters::dm_relays(&peers),
+            scope: Scope::Own,
+        })
+        .await?;
+        Ok(())
+    }
+
+    // ─── Chats / DM ─────────────────────────────────────────────────────────
+
+    pub fn dm(&self) -> &DmService {
+        &self.dm
+    }
+
+    /// Open (creating if needed) the chat with `peer` (hex or npub) and
+    /// start following the peer's profile and inbox relays.
+    pub async fn chat_open(&self, peer: &str) -> Result<ChatView> {
+        let pk = messenger_contacts::book::parse_key(peer)?;
+        let existed = self.dm.chat(&messenger_store::chats::dm_chat_id(pk.as_hex())).await?.is_some();
+        let view = self.dm.open_chat(&pk).await?;
+        if !existed && self.session.lock().await.is_some() {
+            let _ = self.request_profile(&pk).await;
+            let _ = self.resubscribe_meta().await;
+        }
+        Ok(view)
+    }
+
+    async fn publish_prepared(&self, p: Prepared) -> Result<MessageView> {
+        let local_id = self.outbox.enqueue(p.to_peer).await?;
+        self.dm.attach_outbox(&p.tracking_id, &local_id).await?;
+        if let Some(own) = p.to_self {
+            self.outbox.enqueue(own).await?;
+        }
+        let pool = self.relays.pool().await;
+        // A failed pump is not an error for the caller: the message is
+        // stored and queued, the outbox retries.
+        let _ = self.outbox.pump(pool.as_ref()).await;
+        for ev in self.dm.sync_statuses().await? {
+            let _ = self.ui.send(ev);
+        }
+        Ok(self.dm.message(&p.message.id).await?.unwrap_or(p.message))
+    }
+
+    /// Send a text DM to `to` (hex or npub).
+    pub async fn dm_send_text(&self, to: &str, text: &str, reply_to: Option<&str>) -> Result<MessageView> {
+        let keys = self.session_keys().await?;
+        let peer = messenger_contacts::book::parse_key(to)
+            .map_err(|_| MessengerError::Invalid("recipient must be an npub or 64-hex public key".into()))?;
+        let first = self.dm.chat(&messenger_store::chats::dm_chat_id(peer.as_hex())).await?.is_none();
+        let prepared = self.dm.prepare_text(&keys, &peer, text, reply_to).await?;
+        if first {
+            let _ = self.request_profile(&peer).await;
+            let _ = self.resubscribe_meta().await;
+        }
+        self.publish_prepared(prepared).await
+    }
+
+    pub async fn dm_edit(&self, message_id: &str, text: &str) -> Result<MessageView> {
+        let keys = self.session_keys().await?;
+        let prepared = self.dm.prepare_edit(&keys, message_id, text).await?;
+        self.publish_prepared(prepared).await
+    }
+
+    /// `for_everyone` retracts our own message at the peer too; otherwise
+    /// the message is only hidden on this device.
+    pub async fn dm_delete(&self, message_id: &str, for_everyone: bool) -> Result<()> {
+        if for_everyone {
+            let keys = self.session_keys().await?;
+            let prepared = self.dm.prepare_delete(&keys, message_id).await?;
+            self.publish_prepared(prepared).await?;
+        } else {
+            self.dm.delete_local(message_id).await?;
+        }
+        Ok(())
+    }
+
+    /// Put a failed message back in front of the queue.
+    pub async fn dm_retry(&self, message_id: &str) -> Result<()> {
+        let local_id = self.dm.outbox_id_for_retry(message_id).await?;
+        self.outbox.retry_now(&local_id).await?;
+        let pool = self.relays.pool().await;
+        let _ = self.outbox.pump(pool.as_ref()).await;
+        for ev in self.dm.sync_statuses().await? {
+            let _ = self.ui.send(ev);
+        }
         Ok(())
     }
 
@@ -332,34 +472,6 @@ impl MessengerRuntime {
         Ok(())
     }
 
-    /// Send a text DM to `to` (hex or npub). Returns the outbox local id.
-    /// Stage 3 building block; stage 5 moves this behind the DM handler
-    /// with chats, self-copies and the relationship matrix.
-    pub async fn send_text_dm(&self, to: &str, text: &str) -> Result<String> {
-        let keys = {
-            let guard = self.session.lock().await;
-            guard.as_ref().map(|s| s.keys.clone()).ok_or(MessengerError::NotLoggedIn)?
-        };
-        let receiver = PublicKey::parse(to.trim())
-            .map_err(|_| MessengerError::Invalid("recipient must be an npub or 64-hex public key".into()))?;
-        let content = Envelope::text(text).encode();
-        let wrap = PrivateDirectMessageBuilder::new(receiver, content)
-            .finalize(&keys)
-            .map_err(|e| MessengerError::Crypto(e.to_string()))?;
-        let event = WireEvent {
-            id: EventId::parse(&wrap.id.to_hex()).expect("event id is hex"),
-            json: serde_json::to_value(&wrap)?,
-        };
-        let recipient = PubKey::parse(&receiver.to_hex()).expect("valid pubkey");
-        let local_id = self
-            .outbox
-            .enqueue(Outbound::PublishToInbox { recipient, event, hint_relays: vec![] })
-            .await?;
-        let pool = self.relays.pool().await;
-        self.outbox.pump(pool.as_ref()).await?;
-        Ok(local_id)
-    }
-
     pub async fn status(&self) -> Result<RuntimeStatus> {
         let relays = self.relays.list().await?;
         let (session_active, ingress) = match self.session.lock().await.as_ref() {
@@ -454,7 +566,7 @@ mod tests {
         // Keep the test offline: sends fail fast instead of waiting for relays.
         rt.relays().set_silent(true).await.unwrap();
         assert!(!rt.refresh_signer().await.unwrap(), "nothing to do without identity");
-        assert!(matches!(rt.send_text_dm(&"ab".repeat(32), "x").await, Err(MessengerError::NotLoggedIn)));
+        assert!(matches!(rt.dm_send_text(&"ab".repeat(32), "x", None).await, Err(MessengerError::NotLoggedIn)));
 
         let created = rt.identity().create("pw").await.unwrap();
         assert!(rt.refresh_signer().await.unwrap(), "session started with the new key");
@@ -465,9 +577,14 @@ mod tests {
         // Sending queues the wrap; relays may be unreachable in tests, the
         // outbox keeps it either way.
         let peer = Keys::generate().public_key().to_hex();
-        let id = rt.send_text_dm(&peer, "hello").await.unwrap();
+        let sent = rt.dm_send_text(&peer, "hello", None).await.unwrap();
+        let id = sent.id.clone();
+        assert_eq!(rt.dm().list_chats(false).await.unwrap().len(), 1);
+        assert_eq!(rt.dm_edit(&id, "hello!").await.unwrap().text.as_deref(), Some("hello!"));
+        rt.dm_delete(&id, true).await.unwrap();
+        assert!(rt.dm().message(&id).await.unwrap().unwrap().deleted);
         assert!(!id.is_empty());
-        assert!(rt.send_text_dm("not a key", "x").await.is_err());
+        assert!(rt.dm_send_text("not a key", "x", None).await.is_err());
 
         // Contacts and own profile round-trip through the runtime.
         let bob = Keys::generate();
