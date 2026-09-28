@@ -16,3 +16,13 @@ pub mod pool;
 
 pub use manifest::{Manifest, ManifestRelay, RelayChanges, EMBEDDED_MANIFEST_JSON};
 pub use pool::{RelayConfig, RelayPool};
+
+/// Make sure the process has a TLS crypto provider. More than one rustls
+/// backend can be linked (a host may bring its own); rustls then refuses
+/// to pick one. A host that already installed a provider wins, otherwise
+/// `ring` is installed. Safe to call any number of times.
+pub fn ensure_crypto_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+}

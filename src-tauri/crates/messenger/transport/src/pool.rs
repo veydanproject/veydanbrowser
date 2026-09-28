@@ -54,6 +54,7 @@ impl RelayPool {
     /// `signer` enables NIP-42 authentication and is required for relays
     /// that demand it. Without a signer the pool is read-only for such relays.
     pub fn new(signer: Option<Keys>) -> Self {
+        crate::ensure_crypto_provider();
         let client = match signer {
             Some(keys) => Client::builder()
                 .authenticator(SignerAuthenticator::new(keys))
@@ -171,6 +172,9 @@ impl RelayPool {
 }
 
 
+/// How long a relay may take to answer the first Negentropy message
+/// before we fall back to a plain REQ.
+const NEGENTROPY_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 /// How long a plain-REQ history fetch may take per call.
 const HISTORY_FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long to wait for a peer's inbox relay that is not in the pool.
@@ -194,7 +198,9 @@ impl RelayPool {
             })
             .collect();
         let known: HashSet<String> = local.iter().map(|i| i.id.as_hex().to_string()).collect();
-        let opts = SyncOptions::default().direction(SyncDirection::Down);
+        let opts = SyncOptions::default()
+            .direction(SyncDirection::Down)
+            .initial_timeout(NEGENTROPY_PROBE_TIMEOUT);
         let mut forwarded = 0usize;
         let mut any_relay = false;
         for (url, relay) in self.client.relays().await {

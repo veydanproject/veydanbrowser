@@ -29,6 +29,7 @@ sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runti
 tempfile = "3"
 nostr-sdk = { version = "0.45", default-features = false, features = ["ring", "rustls-tls-webpki-roots"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 nostr = { version = "0.45", default-features = false, features = ["std", "nip06", "nip44", "nip49", "nip59", "os-rng"] }
 
