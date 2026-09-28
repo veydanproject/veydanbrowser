@@ -35,6 +35,27 @@ pub fn dm_inbox_window(me: &PubKey, since: Timestamp, until: Timestamp, limit: u
     }))
 }
 
+pub const SUB_PROFILES: &str = "profiles";
+pub const SUB_MY_FOLLOWS: &str = "my-follows";
+
+/// Latest kind-0 of each author (relays return the newest replaceable).
+pub fn profiles(authors: &[PubKey]) -> Filter {
+    Filter(serde_json::json!({
+        "kinds": [0],
+        "authors": authors.iter().map(|p| p.as_hex()).collect::<Vec<_>>(),
+    }))
+}
+
+/// One author's profile, for on-demand lookups.
+pub fn profile_of(author: &PubKey) -> Filter {
+    Filter(serde_json::json!({ "kinds": [0], "authors": [author.as_hex()], "limit": 1 }))
+}
+
+/// My own follow list (kind 3), newest only.
+pub fn my_follows(me: &PubKey) -> Filter {
+    Filter(serde_json::json!({ "kinds": [3], "authors": [me.as_hex()], "limit": 1 }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
