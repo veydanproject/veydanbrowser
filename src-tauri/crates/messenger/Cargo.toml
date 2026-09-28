@@ -9,7 +9,7 @@
 
 [workspace]
 resolver = "2"
-members = ["core", "store", "identity", "transport", "ingress", "runtime", "testkit"]
+members = ["core", "store", "identity", "transport", "ingress", "contacts", "runtime", "testkit"]
 
 [workspace.package]
 version = "0.1.0"
@@ -28,6 +28,7 @@ zeroize = "1"
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros"] }
 tempfile = "3"
 nostr-sdk = { version = "0.45", default-features = false, features = ["ring", "rustls-tls-webpki-roots"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 nostr = { version = "0.45", default-features = false, features = ["std", "nip06", "nip44", "nip49", "nip59", "os-rng"] }
 
@@ -36,5 +37,6 @@ messenger-store = { path = "store" }
 messenger-identity = { path = "identity" }
 messenger-transport = { path = "transport" }
 messenger-ingress = { path = "ingress" }
+messenger-contacts = { path = "contacts" }
 messenger-runtime = { path = "runtime" }
 messenger-testkit = { path = "testkit" }
