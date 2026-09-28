@@ -29,6 +29,8 @@ pub struct RelayRow {
     pub write: bool,
     pub enabled: bool,
     pub auth_type: Option<String>,
+    /// API key for `auth_type = api_key`; never exposed to the UI.
+    pub auth_secret: Option<String>,
     pub failures: i64,
     pub last_ok_at: Option<i64>,
     pub created_at: i64,
@@ -52,11 +54,12 @@ pub struct RelayUpsert {
     pub write: bool,
     pub enabled: bool,
     pub auth_type: Option<String>,
+    pub auth_secret: Option<String>,
 }
 
 pub async fn list(store: &Store) -> Result<Vec<RelayRow>> {
     sqlx::query_as::<_, RelayRow>(
-        "SELECT url, relay_id, source, regions_json, read, write, enabled, auth_type, failures, last_ok_at, created_at, updated_at
+        "SELECT url, relay_id, source, regions_json, read, write, enabled, auth_type, auth_secret, failures, last_ok_at, created_at, updated_at
          FROM msg_relays ORDER BY source, url",
     )
     .fetch_all(store.pool())
@@ -66,7 +69,7 @@ pub async fn list(store: &Store) -> Result<Vec<RelayRow>> {
 
 pub async fn get(store: &Store, url: &str) -> Result<Option<RelayRow>> {
     sqlx::query_as::<_, RelayRow>(
-        "SELECT url, relay_id, source, regions_json, read, write, enabled, auth_type, failures, last_ok_at, created_at, updated_at
+        "SELECT url, relay_id, source, regions_json, read, write, enabled, auth_type, auth_secret, failures, last_ok_at, created_at, updated_at
          FROM msg_relays WHERE url = ?",
     )
     .bind(url)
@@ -81,19 +84,19 @@ pub async fn upsert(store: &Store, r: &RelayUpsert, overwrite_enabled: bool) -> 
     let now = crate::now();
     let regions = serde_json::to_string(&r.regions).unwrap_or_else(|_| "[]".into());
     let sql = if overwrite_enabled {
-        "INSERT INTO msg_relays (url, relay_id, source, regions_json, read, write, enabled, auth_type, failures, last_ok_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+        "INSERT INTO msg_relays (url, relay_id, source, regions_json, read, write, enabled, auth_type, auth_secret, failures, last_ok_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
          ON CONFLICT(url) DO UPDATE SET
            relay_id = excluded.relay_id, source = excluded.source, regions_json = excluded.regions_json,
            read = excluded.read, write = excluded.write, enabled = excluded.enabled,
-           auth_type = excluded.auth_type, updated_at = excluded.updated_at"
+           auth_type = excluded.auth_type, auth_secret = excluded.auth_secret, updated_at = excluded.updated_at"
     } else {
-        "INSERT INTO msg_relays (url, relay_id, source, regions_json, read, write, enabled, auth_type, failures, last_ok_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
+        "INSERT INTO msg_relays (url, relay_id, source, regions_json, read, write, enabled, auth_type, auth_secret, failures, last_ok_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)
          ON CONFLICT(url) DO UPDATE SET
            relay_id = excluded.relay_id, source = excluded.source, regions_json = excluded.regions_json,
            read = excluded.read, write = excluded.write, enabled = msg_relays.enabled,
-           auth_type = excluded.auth_type, updated_at = excluded.updated_at"
+           auth_type = excluded.auth_type, auth_secret = excluded.auth_secret, updated_at = excluded.updated_at"
     };
     sqlx::query(sql)
         .bind(&r.url)
@@ -104,6 +107,7 @@ pub async fn upsert(store: &Store, r: &RelayUpsert, overwrite_enabled: bool) -> 
         .bind(r.write)
         .bind(r.enabled)
         .bind(&r.auth_type)
+        .bind(&r.auth_secret)
         .bind(now)
         .bind(now)
         .execute(store.pool())
@@ -188,6 +192,7 @@ mod tests {
             write: true,
             enabled: true,
             auth_type: None,
+            auth_secret: None,
         }
     }
 
