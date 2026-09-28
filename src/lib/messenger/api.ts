@@ -5,19 +5,38 @@
 // module can be lifted into a standalone app: this file is the only place
 // that knows command names (docs/messenger-spec.md §4.6).
 
+export interface MessengerIngressCounters {
+  received: number;
+  duplicates: number;
+  dispatched: number;
+  dm: number;
+  ignored: number;
+}
+
 export interface MessengerRuntimeStatus {
   version: string;
   data_dir: string;
   schema_version: number;
   secrets_unlocked: boolean;
   identity_present: boolean;
-  signer_loaded: boolean;
+  session_active: boolean;
   relays_total: number;
   relays_connected: number;
   silent_mode: boolean;
   manifest_serial: number | null;
   region: string;
+  ingress: MessengerIngressCounters;
+  outbox_pending: number;
 }
+
+/** Runtime UI event as forwarded by the host. */
+export interface MessengerUiEvent {
+  name: string;
+  payload: unknown;
+}
+
+/** Event name: payload is `MessengerUiEvent`. */
+export const RUNTIME_EVENT = 'messenger://event';
 
 export type RelayState = 'disconnected' | 'connecting' | 'connected' | 'paused';
 
@@ -96,15 +115,18 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
       schema_version: 2,
       secrets_unlocked: true,
       identity_present: mockIdentity !== null,
-      signer_loaded: mockIdentity !== null,
+      session_active: mockIdentity !== null,
       relays_total: mockRelays.filter((r) => r.enabled).length,
       relays_connected: mockRelays.filter((r) => r.state === 'connected').length,
       silent_mode: mockSilent,
-      manifest_serial: 1,
+      manifest_serial: 2,
       region: mockRegion,
+      ingress: { received: 0, duplicates: 0, dispatched: 0, dm: 0, ignored: 0 },
+      outbox_pending: 0,
     },
     error: null,
   }),
+  messenger_dm_send_text: () => `local-${Date.now().toString(16)}`,
   messenger_relays_list: () => mockRelays,
   messenger_relays_add: (a) => {
     const r: MessengerRelay = { url: String(a?.url), relay_id: null, source: 'user', regions: [], read: true, write: true, enabled: true, auth_type: null, state: 'connecting' };
@@ -172,12 +194,17 @@ export const messengerApi = {
 
   relays: {
     list: () => invoke<MessengerRelay[]>('messenger_relays_list'),
-    add: (url: string) => invoke<MessengerRelay>('messenger_relays_add', { url }),
+    add: (url: string, apiKey?: string) =>
+      invoke<MessengerRelay>('messenger_relays_add', { url, apiKey: apiKey && apiKey.trim() ? apiKey.trim() : null }),
     remove: (url: string) => invoke<void>('messenger_relays_remove', { url }),
     setEnabled: (url: string, enabled: boolean) => invoke<void>('messenger_relays_set_enabled', { url, enabled }),
     setSilent: (enabled: boolean) => invoke<void>('messenger_relays_set_silent', { enabled }),
     manifestInfo: () => invoke<MessengerManifestInfo>('messenger_manifest_info'),
     setRegion: (region: string) => invoke<void>('messenger_manifest_set_region', { region }),
+  },
+
+  dm: {
+    sendText: (to: string, text: string) => invoke<string>('messenger_dm_send_text', { to, text }),
   },
 
   identity: {

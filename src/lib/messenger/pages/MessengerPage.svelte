@@ -8,6 +8,7 @@
   import IdentityOnboarding from '../identity/IdentityOnboarding.svelte';
   import IdentityCard from '../identity/IdentityCard.svelte';
   import RelaysPanel from '../relays/RelaysPanel.svelte';
+  import DebugFeed from '../debug/DebugFeed.svelte';
 
   onMount(() => { messengerStore.refresh().catch(() => {}); });
 
@@ -38,6 +39,8 @@
 
       <RelaysPanel />
 
+      <DebugFeed />
+
       <div class="card status-card">
         <div class="card-title">{$t('msg_status_title')}</div>
         <dl class="status-grid">
@@ -50,8 +53,12 @@
           <dd>{s.runtime.identity_present ? $t('msg_status_identity_present') : $t('msg_status_identity_none')}</dd>
           <dt>{$t('msg_status_relays')}</dt>
           <dd>{$t('msg_status_relays_value', { connected: String(s.runtime.relays_connected), total: String(s.runtime.relays_total) })}{s.runtime.silent_mode ? ` · ${$t('msg_relays_silent')}` : ''}</dd>
-          <dt>{$t('msg_status_signer')}</dt>
-          <dd>{s.runtime.signer_loaded ? $t('msg_status_signer_yes') : $t('msg_status_signer_no')}</dd>
+          <dt>{$t('msg_status_session')}</dt>
+          <dd>{s.runtime.session_active ? $t('msg_status_session_yes') : $t('msg_status_session_no')}</dd>
+          <dt>{$t('msg_status_ingress')}</dt>
+          <dd>{$t('msg_status_ingress_value', { received: String(s.runtime.ingress.received), dm: String(s.runtime.ingress.dm), dup: String(s.runtime.ingress.duplicates), ignored: String(s.runtime.ingress.ignored) })}</dd>
+          <dt>{$t('msg_status_outbox')}</dt>
+          <dd>{String(s.runtime.outbox_pending)}</dd>
         </dl>
       </div>
     </div>

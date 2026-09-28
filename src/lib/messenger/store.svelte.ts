@@ -4,12 +4,20 @@
 import {
   messengerApi,
   RELAY_STATUS_EVENT,
+  RUNTIME_EVENT,
   type IdentityImportKind,
   type MessengerIdentity,
   type MessengerManifestInfo,
   type MessengerRelay,
   type MessengerStatus,
+  type MessengerUiEvent,
 } from './api';
+
+export interface FeedEntry extends MessengerUiEvent {
+  at: number;
+}
+
+const FEED_LIMIT = 50;
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -19,10 +27,12 @@ class MessengerStore {
   identity = $state<MessengerIdentity | null>(null);
   relays = $state<MessengerRelay[]>([]);
   manifest = $state<MessengerManifestInfo | null>(null);
+  /** Newest first. Runtime events (inbound DMs, ignored events, errors). */
+  feed = $state<FeedEntry[]>([]);
   loaded = $state(false);
   loading = $state(false);
   private _promise: Promise<void> | null = null;
-  private _unlisten: (() => void) | null = null;
+  private _unlisten: (() => void)[] = [];
 
   /** Show the nav entry only when compiled, enabled and the runtime started. */
   get visible(): boolean {
@@ -69,13 +79,27 @@ class MessengerStore {
     }
   }
 
-  /** Subscribe to relay-state pushes from the runtime. Idempotent. */
+  /** Subscribe to relay-state and runtime event pushes. Idempotent. */
   async startListeners() {
-    if (this._unlisten || !isTauri) return;
+    if (this._unlisten.length || !isTauri) return;
     const { listen } = await import('@tauri-apps/api/event');
-    this._unlisten = await listen<MessengerRelay[]>(RELAY_STATUS_EVENT, (e) => {
-      this.relays = e.payload;
-    });
+    this._unlisten.push(
+      await listen<MessengerRelay[]>(RELAY_STATUS_EVENT, (e) => {
+        this.relays = e.payload;
+      }),
+      await listen<MessengerUiEvent>(RUNTIME_EVENT, (e) => {
+        this.feed = [{ ...e.payload, at: Date.now() }, ...this.feed].slice(0, FEED_LIMIT);
+        if (e.payload.name === 'inbound.dm') messengerApi.status().then((s) => (this.status = s)).catch(() => {});
+      }),
+    );
+  }
+
+  clearFeed() {
+    this.feed = [];
+  }
+
+  sendTextDm(to: string, text: string) {
+    return messengerApi.dm.sendText(to, text);
   }
 
   async refreshRelays() {
@@ -84,8 +108,8 @@ class MessengerStore {
     this.manifest = manifest;
   }
 
-  async addRelay(url: string) {
-    await messengerApi.relays.add(url);
+  async addRelay(url: string, apiKey?: string) {
+    await messengerApi.relays.add(url, apiKey);
     await this.refreshRelays();
   }
 

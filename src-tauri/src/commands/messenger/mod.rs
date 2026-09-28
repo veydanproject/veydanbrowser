@@ -32,6 +32,9 @@ use zeroize::Zeroizing;
 
 /// Emitted with `Vec<RelayView>` whenever relay state changes.
 pub const EVENT_RELAY_STATUS: &str = "messenger://relay-status";
+/// Emitted with a runtime `UiEvent` (`{name, payload}`): inbound.dm,
+/// inbound.meta, ignored, error, notify.
+pub const EVENT_RUNTIME: &str = "messenger://event";
 
 /// Host `app_settings` key that shows or hides the module in the UI.
 const ENABLED_KEY: &str = "messenger_enabled";
@@ -64,7 +67,8 @@ impl MessengerState {
         match tauri::async_runtime::block_on(MessengerRuntime::start(config, secrets)) {
             Ok(rt) => {
                 let rt = Arc::new(rt);
-                spawn_relay_status_watcher(app, rt.clone());
+                spawn_relay_status_watcher(app.clone(), rt.clone());
+                spawn_ui_event_forwarder(app, rt.clone());
                 Self { runtime: Some(rt), start_error: None }
             }
             Err(e) => {
@@ -93,6 +97,22 @@ fn spawn_relay_status_watcher(app: tauri::AppHandle, rt: Arc<MessengerRuntime>) 
             if snapshot != last {
                 last = snapshot;
                 let _ = app.emit(EVENT_RELAY_STATUS, &list);
+            }
+        }
+    });
+}
+
+/// Forwards runtime UI events to the webview as `EVENT_RUNTIME`.
+fn spawn_ui_event_forwarder(app: tauri::AppHandle, rt: Arc<MessengerRuntime>) {
+    tauri::async_runtime::spawn(async move {
+        let mut rx = rt.ui_events();
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    let _ = app.emit(EVENT_RUNTIME, &ev);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
             }
         }
     });
@@ -319,8 +339,20 @@ pub async fn messenger_relays_list(state: tauri::State<'_, AppState>) -> CmdResu
 }
 
 #[tauri::command]
-pub async fn messenger_relays_add(url: String, state: tauri::State<'_, AppState>) -> CmdResult<RelayView> {
-    state.messenger.runtime()?.relays().add_user(&url).await.map_err(map_err)
+pub async fn messenger_relays_add(
+    url: String,
+    api_key: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<RelayView> {
+    state.messenger.runtime()?.relays().add_user(&url, api_key).await.map_err(map_err)
+}
+
+// ─── DM (stage 3 building block) ────────────────────────────────────────────
+
+/// Send a text DM to an npub/hex key. Returns the outbox local id.
+#[tauri::command]
+pub async fn messenger_dm_send_text(to: String, text: String, state: tauri::State<'_, AppState>) -> CmdResult<String> {
+    state.messenger.runtime()?.send_text_dm(&to, &text).await.map_err(map_err)
 }
 
 #[tauri::command]

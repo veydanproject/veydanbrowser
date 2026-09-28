@@ -9,6 +9,7 @@
   import { messengerError, type RelayState } from '../api';
 
   let newUrl = $state('');
+  let newKey = $state('');
   let busy = $state(false);
   let error = $state('');
 
@@ -32,7 +33,7 @@
   async function add() {
     const url = newUrl.trim();
     if (!url) return;
-    await run(async () => { await messengerStore.addRelay(url); newUrl = ''; });
+    await run(async () => { await messengerStore.addRelay(url, newKey); newUrl = ''; newKey = ''; });
   }
 </script>
 
@@ -114,6 +115,7 @@
 
   <form class="add" onsubmit={(e) => { e.preventDefault(); add(); }}>
     <input type="text" bind:value={newUrl} placeholder="wss://relay.example.com" spellcheck="false" disabled={busy} />
+    <input type="password" class="key" bind:value={newKey} placeholder={$t('msg_relay_key_placeholder')} autocomplete="off" disabled={busy} />
     <button class="btn btn-ghost" type="submit" disabled={busy || !newUrl.trim()}>
       <Icon name="plus" size={14} />{$t('msg_relay_add')}
     </button>
@@ -154,4 +156,5 @@
     background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px;
   }
   .add input:focus { outline: none; border-color: var(--accent-border); }
+  .add input.key { flex: 0 1 180px; font-family: inherit; }
 </style>
