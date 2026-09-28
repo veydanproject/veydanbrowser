@@ -11,7 +11,14 @@
 //! (`settings`, later `identity`, `relays`, `messages`, …).
 
 pub mod identity;
+pub mod relays;
 pub mod settings;
+
+/// Unix seconds now; the store stamps rows itself.
+pub(crate) fn now() -> i64 {
+    use messenger_core::Clock;
+    messenger_core::traits::SystemClock.now().secs()
+}
 
 use messenger_core::{MessengerConfig, MessengerError, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
