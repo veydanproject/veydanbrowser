@@ -306,7 +306,7 @@ fn run_mobile() {
             }
 
             #[cfg(feature = "messenger")]
-            let messenger = commands::messenger::MessengerState::start(&data_dir, db.clone());
+            let messenger = commands::messenger::MessengerState::start(app.handle().clone(), &data_dir);
 
             app.manage(AppState {
                 db,
@@ -450,6 +450,16 @@ fn run_mobile() {
             commands::messenger::messenger_status,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_set_enabled,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_get,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_create,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_import,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_export,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running veydan");
@@ -499,7 +509,7 @@ pub fn init_desktop(app: &tauri::AppHandle, data_dir: PathBuf) -> tauri::Result<
     });
 
     #[cfg(feature = "messenger")]
-    let messenger = commands::messenger::MessengerState::start(&data_dir, db.clone());
+    let messenger = commands::messenger::MessengerState::start(app.clone(), &data_dir);
 
     app.manage(AppState {
         db,
@@ -897,6 +907,16 @@ fn run_desktop() {
             commands::messenger::messenger_status,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_set_enabled,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_get,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_create,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_import,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_export,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_identity_delete,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

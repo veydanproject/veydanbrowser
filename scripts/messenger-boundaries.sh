@@ -25,7 +25,7 @@ allowed() {
     core)      echo "" ;;
     store)     echo "messenger-core" ;;
     transport) echo "messenger-core" ;;
-    identity)  echo "messenger-core" ;;
+    identity)  echo "messenger-core messenger-store" ;;
     ingress)   echo "messenger-core messenger-store messenger-identity" ;;
     contacts)  echo "messenger-core messenger-store" ;;
     dm)        echo "messenger-core messenger-store messenger-contacts" ;;
