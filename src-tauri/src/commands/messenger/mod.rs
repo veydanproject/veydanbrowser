@@ -54,6 +54,11 @@ impl MessengerState {
     /// Blocking start, called from Tauri `setup` before `AppState` is managed.
     /// Never panics: a broken messenger must not take the host down.
     pub fn start(app: tauri::AppHandle, app_data_dir: &Path) -> Self {
+        // Two rustls providers are linked (host: aws-lc-rs, nostr-sdk: ring).
+        // Pick the host's one for the whole process before any TLS handshake;
+        // a second call (already installed) is not an error worth reporting.
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
         let config = MessengerConfig::new(app_data_dir.join(DATA_SUBDIR));
         let secrets: Arc<dyn SecretStore> = Arc::new(HostSecretStore { app: app.clone() });
         match tauri::async_runtime::block_on(MessengerRuntime::start(config, secrets)) {
@@ -100,6 +105,13 @@ struct HostSecretStore {
 }
 
 impl HostSecretStore {
+    /// `AppState` is managed after the runtime starts, so early calls (the
+    /// signer probe in `MessengerRuntime::start`) see "locked" instead of
+    /// panicking; `refresh_signer` picks the key up on the first status call.
+    fn state(&self) -> messenger_core::Result<tauri::State<'_, AppState>> {
+        self.app.try_state::<AppState>().ok_or(MessengerError::SecretsLocked)
+    }
+
     fn setting_key(key: &str) -> String {
         format!("{SECRET_PREFIX}{key}")
     }
@@ -120,7 +132,7 @@ impl HostSecretStore {
 #[async_trait]
 impl SecretStore for HostSecretStore {
     async fn get(&self, key: &str) -> messenger_core::Result<Option<Zeroizing<Vec<u8>>>> {
-        let state = self.app.state::<AppState>();
+        let state = self.state()?;
         let (vk, _) = vault::require_open(&state).map_err(Self::locked)?;
         let stored = sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = ?")
             .bind(Self::setting_key(key))
@@ -138,7 +150,7 @@ impl SecretStore for HostSecretStore {
     }
 
     async fn put(&self, key: &str, value: &[u8]) -> messenger_core::Result<()> {
-        let state = self.app.state::<AppState>();
+        let state = self.state()?;
         let (vk, _) = vault::ensure_key(&state).await.map_err(Self::locked)?;
         let b64 = Zeroizing::new(B64.encode(value));
         let enc = vault::encrypt_field(&vk, &Self::aad_id(key), "secret", &b64).map_err(Self::locked)?;
@@ -155,7 +167,7 @@ impl SecretStore for HostSecretStore {
     }
 
     async fn delete(&self, key: &str) -> messenger_core::Result<()> {
-        let state = self.app.state::<AppState>();
+        let state = self.state()?;
         sqlx::query("DELETE FROM app_settings WHERE key = ?")
             .bind(Self::setting_key(key))
             .execute(&state.db)
@@ -165,8 +177,10 @@ impl SecretStore for HostSecretStore {
     }
 
     async fn is_unlocked(&self) -> bool {
-        let state = self.app.state::<AppState>();
-        state.vault.open_key().is_some() || state.vault.pending().is_some()
+        match self.state() {
+            Ok(state) => state.vault.open_key().is_some() || state.vault.pending().is_some(),
+            Err(_) => false,
+        }
     }
 }
 

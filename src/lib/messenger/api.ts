@@ -29,6 +29,8 @@ export interface MessengerRelay {
   read: boolean;
   write: boolean;
   enabled: boolean;
+  /** 'nip42' | 'api_key' | null. The key itself never reaches the UI. */
+  auth_type: string | null;
   state: RelayState;
 }
 
@@ -78,8 +80,8 @@ const NOT_COMPILED: MessengerStatus = { compiled: false, enabled: false, runtime
 
 let mockIdentity: MessengerIdentity | null = null;
 let mockRelays: MessengerRelay[] = [
-  { url: 'wss://relay.damus.io', relay_id: 'pub-damus', source: 'manifest', regions: ['default'], read: true, write: true, enabled: true, state: 'connected' },
-  { url: 'wss://nos.lol', relay_id: 'pub-nos', source: 'manifest', regions: ['default'], read: true, write: true, enabled: false, state: 'disconnected' },
+  { url: 'wss://relay.damus.io', relay_id: 'pub-damus', source: 'manifest', regions: ['default'], read: true, write: true, enabled: true, auth_type: 'api_key', state: 'connected' },
+  { url: 'wss://nos.lol', relay_id: 'pub-nos', source: 'manifest', regions: ['default'], read: true, write: true, enabled: false, auth_type: null, state: 'disconnected' },
 ];
 let mockSilent = false;
 let mockRegion = 'default';
@@ -105,7 +107,7 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   }),
   messenger_relays_list: () => mockRelays,
   messenger_relays_add: (a) => {
-    const r: MessengerRelay = { url: String(a?.url), relay_id: null, source: 'user', regions: [], read: true, write: true, enabled: true, state: 'connecting' };
+    const r: MessengerRelay = { url: String(a?.url), relay_id: null, source: 'user', regions: [], read: true, write: true, enabled: true, auth_type: null, state: 'connecting' };
     mockRelays = [...mockRelays, r];
     return r;
   },

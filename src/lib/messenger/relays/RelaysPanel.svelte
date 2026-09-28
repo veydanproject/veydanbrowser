@@ -89,6 +89,7 @@
           <span class="meta">
             {r.source === 'manifest' ? $t('msg_relay_source_manifest') : $t('msg_relay_source_user')}
             {#if r.relay_id} · {r.relay_id}{/if}
+            {#if r.auth_type === 'api_key'} · {$t('msg_relay_auth_api_key')}{:else if r.auth_type === 'nip42'} · NIP-42{/if}
             · {$t(stateLabel[r.state] as 'msg_relay_state_connected')}
           </span>
         </div>
