@@ -111,7 +111,7 @@ impl Transport for FakeTransport {
         self.rx.lock().unwrap().take().expect("events() may be called once")
     }
 
-    fn status(&self) -> RelayStatusSnapshot {
+    async fn status(&self) -> RelayStatusSnapshot {
         RelayStatusSnapshot::default()
     }
 }

@@ -53,7 +53,7 @@ pub trait Transport: Send + Sync {
     /// Stream of raw events. One receiver per runtime; cloning is the
     /// runtime's business.
     fn events(&self) -> tokio::sync::mpsc::Receiver<RawEvent>;
-    fn status(&self) -> RelayStatusSnapshot;
+    async fn status(&self) -> RelayStatusSnapshot;
 }
 
 /// Host-provided secret storage. The host decides how secrets are protected
