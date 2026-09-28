@@ -19,6 +19,7 @@ use messenger_store::{dm_routes, Store};
 use nostr::key::Keys;
 use nostr::nips::nip19::ToBech32;
 use nostr::prelude::PublicKey;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 pub const UI_EVENT_DM_MESSAGE: &str = "dm.message";
@@ -51,11 +52,22 @@ pub struct DmService {
     contacts: ContactService,
     profiles: ProfileService,
     clock: Arc<dyn Clock>,
+    /// Incoming messages at or after this time count as unread even when
+    /// they predate the session (they arrived while we were offline).
+    /// Negative: not set, the session start is used.
+    unread_floor: Arc<AtomicI64>,
 }
 
 impl DmService {
     pub fn new(store: Store, contacts: ContactService, profiles: ProfileService, clock: Arc<dyn Clock>) -> Self {
-        Self { store, contacts, profiles, clock }
+        Self { store, contacts, profiles, clock, unread_floor: Arc::new(AtomicI64::new(-1)) }
+    }
+
+    /// See `unread_floor`. The runtime sets it to the end of the previous
+    /// session; a fresh database keeps the default, so restored history is
+    /// not flagged as unread.
+    pub fn set_unread_floor(&self, at: i64) {
+        self.unread_floor.store(at, Ordering::SeqCst);
     }
 
     pub fn store(&self) -> &Store {
@@ -504,7 +516,9 @@ impl DmService {
 
         let line = text.as_deref().map(preview).unwrap_or_else(|| format!("[{content_type}]"));
         let live_incoming = !from_me && !historical;
-        chats::touch(&self.store, &chat.id, msg.created_at.secs(), Some(&line), live_incoming).await?;
+        let floor = self.unread_floor.load(Ordering::SeqCst);
+        let counts_unread = !from_me && (live_incoming || (floor >= 0 && msg.created_at.secs() >= floor));
+        chats::touch(&self.store, &chat.id, msg.created_at.secs(), Some(&line), counts_unread).await?;
         chats::recompute_last(&self.store, &chat.id).await?;
 
         let view = self.message(&id).await?.ok_or_else(|| MessengerError::Storage("message vanished".into()))?;
@@ -912,5 +926,20 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn messages_missed_while_offline_are_unread_but_silent() {
+        let alice = Party::new().await;
+        let mut bob = Party::new().await;
+        // Bob was last online at 999_500; Alice wrote at 999_800; Bob's new
+        // session starts at 1_000_000 and fetches it as history.
+        bob.dm.set_unread_floor(999_500);
+        bob.session_started_at = 1_000_000;
+        let missed = wrap(&alice.keys, &bob.pk(), &Envelope::text("while you were away").encode(), 999_800, None).unwrap();
+        let old = wrap(&alice.keys, &bob.pk(), &Envelope::text("ancient").encode(), 900_000, None).unwrap();
+        assert_eq!(names(&bob.receive_from(&missed.to_peer, true).await), vec!["dm.message"], "no notification");
+        bob.receive_from(&old.to_peer, true).await;
+        assert_eq!(bob.dm.open_chat(&alice.pk()).await.unwrap().unread, 1, "only the missed one");
     }
 }
