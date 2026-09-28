@@ -11,7 +11,37 @@ export interface MessengerRuntimeStatus {
   schema_version: number;
   secrets_unlocked: boolean;
   identity_present: boolean;
+  signer_loaded: boolean;
+  relays_total: number;
+  relays_connected: number;
+  silent_mode: boolean;
+  manifest_serial: number | null;
+  region: string;
 }
+
+export type RelayState = 'disconnected' | 'connecting' | 'connected' | 'paused';
+
+export interface MessengerRelay {
+  url: string;
+  relay_id: string | null;
+  source: 'manifest' | 'user';
+  regions: string[];
+  read: boolean;
+  write: boolean;
+  enabled: boolean;
+  state: RelayState;
+}
+
+export interface MessengerManifestInfo {
+  serial: number | null;
+  issued_at: number | null;
+  region: string;
+  regions: string[];
+  silent_mode: boolean;
+}
+
+/** Event name: payload is `MessengerRelay[]`. */
+export const RELAY_STATUS_EVENT = 'messenger://relay-status';
 
 export interface MessengerStatus {
   /** False when the host binary was built without the `messenger` feature. */
@@ -47,6 +77,12 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const NOT_COMPILED: MessengerStatus = { compiled: false, enabled: false, runtime: null, error: null };
 
 let mockIdentity: MessengerIdentity | null = null;
+let mockRelays: MessengerRelay[] = [
+  { url: 'wss://relay.damus.io', relay_id: 'pub-damus', source: 'manifest', regions: ['default'], read: true, write: true, enabled: true, state: 'connected' },
+  { url: 'wss://nos.lol', relay_id: 'pub-nos', source: 'manifest', regions: ['default'], read: true, write: true, enabled: false, state: 'disconnected' },
+];
+let mockSilent = false;
+let mockRegion = 'default';
 
 const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_status: () => ({
@@ -55,12 +91,29 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
     runtime: {
       version: '0.1.0-dev',
       data_dir: '/home/dev/.local/share/net.veydan.space/VeydanSpace/messenger',
-      schema_version: 1,
+      schema_version: 2,
       secrets_unlocked: true,
       identity_present: mockIdentity !== null,
+      signer_loaded: mockIdentity !== null,
+      relays_total: mockRelays.filter((r) => r.enabled).length,
+      relays_connected: mockRelays.filter((r) => r.state === 'connected').length,
+      silent_mode: mockSilent,
+      manifest_serial: 1,
+      region: mockRegion,
     },
     error: null,
   }),
+  messenger_relays_list: () => mockRelays,
+  messenger_relays_add: (a) => {
+    const r: MessengerRelay = { url: String(a?.url), relay_id: null, source: 'user', regions: [], read: true, write: true, enabled: true, state: 'connecting' };
+    mockRelays = [...mockRelays, r];
+    return r;
+  },
+  messenger_relays_remove: (a) => { mockRelays = mockRelays.filter((r) => r.url !== a?.url); },
+  messenger_relays_set_enabled: (a) => { mockRelays = mockRelays.map((r) => r.url === a?.url ? { ...r, enabled: Boolean(a?.enabled) } : r); },
+  messenger_relays_set_silent: (a) => { mockSilent = Boolean(a?.enabled); },
+  messenger_manifest_info: () => ({ serial: 1, issued_at: 1759017600, region: mockRegion, regions: ['default', 'ru'], silent_mode: mockSilent }),
+  messenger_manifest_set_region: (a) => { mockRegion = String(a?.region); },
   messenger_set_enabled: () => undefined,
   messenger_identity_get: () => mockIdentity,
   messenger_identity_create: () => {
@@ -114,6 +167,16 @@ export const messengerApi = {
     }
   },
   setEnabled: (enabled: boolean) => invoke<void>('messenger_set_enabled', { enabled }),
+
+  relays: {
+    list: () => invoke<MessengerRelay[]>('messenger_relays_list'),
+    add: (url: string) => invoke<MessengerRelay>('messenger_relays_add', { url }),
+    remove: (url: string) => invoke<void>('messenger_relays_remove', { url }),
+    setEnabled: (url: string, enabled: boolean) => invoke<void>('messenger_relays_set_enabled', { url, enabled }),
+    setSilent: (enabled: boolean) => invoke<void>('messenger_relays_set_silent', { enabled }),
+    manifestInfo: () => invoke<MessengerManifestInfo>('messenger_manifest_info'),
+    setRegion: (region: string) => invoke<void>('messenger_manifest_set_region', { region }),
+  },
 
   identity: {
     get: () => invoke<MessengerIdentity | null>('messenger_identity_get'),

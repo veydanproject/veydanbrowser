@@ -7,6 +7,7 @@
   import { messengerStore } from '../store.svelte';
   import IdentityOnboarding from '../identity/IdentityOnboarding.svelte';
   import IdentityCard from '../identity/IdentityCard.svelte';
+  import RelaysPanel from '../relays/RelaysPanel.svelte';
 
   onMount(() => { messengerStore.refresh().catch(() => {}); });
 
@@ -35,6 +36,8 @@
         <IdentityOnboarding />
       {/if}
 
+      <RelaysPanel />
+
       <div class="card status-card">
         <div class="card-title">{$t('msg_status_title')}</div>
         <dl class="status-grid">
@@ -45,6 +48,10 @@
           <dd>{s.runtime.secrets_unlocked ? $t('msg_status_secrets_unlocked') : $t('msg_status_secrets_locked')}</dd>
           <dt>{$t('msg_status_identity')}</dt>
           <dd>{s.runtime.identity_present ? $t('msg_status_identity_present') : $t('msg_status_identity_none')}</dd>
+          <dt>{$t('msg_status_relays')}</dt>
+          <dd>{$t('msg_status_relays_value', { connected: String(s.runtime.relays_connected), total: String(s.runtime.relays_total) })}{s.runtime.silent_mode ? ` · ${$t('msg_relays_silent')}` : ''}</dd>
+          <dt>{$t('msg_status_signer')}</dt>
+          <dd>{s.runtime.signer_loaded ? $t('msg_status_signer_yes') : $t('msg_status_signer_no')}</dd>
         </dl>
       </div>
     </div>

@@ -22,12 +22,16 @@ use crate::{vault, AppState};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use messenger_core::{MessengerConfig, MessengerError, SecretStore};
-use messenger_runtime::{CreatedIdentity, Identity, MessengerRuntime, RuntimeStatus};
+use messenger_runtime::{CreatedIdentity, Identity, ManifestInfo, MessengerRuntime, RelayView, RuntimeStatus};
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;
-use tauri::Manager;
+use std::time::Duration;
+use tauri::{Emitter, Manager};
 use zeroize::Zeroizing;
+
+/// Emitted with `Vec<RelayView>` whenever relay state changes.
+pub const EVENT_RELAY_STATUS: &str = "messenger://relay-status";
 
 /// Host `app_settings` key that shows or hides the module in the UI.
 const ENABLED_KEY: &str = "messenger_enabled";
@@ -51,9 +55,13 @@ impl MessengerState {
     /// Never panics: a broken messenger must not take the host down.
     pub fn start(app: tauri::AppHandle, app_data_dir: &Path) -> Self {
         let config = MessengerConfig::new(app_data_dir.join(DATA_SUBDIR));
-        let secrets: Arc<dyn SecretStore> = Arc::new(HostSecretStore { app });
+        let secrets: Arc<dyn SecretStore> = Arc::new(HostSecretStore { app: app.clone() });
         match tauri::async_runtime::block_on(MessengerRuntime::start(config, secrets)) {
-            Ok(rt) => Self { runtime: Some(Arc::new(rt)), start_error: None },
+            Ok(rt) => {
+                let rt = Arc::new(rt);
+                spawn_relay_status_watcher(app, rt.clone());
+                Self { runtime: Some(rt), start_error: None }
+            }
             Err(e) => {
                 eprintln!("messenger: start failed: {e}");
                 Self { runtime: None, start_error: Some(e.to_string()) }
@@ -66,6 +74,23 @@ impl MessengerState {
             .as_ref()
             .ok_or_else(|| AppError::Other(self.start_error.clone().unwrap_or_default()))
     }
+}
+
+/// Polls relay state and emits `EVENT_RELAY_STATUS` when it changes. The
+/// UI relies on this instead of polling commands itself.
+fn spawn_relay_status_watcher(app: tauri::AppHandle, rt: Arc<MessengerRuntime>) {
+    tauri::async_runtime::spawn(async move {
+        let mut last = String::new();
+        loop {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let Ok(list) = rt.relays().list().await else { continue };
+            let snapshot = serde_json::to_string(&list).unwrap_or_default();
+            if snapshot != last {
+                last = snapshot;
+                let _ = app.emit(EVENT_RELAY_STATUS, &list);
+            }
+        }
+    });
 }
 
 /// Vault-backed secret storage. Resolves `AppState` lazily because the store
@@ -185,7 +210,13 @@ pub async fn messenger_status(state: tauri::State<'_, AppState>) -> CmdResult<Me
     let enabled = read_enabled(&state.db).await;
     let ms = &state.messenger;
     let runtime = match ms.runtime.as_ref() {
-        Some(rt) => Some(rt.status().await.map_err(map_err)?),
+        Some(rt) => {
+            // The vault may have been unlocked since start-up; pick up the signer.
+            if let Err(e) = rt.refresh_signer().await {
+                eprintln!("messenger: refresh_signer: {e}");
+            }
+            Some(rt.status().await.map_err(map_err)?)
+        }
         None => None,
     };
     Ok(MessengerStatus { compiled: true, enabled, runtime, error: ms.start_error.clone() })
@@ -221,7 +252,10 @@ pub async fn messenger_identity_create(
     password: String,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<CreatedIdentity> {
-    state.messenger.runtime()?.identity().create(&password).await.map_err(map_err)
+    let rt = state.messenger.runtime()?;
+    let created = rt.identity().create(&password).await.map_err(map_err)?;
+    rt.refresh_signer().await.map_err(map_err)?;
+    Ok(created)
 }
 
 /// `kind` is `nsec` (also accepts hex), `ncryptsec` (needs `password`) or
@@ -233,7 +267,8 @@ pub async fn messenger_identity_import(
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<Identity> {
-    let svc = state.messenger.runtime()?.identity();
+    let rt = state.messenger.runtime()?;
+    let svc = rt.identity();
     let pw = password.unwrap_or_default();
     let res = match kind.as_str() {
         "nsec" => svc.import_nsec(&secret).await,
@@ -241,7 +276,9 @@ pub async fn messenger_identity_import(
         "mnemonic" => svc.import_mnemonic(&secret, &pw).await,
         other => Err(MessengerError::Invalid(format!("unknown import kind: {other}"))),
     };
-    res.map_err(map_err)
+    let identity = res.map_err(map_err)?;
+    rt.refresh_signer().await.map_err(map_err)?;
+    Ok(identity)
 }
 
 #[tauri::command]
@@ -254,5 +291,49 @@ pub async fn messenger_identity_export(
 
 #[tauri::command]
 pub async fn messenger_identity_delete(state: tauri::State<'_, AppState>) -> CmdResult<()> {
-    state.messenger.runtime()?.identity().delete().await.map_err(map_err)
+    let rt = state.messenger.runtime()?;
+    rt.identity().delete().await.map_err(map_err)?;
+    rt.refresh_signer().await.map_err(map_err)?;
+    Ok(())
+}
+
+// ─── Relays / manifest ──────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn messenger_relays_list(state: tauri::State<'_, AppState>) -> CmdResult<Vec<RelayView>> {
+    state.messenger.runtime()?.relays().list().await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_relays_add(url: String, state: tauri::State<'_, AppState>) -> CmdResult<RelayView> {
+    state.messenger.runtime()?.relays().add_user(&url).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_relays_remove(url: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.relays().remove_user(&url).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_relays_set_enabled(
+    url: String,
+    enabled: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    state.messenger.runtime()?.relays().set_enabled(&url, enabled).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_relays_set_silent(enabled: bool, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.relays().set_silent(enabled).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_manifest_info(state: tauri::State<'_, AppState>) -> CmdResult<ManifestInfo> {
+    state.messenger.runtime()?.relays().manifest_info().await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_manifest_set_region(region: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.relays().set_region(&region).await.map_err(map_err)
 }

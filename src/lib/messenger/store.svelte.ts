@@ -1,15 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
-import { messengerApi, type IdentityImportKind, type MessengerIdentity, type MessengerStatus } from './api';
+import {
+  messengerApi,
+  RELAY_STATUS_EVENT,
+  type IdentityImportKind,
+  type MessengerIdentity,
+  type MessengerManifestInfo,
+  type MessengerRelay,
+  type MessengerStatus,
+} from './api';
+
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 /** Module-level state: whether the module exists in this build, is enabled, and who we are. */
 class MessengerStore {
   status = $state<MessengerStatus | null>(null);
   identity = $state<MessengerIdentity | null>(null);
+  relays = $state<MessengerRelay[]>([]);
+  manifest = $state<MessengerManifestInfo | null>(null);
   loaded = $state(false);
   loading = $state(false);
   private _promise: Promise<void> | null = null;
+  private _unlisten: (() => void) | null = null;
 
   /** Show the nav entry only when compiled, enabled and the runtime started. */
   get visible(): boolean {
@@ -36,11 +49,64 @@ class MessengerStore {
     this.loading = true;
     try {
       this.status = await messengerApi.status();
-      this.identity = this.visible ? await messengerApi.identity.get() : null;
+      if (this.visible) {
+        const [identity, relays, manifest] = await Promise.all([
+          messengerApi.identity.get(),
+          messengerApi.relays.list(),
+          messengerApi.relays.manifestInfo(),
+        ]);
+        this.identity = identity;
+        this.relays = relays;
+        this.manifest = manifest;
+      } else {
+        this.identity = null;
+        this.relays = [];
+        this.manifest = null;
+      }
       this.loaded = true;
     } finally {
       this.loading = false;
     }
+  }
+
+  /** Subscribe to relay-state pushes from the runtime. Idempotent. */
+  async startListeners() {
+    if (this._unlisten || !isTauri) return;
+    const { listen } = await import('@tauri-apps/api/event');
+    this._unlisten = await listen<MessengerRelay[]>(RELAY_STATUS_EVENT, (e) => {
+      this.relays = e.payload;
+    });
+  }
+
+  async refreshRelays() {
+    const [relays, manifest] = await Promise.all([messengerApi.relays.list(), messengerApi.relays.manifestInfo()]);
+    this.relays = relays;
+    this.manifest = manifest;
+  }
+
+  async addRelay(url: string) {
+    await messengerApi.relays.add(url);
+    await this.refreshRelays();
+  }
+
+  async removeRelay(url: string) {
+    await messengerApi.relays.remove(url);
+    await this.refreshRelays();
+  }
+
+  async setRelayEnabled(url: string, enabled: boolean) {
+    await messengerApi.relays.setEnabled(url, enabled);
+    await this.refreshRelays();
+  }
+
+  async setSilent(enabled: boolean) {
+    await messengerApi.relays.setSilent(enabled);
+    await this.refresh();
+  }
+
+  async setRegion(region: string) {
+    await messengerApi.relays.setRegion(region);
+    await this.refresh();
   }
 
   async setEnabled(enabled: boolean) {
