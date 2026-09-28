@@ -259,6 +259,12 @@ pub(crate) async fn update_note(
     let id = id.to_string();
     let now = Utc::now().to_rfc3339();
 
+    // Held for the whole read-check-write sequence below. The `base_hash` check
+    // reads the file, then several awaits happen before `write_note_file`, so
+    // without this two concurrent saves both pass the check and the later write
+    // silently drops the earlier one. Cheap: saves are short and rare.
+    let _save_guard = state.notes_save.lock().await;
+
     let mut row = sqlx::query_as::<_, NoteRow>("SELECT * FROM notes WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.db)

@@ -152,6 +152,11 @@ pub struct AppState {
     /// Notes dir watcher; dropped before a backup restore releases its handle.
     pub notes_watcher: Arc<Mutex<Option<notify::RecommendedWatcher>>>,
     pub notes_lock: commands::notes::NotesLock,
+    /// Serializes note saves. `update_note` checks `base_hash` against the file,
+    /// then awaits several times before writing; without this lock two concurrent
+    /// saves can both pass the check and the later one silently overwrites the
+    /// earlier. Matters for multiple windows, the capture bridge and sync apply.
+    pub notes_save: Arc<tokio::sync::Mutex<()>>,
     pub vault: vault::VaultState,
     pub sync: Arc<SyncManager>,
     #[cfg(desktop)]
@@ -303,6 +308,7 @@ fn run_mobile() {
                 notes_custom_dir: Arc::new(std::sync::RwLock::new(None)),
                 notes_watcher: Arc::new(Mutex::new(None)),
                 notes_lock: commands::notes::NotesLock::default(),
+                notes_save: Arc::new(tokio::sync::Mutex::new(())),
                 vault: vault::VaultState::default(),
                 sync: Arc::new(SyncManager::default()),
             });
@@ -485,6 +491,7 @@ pub fn init_desktop(app: &tauri::AppHandle, data_dir: PathBuf) -> tauri::Result<
         notes_custom_dir: Arc::new(std::sync::RwLock::new(notes_custom_dir)),
         notes_watcher: Arc::new(Mutex::new(None)),
         notes_lock: commands::notes::NotesLock::default(),
+        notes_save: Arc::new(tokio::sync::Mutex::new(())),
         vault: vault::VaultState::default(),
         sync: Arc::new(SyncManager::default()),
         browser: Arc::new(BrowserState::default()),
@@ -680,6 +687,7 @@ fn run_desktop() {
             proxies_bulk_create,
             proxy_update,
             proxy_delete,
+            proxy_usage,
             proxy_check,
             proxy_export_url,
             proxy_trust_fingerprint,

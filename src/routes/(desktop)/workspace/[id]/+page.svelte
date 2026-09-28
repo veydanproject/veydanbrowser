@@ -185,7 +185,7 @@
   let sshOpen = $state(false);
   let proxyPanelProxy = $state<Proxy | null | undefined>(undefined);
   let proxyCheckResults = $state<Record<string, ProxyCheckResult & { checking?: boolean; err?: string }>>({});
-  let proxyDeleteModal = $state({ open: false, id: '', name: '' });
+  let proxyDeleteModal = $state({ open: false, id: '', name: '', usage: '' });
   let proxySearch = $state('');
 
   function openCreateProxy() {
@@ -223,12 +223,22 @@
     finally { fingerprintPrompt = null; }
   }
 
+  /** Open the confirmation, then fill in what the delete would detach. */
+  async function askDeleteProxy(proxy: Proxy) {
+    proxyDeleteModal = { open: true, id: proxy.id, name: proxy.name, usage: '' };
+    const usage = await proxiesStore.deleteWarning(proxy.id);
+    // The user may have cancelled or picked another row while this was in flight.
+    if (proxyDeleteModal.open && proxyDeleteModal.id === proxy.id) {
+      proxyDeleteModal.usage = usage;
+    }
+  }
+
   async function confirmDeleteProxy() {
     try {
       await proxiesStore.remove(proxyDeleteModal.id);
       proxies = proxiesStore.byWorkspace(workspaceId);
     } catch {}
-    finally { proxyDeleteModal = { open: false, id: '', name: '' }; }
+    finally { proxyDeleteModal = { open: false, id: '', name: '', usage: '' }; }
   }
 
   function onProxyPanelSaved(proxy: Proxy) {
@@ -466,7 +476,7 @@
                             <button class="act-btn" title={$t('proxy_btn_edit')} onclick={(e) => { e.stopPropagation(); proxyPanelProxy = proxy; }}>
                               <Icon name="pencil" size={12} />
                             </button>
-                            <button class="act-btn act-danger" title={$t('proxy_btn_delete')} onclick={(e) => { e.stopPropagation(); proxyDeleteModal = { open: true, id: proxy.id, name: proxy.name }; }}>
+                            <button class="act-btn act-danger" title={$t('proxy_btn_delete')} onclick={(e) => { e.stopPropagation(); askDeleteProxy(proxy); }}>
                               <Icon name="trash-2" size={12} />
                             </button>
                           </div>
@@ -578,12 +588,12 @@
 <Modal
   open={proxyDeleteModal.open}
   title={$t('proxy_btn_delete')}
-  message={$t('proxy_confirm_delete', { name: proxyDeleteModal.name })}
+  message={$t('proxy_confirm_delete', { name: proxyDeleteModal.name }) + proxyDeleteModal.usage}
   confirmLabel={$t('proxy_btn_delete')}
   cancelLabel={$t('proxy_btn_cancel')}
   variant="danger"
   onconfirm={confirmDeleteProxy}
-  oncancel={() => (proxyDeleteModal = { open: false, id: '', name: '' })}
+  oncancel={() => (proxyDeleteModal = { open: false, id: '', name: '', usage: '' })}
 />
 
 <TotpGenerator

@@ -9,6 +9,7 @@ use crate::models::{
 use crate::proxy::check;
 use crate::AppState;
 use chrono::Utc;
+use serde::Serialize;
 use std::collections::HashSet;
 use uuid::Uuid;
 
@@ -372,6 +373,58 @@ mod tests {
             .unwrap();
         assert_eq!(count.0, 2);
     }
+
+    async fn insert_proxy(pool: &sqlx::SqlitePool, id: &str, proxy_type: &str) {
+        sqlx::query(
+            "INSERT INTO proxies (id, name, proxy_type, host, port, created_at)
+             VALUES (?, ?, ?, '1.2.3.4', 8080, '2026-01-01T00:00:00Z')",
+        )
+        .bind(id)
+        .bind(format!("proxy-{id}"))
+        .bind(proxy_type)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_required_returns_none_only_when_no_proxy_configured() {
+        let pool = test_pool().await;
+        assert!(resolve_required(&pool, None).await.unwrap().is_none());
+        // The UI sends "" for "no value" on nullable fields; treat it as unset.
+        assert!(resolve_required(&pool, Some("")).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_required_resolves_every_supported_type() {
+        let pool = test_pool().await;
+        for t in SUPPORTED_PROXY_TYPES {
+            insert_proxy(&pool, t, t).await;
+            let proxy = resolve_required(&pool, Some(t)).await.unwrap();
+            assert_eq!(proxy.unwrap().proxy_type, t);
+        }
+    }
+
+    /// The regression this whole resolver exists for: a deleted proxy must abort
+    /// the connect, never degrade it to a direct one that leaks the real IP.
+    #[tokio::test]
+    async fn resolve_required_errors_on_dangling_id() {
+        let pool = test_pool().await;
+        let err = resolve_required(&pool, Some("gone"))
+            .await
+            .expect_err("a dangling proxy_id must not resolve to a direct connection");
+        assert!(matches!(err, AppError::Proxy(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn resolve_required_errors_on_unroutable_type() {
+        let pool = test_pool().await;
+        insert_proxy(&pool, "p1", "socks4").await;
+        let err = resolve_required(&pool, Some("p1"))
+            .await
+            .expect_err("an unsupported proxy type must not fall back to direct");
+        assert!(matches!(err, AppError::Proxy(_)), "got {err:?}");
+    }
 }
 
 /// Update a proxy. Field contract (matches ProxyPanel.svelte, which pre-fills
@@ -443,20 +496,115 @@ pub async fn pin_ssh_fingerprint(
     }
 }
 
+/// Proxy types the app can actually route traffic through.
+/// Every entry must be handled by *both* `commands::ssh::establish_transport`
+/// (terminal + SFTP) and `browser::profile_launcher::setup_proxy` (browser).
+/// Adding a type here without wiring both paths reintroduces the silent
+/// direct-connection fallback this list exists to prevent.
+pub const SUPPORTED_PROXY_TYPES: [&str; 4] = ["http", "https", "socks5", "ssh"];
+
+pub fn is_supported_type(proxy_type: &str) -> bool {
+    SUPPORTED_PROXY_TYPES.contains(&proxy_type)
+}
+
+/// Resolve a stored `proxy_id` into its row, failing closed.
+///
+/// A profile or SSH connection that names a proxy must never quietly fall back
+/// to a direct connection: that exposes the real IP against the user's explicit
+/// configuration. So a dangling id (the proxy row was deleted out from under
+/// this one — `PRAGMA foreign_keys` is off, see `db::run_migrations`) or a `proxy_type`
+/// no transport implements is an error, never `Ok(None)`.
+///
+/// `Ok(None)` means one thing only: no proxy is configured. That is the single
+/// path to a direct connection.
+pub async fn resolve_required(
+    db: &sqlx::SqlitePool,
+    proxy_id: Option<&str>,
+) -> Result<Option<Proxy>, AppError> {
+    let Some(id) = proxy_id.filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let proxy = sqlx::query_as::<_, Proxy>("SELECT * FROM proxies WHERE id = ?")
+        .bind(id)
+        .fetch_optional(db)
+        .await
+        .map_err(AppError::db)?
+        .ok_or_else(|| {
+            AppError::proxy(format!(
+                "The configured proxy ({id}) no longer exists — refusing to connect \
+                 directly. Assign another proxy, or clear the proxy setting to \
+                 connect without one on purpose."
+            ))
+        })?;
+    if !is_supported_type(&proxy.proxy_type) {
+        return Err(AppError::proxy(format!(
+            "Proxy '{}' has type '{}', which this build cannot route through — \
+             refusing to connect directly. Supported types: {}.",
+            proxy.name,
+            proxy.proxy_type,
+            SUPPORTED_PROXY_TYPES.join(", ")
+        )));
+    }
+    Ok(Some(proxy))
+}
+
+/// What a proxy is still attached to. The delete confirmation shows this so the
+/// user learns which rows stop connecting until they assign a new proxy.
+#[derive(Debug, Serialize)]
+pub struct ProxyUsage {
+    pub profiles: Vec<String>,
+    pub ssh_connections: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn proxy_usage(id: String, state: tauri::State<'_, AppState>) -> CmdResult<ProxyUsage> {
+    let profiles =
+        sqlx::query_scalar::<_, String>("SELECT name FROM profiles WHERE proxy_id = ? ORDER BY name")
+            .bind(&id)
+            .fetch_all(&state.db)
+            .await
+            .map_err(AppError::db)?;
+    let ssh_connections = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM ssh_connections WHERE proxy_id = ? ORDER BY name",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(AppError::db)?;
+    Ok(ProxyUsage {
+        profiles,
+        ssh_connections,
+    })
+}
+
 #[tauri::command]
 pub async fn proxy_delete(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    // `PRAGMA foreign_keys` is off, so the schema's `ON DELETE SET NULL` never
+    // fires — clear every reference explicitly. One transaction with the delete:
+    // a partial failure would leave rows pointing at a proxy that is already
+    // gone, and those then refuse to connect (`resolve_required`) until edited.
+    let mut tx = state.db.begin().await.map_err(AppError::db)?;
+
     sqlx::query("UPDATE profiles SET proxy_id = NULL WHERE proxy_id = ?")
         .bind(&id)
-        .execute(&state.db)
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::db)?;
+
+    sqlx::query("UPDATE ssh_connections SET proxy_id = NULL, updated_at = ? WHERE proxy_id = ?")
+        .bind(Utc::now().to_rfc3339())
+        .bind(&id)
+        .execute(&mut *tx)
         .await
         .map_err(AppError::db)?;
 
     sqlx::query("DELETE FROM proxies WHERE id = ?")
         .bind(&id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(AppError::db)?;
 
+    tx.commit().await.map_err(AppError::db)?;
     Ok(())
 }
 

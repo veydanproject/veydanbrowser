@@ -343,7 +343,12 @@ pub async fn handle_capture(
         return CaptureResponse::err("profile_id is required");
     }
     match req.kind.as_str() {
-        // Titles stay hidden while the notes UI is locked
+        // Titles stay hidden while the notes UI is locked. This bridge is the one
+        // note surface reachable from outside the app's own UI, which is why the
+        // lock is enforced here rather than only in the frontend.
+        // `open_note` intentionally stays allowed: it raises the notes window,
+        // which renders `AppLockGate` and so shows the unlock prompt instead of
+        // the note. Blocking it would only remove a way to reach that prompt.
         "list_notes" | "search_notes" if super::lock::is_locked(state).await => {
             return CaptureResponse::notes(Vec::new())
         }

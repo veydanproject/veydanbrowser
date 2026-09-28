@@ -82,6 +82,17 @@ This is **your own sync**, not a Veydan cloud. There is no vendor account and no
 - **Auto-updates** — the app checks for new releases and installs cryptographically signed updates in-place, with an update banner and live download progress. (On Linux `.deb`/`.rpm` installs the banner points to the new release instead — those are updated through the package manager.)
 - Fast, native desktop windows via Tauri's WebView.
 
+### 🛡 What the protections actually cover
+
+Local-first means the data is yours, on your disk — so it is worth being precise about what each protection does and does not do.
+
+- **In transit / at rest in sync storage — encrypted.** Everything is encrypted on the device before it leaves (XChaCha20-Poly1305, key derived with Argon2id). The folder, bucket or WebDAV share only ever holds ciphertext.
+- **Password manager entries — encrypted at rest.** Passwords and their notes are stored as ciphertext in the local database and decrypted only while the vault is open.
+- **The rest of the local database is *not* encrypted at rest.** SSH connection passwords, private keys and key passphrases, proxy credentials, TOTP secrets and password-generator history are stored as plaintext columns in the local SQLite file. Note files are plaintext Markdown on disk. Anything that can read your user account's files — another process running as you, a backup tool, an unencrypted stolen disk — can read them. Use full-disk encryption; that is the layer that protects this.
+- **The app lock (PIN or password, Argon2) gates the app, not the disk.** It locks the UI, auto-locks on inactivity, and withholds note titles from the browser-extension bridge. It does not encrypt anything, so it is protection against someone reaching for an unattended, unlocked machine — not against someone reading the files directly.
+- **Proxy settings fail closed.** A browser profile or SSH connection configured to use a proxy refuses to connect if that proxy is missing or its type cannot be routed, rather than quietly connecting directly and exposing the real IP.
+- **Password-generator history is off by default.** With it on, generated passwords are kept in the plaintext local table described above until you clear them.
+
 ---
 
 ## Tech stack

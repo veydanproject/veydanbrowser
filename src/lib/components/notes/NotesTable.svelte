@@ -119,12 +119,15 @@
   const sortAsc = $derived(local ? local.asc : sort.asc);
 
   const sorted = $derived.by(() => {
-    if (!local) return notes;
-    const dir = local.asc ? 1 : -1;
+    // Bound to a const: the narrowing from the guard below does not survive into
+    // the comparator closure, since `local` is a mutable outer binding.
+    const order = local;
+    if (!order) return notes;
+    const dir = order.asc ? 1 : -1;
     return [...notes].sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      const av = sortValue(a, local.col);
-      const bv = sortValue(b, local.col);
+      const av = sortValue(a, order.col);
+      const bv = sortValue(b, order.col);
       // Empty cells sink to the bottom regardless of direction
       if (!av !== !bv) return av ? -1 : 1;
       return av.localeCompare(bv) * dir;

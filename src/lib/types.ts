@@ -610,6 +610,12 @@ export interface SshConnection {
   requires_2fa: boolean;
   totp_entry_id: string | null;
   proxy_id: string | null;
+  /**
+   * Name of the referenced proxy. `null` while `proxy_id` is set means the proxy
+   * was deleted — the backend refuses to connect rather than going out directly,
+   * so the UI must surface this instead of a plain "proxy" badge.
+   */
+  proxy_name: string | null;
   workspace_ids: string[];
   profile_ids: string[];
   connect_timeout_sec: number;

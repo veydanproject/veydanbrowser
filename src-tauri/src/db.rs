@@ -619,8 +619,15 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     .execute(pool)
     .await?;
 
-    // NOTE: PRAGMA foreign_keys is not enabled, so ON DELETE SET NULL is
-    // documentation only — ssh_key_delete clears references explicitly.
+    // NOTE: PRAGMA foreign_keys is not enabled, so every `REFERENCES ... ON
+    // DELETE` clause in this schema is documentation only. Each delete path
+    // clears its own references explicitly instead — `ssh_key_delete`,
+    // `ssh_connection_delete`, `proxy_delete`, and the matching `Delete::Plain`
+    // statements in `sync::rows`. A *dangling* reference is deliberately not
+    // repaired by nulling it: `proxies::resolve_required` refuses to connect,
+    // because silently dropping a proxy reference would downgrade the connection
+    // to a direct one and leak the real IP. See `prune_orphan_links` below for
+    // the rows that genuinely are garbage.
     add_column_if_not_exists(
         pool,
         "ssh_connections",
@@ -903,5 +910,108 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<()> {
     .await?;
     add_column_if_not_exists(pool, "passwords", "totp_ids", "TEXT NOT NULL DEFAULT '[]'").await?;
 
+    prune_orphan_links(pool).await?;
+
     Ok(())
+}
+
+/// Drop link rows whose parent is gone.
+///
+/// With `PRAGMA foreign_keys` off, `ON DELETE CASCADE` never fired, so deletes
+/// that predate the explicit cleanup in `ssh_connection_delete` and
+/// `sync::rows` left these behind. They are pure garbage: every read joins
+/// through them, so they change no behaviour — but they keep accumulating and
+/// they would block turning foreign keys on later.
+///
+/// Deliberately *not* included: dangling `profiles.proxy_id` /
+/// `ssh_connections.proxy_id`. Nulling those would turn "should use a proxy"
+/// into "connects directly", which is the leak `proxies::resolve_required`
+/// exists to prevent. Those rows stay as they are and refuse to connect until
+/// the user picks a proxy or explicitly clears the setting.
+async fn prune_orphan_links(pool: &Pool<Sqlite>) -> Result<(), sqlx::Error> {
+    for sql in [
+        "DELETE FROM ssh_connection_workspaces
+         WHERE connection_id NOT IN (SELECT id FROM ssh_connections)
+            OR workspace_id   NOT IN (SELECT id FROM workspaces)",
+        "DELETE FROM ssh_connection_profiles
+         WHERE connection_id NOT IN (SELECT id FROM ssh_connections)
+            OR profile_id     NOT IN (SELECT id FROM profiles)",
+    ] {
+        let removed = sqlx::query(sql).execute(pool).await?.rows_affected();
+        if removed > 0 {
+            eprintln!("[db] pruned {removed} orphaned SSH link row(s)");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal shape of the tables `prune_orphan_links` touches.
+    async fn link_test_pool() -> Pool<Sqlite> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for sql in [
+            "CREATE TABLE ssh_connections (id TEXT PRIMARY KEY NOT NULL)",
+            "CREATE TABLE workspaces (id TEXT PRIMARY KEY NOT NULL)",
+            "CREATE TABLE profiles (id TEXT PRIMARY KEY NOT NULL)",
+            "CREATE TABLE ssh_connection_workspaces (connection_id TEXT NOT NULL, workspace_id TEXT NOT NULL)",
+            "CREATE TABLE ssh_connection_profiles (connection_id TEXT NOT NULL, profile_id TEXT NOT NULL)",
+            "INSERT INTO ssh_connections (id) VALUES ('c-live')",
+            "INSERT INTO workspaces (id) VALUES ('w-live')",
+            "INSERT INTO profiles (id) VALUES ('p-live')",
+            // Kept: both ends exist.
+            "INSERT INTO ssh_connection_workspaces VALUES ('c-live', 'w-live')",
+            "INSERT INTO ssh_connection_profiles VALUES ('c-live', 'p-live')",
+            // Pruned: the connection was deleted before the cleanup existed.
+            "INSERT INTO ssh_connection_workspaces VALUES ('c-gone', 'w-live')",
+            "INSERT INTO ssh_connection_profiles VALUES ('c-gone', 'p-live')",
+            // Pruned: the other end was deleted.
+            "INSERT INTO ssh_connection_workspaces VALUES ('c-live', 'w-gone')",
+            "INSERT INTO ssh_connection_profiles VALUES ('c-live', 'p-gone')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    async fn count(pool: &Pool<Sqlite>, table: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM {table}"
+        )))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn prune_orphan_links_drops_only_broken_rows() {
+        let pool = link_test_pool().await;
+
+        prune_orphan_links(&pool).await.unwrap();
+
+        assert_eq!(count(&pool, "ssh_connection_workspaces").await, 1);
+        assert_eq!(count(&pool, "ssh_connection_profiles").await, 1);
+
+        let survivor: (String, String) =
+            sqlx::query_as("SELECT connection_id, workspace_id FROM ssh_connection_workspaces")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(survivor, ("c-live".into(), "w-live".into()));
+    }
+
+    #[tokio::test]
+    async fn prune_orphan_links_is_idempotent() {
+        let pool = link_test_pool().await;
+        prune_orphan_links(&pool).await.unwrap();
+        prune_orphan_links(&pool).await.unwrap();
+        assert_eq!(count(&pool, "ssh_connection_workspaces").await, 1);
+        assert_eq!(count(&pool, "ssh_connection_profiles").await, 1);
+    }
 }

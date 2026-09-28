@@ -26,7 +26,15 @@
   let panelProxy = $state<Proxy | null | undefined>(undefined);
   let importOpen = $state(false);
   let checkResults = $state<Record<string, ProxyCheckResult & { checking?: boolean; err?: string }>>({});
-  let deleteModal = $state({ open: false, id: '', name: '' });
+  let deleteModal = $state({ open: false, id: '', name: '', usage: '' });
+
+  /** Open the confirmation, then fill in what the delete would detach. */
+  async function askDelete(proxy: Proxy) {
+    deleteModal = { open: true, id: proxy.id, name: proxy.name, usage: '' };
+    const usage = await proxiesStore.deleteWarning(proxy.id);
+    // The user may have cancelled or picked another row while this was in flight.
+    if (deleteModal.open && deleteModal.id === proxy.id) deleteModal.usage = usage;
+  }
 
   onMount(async () => {
     loading = true;
@@ -107,7 +115,7 @@
       await api.proxies.delete(deleteModal.id);
       proxiesStore.list = proxiesStore.list.filter((p) => p.id !== deleteModal.id);
     } catch (e) { error = formatError(e); }
-    finally { deleteModal = { open: false, id: '', name: '' }; }
+    finally { deleteModal = { open: false, id: '', name: '', usage: '' }; }
   }
 
   function onPanelSaved(proxy: Proxy) {
@@ -249,7 +257,7 @@
                   <button
                     class="icon-btn danger-soft"
                     title={$t('proxy_btn_delete')}
-                    onclick={(e) => { e.stopPropagation(); deleteModal = { open: true, id: proxy.id, name: proxy.name }; }}
+                    onclick={(e) => { e.stopPropagation(); askDelete(proxy); }}
                   >
                     <Icon name="trash-2" size={13} />
                   </button>
@@ -294,12 +302,12 @@
 <Modal
   open={deleteModal.open}
   title={$t('proxy_btn_delete')}
-  message={$t('proxy_confirm_delete', { name: deleteModal.name })}
+  message={$t('proxy_confirm_delete', { name: deleteModal.name }) + deleteModal.usage}
   confirmLabel={$t('proxy_btn_delete')}
   cancelLabel={$t('proxy_btn_cancel')}
   variant="danger"
   onconfirm={confirmDelete}
-  oncancel={() => (deleteModal = { open: false, id: '', name: '' })}
+  oncancel={() => (deleteModal = { open: false, id: '', name: '', usage: '' })}
 />
 
 <style>

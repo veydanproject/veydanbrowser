@@ -198,6 +198,11 @@ fn apply_proxy_prefs(prefs: &mut Vec<String>, proxy: &Proxy) {
                 }
             }
         }
+        // On the launch path `setup_proxy` has already wrapped every supported
+        // type in a local HTTP proxy, so only "http" reaches this match and an
+        // unhandled type is rejected before launch. Emitting nothing here would
+        // mean no proxy prefs at all — a silent direct connection — so this arm
+        // must stay unreachable for anything that actually launches.
         _ => {}
     }
 }

@@ -12,6 +12,7 @@ import type { MediaKind } from '$lib/media/types';
 import { capabilities } from '$lib/platform';
 import { formatError } from '$lib/utils';
 import { isEntityBinding, isEntityKind, parseBinding, type EntityKind } from '$lib/bindings';
+import type { Key } from '$lib/mobile/i18n';
 import type {
   BindingSummary,
   ConflictView,
@@ -288,10 +289,12 @@ export function onSyncProgress(cb: (p: SyncProgress) => void): Promise<UnlistenF
 }
 
 export function syncProgressText(
-  t: (key: string, vars?: Record<string, string>) => string,
+  t: (key: Key, vars?: Record<string, string>) => string,
   p: SyncProgress,
 ): string {
-  const phase = t(`settings_sync_phase_${p.phase}`);
+  // The phase key is built from the backend's phase name, which the key union
+  // cannot express — asserted the same way as other dynamic keys in the app.
+  const phase = t(`settings_sync_phase_${p.phase}` as Key);
   if (p.total > 0) {
     return t('settings_sync_progress_files', {
       phase,

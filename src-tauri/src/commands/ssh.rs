@@ -70,6 +70,10 @@ pub struct SshConnection {
     pub requires_2fa: bool,
     pub totp_entry_id: Option<String>,
     pub proxy_id: Option<String>,
+    /// Name of the referenced proxy, resolved by `load_links`. `None` while
+    /// `proxy_id` is `Some` means the proxy row is gone: the connect will fail
+    /// closed, and the UI must show that instead of a plain "proxy" badge.
+    pub proxy_name: Option<String>,
     pub workspace_ids: Vec<String>,
     pub profile_ids: Vec<String>,
     pub connect_timeout_sec: i64,
@@ -106,6 +110,7 @@ impl From<SshConnectionRow> for SshConnection {
             requires_2fa: r.requires_2fa != 0,
             totp_entry_id: r.totp_entry_id,
             proxy_id: r.proxy_id,
+            proxy_name: None,
             workspace_ids: vec![],
             profile_ids: vec![],
             connect_timeout_sec: r.connect_timeout_sec,
@@ -616,7 +621,35 @@ async fn load_links(
     }
     let pr_rows = q.fetch_all(pool).await?;
 
+    // Referenced proxy names, so the UI can tell "uses proxy X" from "points at a
+    // proxy that no longer exists" (the latter refuses to connect at launch).
+    let proxy_ids: Vec<String> = connections
+        .iter()
+        .filter_map(|c| c.proxy_id.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let proxy_rows: Vec<(String, String)> = if proxy_ids.is_empty() {
+        vec![]
+    } else {
+        let px_query = format!(
+            "SELECT id, name FROM proxies WHERE id IN ({})",
+            proxy_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",")
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(px_query));
+        for id in &proxy_ids {
+            q = q.bind(id);
+        }
+        q.fetch_all(pool).await?
+    };
+
     for conn in connections.iter_mut() {
+        conn.proxy_name = conn.proxy_id.as_ref().and_then(|pid| {
+            proxy_rows
+                .iter()
+                .find(|(id, _)| id == pid)
+                .map(|(_, name)| name.clone())
+        });
         conn.workspace_ids = ws_rows
             .iter()
             .filter(|(cid, _)| cid == &conn.id)
@@ -905,11 +938,31 @@ pub async fn ssh_connection_update(
 
 #[tauri::command]
 pub async fn ssh_connection_delete(state: State<'_, AppState>, id: String) -> CmdResult<()> {
-    sqlx::query("DELETE FROM ssh_connections WHERE id = ?")
+    // `PRAGMA foreign_keys` is off, so the schema's ON DELETE CASCADE on the two
+    // link tables never fires — drop those rows explicitly, in one transaction
+    // with the delete so a failure cannot leave the row gone but its links behind.
+    // Mirrors `sync::rows` for the `ssh_connection` entity.
+    let mut tx = state.db.begin().await.map_err(AppError::db)?;
+
+    sqlx::query("DELETE FROM ssh_connection_workspaces WHERE connection_id = ?")
         .bind(&id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await
         .map_err(AppError::db)?;
+
+    sqlx::query("DELETE FROM ssh_connection_profiles WHERE connection_id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::db)?;
+
+    sqlx::query("DELETE FROM ssh_connections WHERE id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::db)?;
+
+    tx.commit().await.map_err(AppError::db)?;
     Ok(())
 }
 
@@ -1025,16 +1078,10 @@ pub async fn ssh_connect(
         None,
     );
 
-    // Load proxy if set
-    let proxy = if let Some(ref proxy_id) = conn.proxy_id {
-        sqlx::query_as::<_, crate::models::Proxy>("SELECT * FROM proxies WHERE id = ?")
-            .bind(proxy_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(AppError::db)?
-    } else {
-        None
-    };
+    // Load the proxy if one is configured. Fails closed: a dangling or
+    // unroutable `proxy_id` aborts the connect instead of going out directly.
+    let proxy =
+        crate::commands::proxies::resolve_required(&state.db, conn.proxy_id.as_deref()).await?;
 
     let sessions_arc = state.ssh_sessions.clone();
     let db = state.db.clone();
@@ -1208,9 +1255,19 @@ pub(crate) async fn establish_transport(
                     client::connect_stream(config, stream, make_handler()).await?,
                 )
             }
-            _ => (
+            None => (
                 None,
                 client::connect(config, (host, port), make_handler()).await?,
+            ),
+            // `proxies::resolve_required` rejects unsupported types before we get
+            // here, so this is defence in depth — but "proxy configured, type not
+            // implemented" must never resolve to a direct connection, which is
+            // exactly what the previous catch-all arm did.
+            Some(ref p) => anyhow::bail!(
+                "Proxy '{}' has type '{}', which no SSH transport implements — \
+                 refusing to connect directly.",
+                p.name,
+                p.proxy_type
             ),
         })
     }

@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
+import { get } from 'svelte/store';
 import { api } from '$lib/api';
+import { t } from '$lib/i18n';
 import type { BulkImportResult, BulkProxyItem, Proxy, ProxyCheckResult } from '$lib/types';
 
 class ProxiesStore {
@@ -48,6 +50,30 @@ class ProxiesStore {
     const result = await api.proxies.bulkCreate(items);
     for (const proxy of result.imported) this.upsert(proxy);
     return result;
+  }
+
+  /**
+   * Suffix for the delete confirmation naming what still points at this proxy.
+   * Deleting detaches those rows, and a profile or SSH connection whose proxy is
+   * gone refuses to connect rather than falling back to a direct connection — so
+   * the confirmation has to say which ones stop working.
+   * Advisory: returns '' when nothing is attached or the lookup fails.
+   */
+  async deleteWarning(id: string): Promise<string> {
+    try {
+      const usage = await api.proxies.usage(id);
+      const tr = get(t);
+      const parts: string[] = [];
+      if (usage.profiles.length) {
+        parts.push(`${tr('proxy_usage_profiles')}: ${usage.profiles.join(', ')}`);
+      }
+      if (usage.ssh_connections.length) {
+        parts.push(`${tr('proxy_usage_ssh')}: ${usage.ssh_connections.join(', ')}`);
+      }
+      return parts.length ? ` ${tr('proxy_usage_warning')} ${parts.join('; ')}.` : '';
+    } catch {
+      return '';
+    }
   }
 
   /** Delete a proxy and drop it from the cached list. */

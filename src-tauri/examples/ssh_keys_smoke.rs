@@ -183,6 +183,7 @@ async fn main() -> anyhow::Result<()> {
         requires_2fa: false,
         totp_entry_id: None,
         proxy_id: None,
+        proxy_name: None,
         workspace_ids: vec![],
         profile_ids: vec![],
         connect_timeout_sec: 15,

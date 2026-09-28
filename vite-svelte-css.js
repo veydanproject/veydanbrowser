@@ -9,6 +9,7 @@ const FS_PREFIX = "/@fs/";
 const preprocessor = vitePreprocess();
 const cache = new Map();
 
+/** @param {string} id */
 function filenameOf(id) {
   let filename = id.split("?", 1)[0];
   if (filename.startsWith(FS_PREFIX)) filename = filename.slice(FS_PREFIX.length);
@@ -17,6 +18,7 @@ function filenameOf(id) {
 
 // Compile scoped CSS ourselves. The official plugin sometimes misses its
 // in-memory CSS map and Vite then serves the raw .svelte file as a stylesheet.
+/** @param {string} filename */
 async function compiledCss(filename) {
   const mtime = fs.statSync(filename).mtimeMs;
   const hit = cache.get(filename);
@@ -36,6 +38,7 @@ async function compiledCss(filename) {
   return css;
 }
 
+/** @returns {import('vite').Plugin} */
 export function svelteCssGuard() {
   return {
     name: "veydan-svelte-css-guard",

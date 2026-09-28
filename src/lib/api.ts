@@ -176,6 +176,9 @@ export const api = {
     update: (id: string, req: CreateProxyRequest) =>
       call<Proxy>('proxy_update', { id, req }),
     delete: (id: string) => call<void>('proxy_delete', { id }),
+    /** Profiles and SSH connections still attached to this proxy. */
+    usage: (id: string) =>
+      call<{ profiles: string[]; ssh_connections: string[] }>('proxy_usage', { id }),
     check: (id: string) => call<ProxyCheckResult>('proxy_check', { id }),
     /** `type://user:pass@host:port` including the stored password */
     exportUrl: (id: string) => call<string>('proxy_export_url', { id }),

@@ -135,7 +135,13 @@ pub const SPECS: &[TableSpec] = &[
         filter: None,
         unique: None,
         insert: true,
-        delete: Delete::Plain(&["UPDATE profiles SET proxy_id = NULL WHERE proxy_id = ?"]),
+        // Must detach every referencing table, exactly like `proxy_delete` does
+        // locally. Missing `ssh_connections` here left connections pointing at a
+        // deleted proxy on every other device.
+        delete: Delete::Plain(&[
+            "UPDATE profiles SET proxy_id = NULL WHERE proxy_id = ?",
+            "UPDATE ssh_connections SET proxy_id = NULL WHERE proxy_id = ?",
+        ]),
     },
     TableSpec {
         entity: "ssh_key",
@@ -243,7 +249,12 @@ pub const SPECS: &[TableSpec] = &[
         filter: None,
         unique: None,
         insert: true,
-        delete: Delete::Plain(&[]),
+        // `PRAGMA foreign_keys` is off, so the schema's ON DELETE CASCADE on both
+        // link tables never fires — drop the link rows explicitly.
+        delete: Delete::Plain(&[
+            "DELETE FROM ssh_connection_workspaces WHERE connection_id = ?",
+            "DELETE FROM ssh_connection_profiles WHERE connection_id = ?",
+        ]),
     },
     TableSpec {
         entity: "totp",

@@ -161,15 +161,10 @@ async fn connect_session(
     let mut conn = ssh_connection_get(state.clone(), connection_id.to_string()).await?;
     crate::commands::ssh::resolve_key_material(&state.db, &mut conn).await?;
 
-    let proxy = if let Some(ref proxy_id) = conn.proxy_id {
-        sqlx::query_as::<_, crate::models::Proxy>("SELECT * FROM proxies WHERE id = ?")
-            .bind(proxy_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(AppError::db)?
-    } else {
-        None
-    };
+    // Fails closed: a dangling or unroutable `proxy_id` aborts the connect
+    // instead of falling back to a direct one (see `proxies::resolve_required`).
+    let proxy =
+        crate::commands::proxies::resolve_required(&state.db, conn.proxy_id.as_deref()).await?;
 
     emit_status(app, connection_id, "connecting", None);
 

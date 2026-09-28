@@ -1,0 +1,80 @@
+name: CI
+
+# Runs on every push and pull request, and is called by the release workflow as
+# a gate (release.yml → `checks`) so a tag can never publish untested code.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check (svelte-check)
+        run: pnpm check
+
+      - name: Unit tests (vitest)
+        run: pnpm test
+
+  rust:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same system libraries the release build installs: the tauri crate does
+      # not compile without the WebKitGTK headers, test builds included.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            patchelf \
+            build-essential \
+            curl wget file
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+            src-tauri/crates/veydan-sync
+          key: ci
+
+      # --all-targets so examples/ are compiled too. They construct backend
+      # structs directly, which makes them the first thing a field change breaks.
+      - name: Tests (app)
+        run: cargo test --all-targets --manifest-path src-tauri/Cargo.toml
+
+      # veydan-sync is a path dependency, not a workspace member, so its own
+      # tests/ directory is invisible to the command above.
+      - name: Tests (veydan-sync)
+        run: cargo test --all-targets --manifest-path src-tauri/crates/veydan-sync/Cargo.toml
+
+      # Informational only: the tree carries ~50 pre-existing lints, so failing
+      # on them would block every PR. Drop continue-on-error once it is clean.
+      # `cargo fmt --check` is deliberately absent — the tree is not
+      # rustfmt-formatted, and enforcing it would be a repo-wide reformat.
+      - name: Clippy (non-blocking)
+        continue-on-error: true
+        run: cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml

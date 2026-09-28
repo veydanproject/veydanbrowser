@@ -32,15 +32,11 @@ pub async fn profile_launch(
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Profile not found"))?;
 
-    let proxy = if let Some(proxy_id) = &profile.proxy_id {
-        sqlx::query_as::<_, crate::models::Proxy>("SELECT * FROM proxies WHERE id = ?")
-            .bind(proxy_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(AppError::db)?
-    } else {
-        None
-    };
+    // Fails closed: a profile that names a proxy must not launch with a direct
+    // connection just because the row vanished (see `proxies::resolve_required`).
+    // Resolved before the status flips to 'running' so a failure needs no rollback.
+    let proxy =
+        crate::commands::proxies::resolve_required(&state.db, profile.proxy_id.as_deref()).await?;
 
     sqlx::query(
         "UPDATE profiles SET status = 'running', last_launch_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",

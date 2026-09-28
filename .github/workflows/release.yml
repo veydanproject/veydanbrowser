@@ -112,8 +112,13 @@ jobs:
           echo "build_desktop=$BUILD_DESKTOP" >> "$GITHUB_OUTPUT"
           echo "build_android=$BUILD_ANDROID" >> "$GITHUB_OUTPUT"
 
+  # Gate: the same checks CI runs on every push. Nothing builds or publishes
+  # until svelte-check, vitest and the Rust test suites pass on the tagged code.
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   build:
-    needs: verify-version
+    needs: [verify-version, checks]
     if: needs.verify-version.outputs.build_desktop == 'true'
     strategy:
       fail-fast: false
@@ -178,7 +183,7 @@ jobs:
 
   # Same SDK/NDK pins as scripts/android/android-env.sh
   build-android:
-    needs: verify-version
+    needs: [verify-version, checks]
     if: needs.verify-version.outputs.build_android == 'true'
     runs-on: ubuntu-latest
     env:

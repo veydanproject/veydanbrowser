@@ -293,7 +293,16 @@ async fn setup_proxy(
                 Err(e) => Err(format!("SSH connection failed: {e}")),
             }
         }
-        _ => Ok((proxy.cloned(), None)),
+        None => Ok((None, None)),
+        // Never hand an unhandled type through to `userjs::apply_proxy_prefs`:
+        // its own fallback emits no proxy prefs at all, so the browser would go
+        // out directly while the profile still claims to use a proxy.
+        // `proxies::resolve_required` rejects these before launch.
+        Some(p) => Err(format!(
+            "Proxy '{}' has type '{}', which the browser launcher cannot route \
+             through — refusing to launch with a direct connection.",
+            p.name, p.proxy_type
+        )),
     }
 }
 

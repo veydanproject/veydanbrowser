@@ -263,6 +263,10 @@ const translations = {
     proxy_btn_edit: 'Edit',
     proxy_btn_delete: 'Delete',
     proxy_confirm_delete: 'Delete proxy "{name}"?',
+    proxy_usage_warning:
+      'These will be detached and will refuse to connect until you assign another proxy:',
+    proxy_usage_profiles: 'Profiles',
+    proxy_usage_ssh: 'SSH connections',
     proxy_last_ip: 'Last IP:',
     proxy_error_fields: 'Name and host are required',
 
@@ -432,7 +436,8 @@ const translations = {
     pwgen_symbols: '!@#… (symbols)',
     pwgen_exclude_similar: 'Exclude similar (0/O, 1/l/I)',
     pwgen_save_history: 'Save history',
-    pwgen_history_local_note: 'History is stored locally on device',
+    pwgen_history_local_note:
+      'Stored unencrypted in the local database on this device — unlike password manager entries',
     pwgen_limit_label: 'History limit',
     pwgen_limit_none: 'No limit',
     pwgen_limit_10: 'Last 10',
@@ -1107,6 +1112,9 @@ const translations = {
     ssh_totp_entry_hint_interactive: 'Terminal will prompt for the code when asked',
     ssh_field_proxy: 'Proxy',
     ssh_proxy_none: 'No proxy (direct)',
+    ssh_proxy_missing: 'proxy missing',
+    ssh_proxy_missing_hint:
+      'The proxy this connection uses was deleted. Connecting is blocked so the real IP is not exposed — assign another proxy, or select "No proxy (direct)" to connect without one on purpose.',
     ssh_advanced: 'Advanced',
     ssh_field_connect_timeout: 'Connect timeout (s)',
     ssh_field_keepalive: 'Keepalive (s)',
@@ -1591,6 +1599,10 @@ const translations = {
     proxy_btn_edit: 'Изменить',
     proxy_btn_delete: 'Удалить',
     proxy_confirm_delete: 'Удалить прокси "{name}"?',
+    proxy_usage_warning:
+      'Будут отвязаны и перестанут подключаться, пока вы не назначите другой прокси:',
+    proxy_usage_profiles: 'Профили',
+    proxy_usage_ssh: 'SSH-подключения',
     proxy_last_ip: 'Последний IP:',
     proxy_error_fields: 'Название и хост обязательны',
 
@@ -1760,7 +1772,8 @@ const translations = {
     pwgen_symbols: '!@#… (символы)',
     pwgen_exclude_similar: 'Исключить похожие (0/O, 1/l/I)',
     pwgen_save_history: 'Сохранять историю',
-    pwgen_history_local_note: 'История хранится локально на устройстве',
+    pwgen_history_local_note:
+      'Хранится на устройстве в локальной БД без шифрования — в отличие от записей менеджера паролей',
     pwgen_limit_label: 'Лимит истории',
     pwgen_limit_none: 'Без лимита',
     pwgen_limit_10: '10 последних',
@@ -2435,6 +2448,9 @@ const translations = {
     ssh_totp_entry_hint_interactive: 'Терминал запросит код когда сервер его потребует',
     ssh_field_proxy: 'Прокси',
     ssh_proxy_none: 'Без прокси (прямое)',
+    ssh_proxy_missing: 'прокси удалён',
+    ssh_proxy_missing_hint:
+      'Прокси, который использует это подключение, удалён. Подключение заблокировано, чтобы не раскрыть реальный IP — выберите другой прокси или явно укажите «Без прокси (прямое)».',
     ssh_advanced: 'Дополнительно',
     ssh_field_connect_timeout: 'Таймаут подключения (с)',
     ssh_field_keepalive: 'Keepalive (с)',

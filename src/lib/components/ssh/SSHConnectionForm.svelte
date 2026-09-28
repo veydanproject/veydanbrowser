@@ -64,6 +64,14 @@
   let requires2fa = $state(untrack(() => connection?.requires_2fa ?? false));
   let totpEntryId = $state(untrack(() => connection?.totp_entry_id ?? ''));
   let proxyId = $state(untrack(() => connection?.proxy_id ?? ''));
+  /**
+   * The saved proxy no longer exists (backend resolved no name for it). Derived
+   * from the stored row rather than from `proxies`, so it does not flash while
+   * that list loads, and it clears as soon as the user picks another proxy.
+   */
+  const danglingProxy = $derived(
+    !!proxyId && proxyId === connection?.proxy_id && !connection?.proxy_name
+  );
   let selectedWorkspaceIds = $state<string[]>(
     untrack(() => connection?.workspace_ids ?? (defaultWorkspaceId ? [defaultWorkspaceId] : []))
   );
@@ -344,10 +352,19 @@
     <label for="ssh-proxy">{$t('ssh_field_proxy')}</label>
     <select id="ssh-proxy" bind:value={proxyId}>
       <option value="">{$t('ssh_proxy_none')}</option>
+      <!-- The stored proxy was deleted, so it is absent from the list above.
+           Without this option the select would render blank, which reads as
+           "no proxy" while the connection actually refuses to connect. -->
+      {#if danglingProxy}
+        <option value={proxyId} disabled>{$t('ssh_proxy_missing')}</option>
+      {/if}
       {#each proxies as p}
         <option value={p.id}>[{p.proxy_type}] {p.name}</option>
       {/each}
     </select>
+    {#if danglingProxy}
+      <span class="hint warn">{$t('ssh_proxy_missing_hint')}</span>
+    {/if}
   </div>
 
   <!-- Workspace assignments -->

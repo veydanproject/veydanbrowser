@@ -106,8 +106,14 @@
                   <span class="badge">+{conn.workspace_ids.length - 2}</span>
                 {/if}
               {/if}
-              {#if conn.proxy_id}
-                <span class="badge badge-accent">proxy</span>
+              {#if conn.proxy_id && conn.proxy_name}
+                <span class="badge badge-accent">{conn.proxy_name}</span>
+              {:else if conn.proxy_id}
+                <!-- Proxy row is gone: the connect fails closed rather than going
+                     out directly, so say that instead of claiming a live proxy. -->
+                <span class="badge badge-danger" title={$t('ssh_proxy_missing_hint')}>
+                  {$t('ssh_proxy_missing')}
+                </span>
               {/if}
               {#if conn.requires_2fa}
                 <span class="badge badge-accent">2FA</span>
