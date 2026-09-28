@@ -5,6 +5,8 @@
   import { onMount } from 'svelte';
   import { t } from '$lib/i18n';
   import { messengerStore } from '../store.svelte';
+  import IdentityOnboarding from '../identity/IdentityOnboarding.svelte';
+  import IdentityCard from '../identity/IdentityCard.svelte';
 
   onMount(() => { messengerStore.refresh().catch(() => {}); });
 
@@ -26,17 +28,25 @@
   {:else if s.error}
     <div class="error-msg">{$t('msg_status_error', { error: s.error })}</div>
   {:else if s.runtime}
-    <div class="card status-card">
-      <div class="card-title">{$t('msg_status_title')}</div>
-      <dl class="status-grid">
-        <dt>{$t('msg_status_version')}</dt><dd><code>{s.runtime.version}</code></dd>
-        <dt>{$t('msg_status_schema')}</dt><dd><code>{s.runtime.schema_version}</code></dd>
-        <dt>{$t('msg_status_data_dir')}</dt><dd><code>{s.runtime.data_dir}</code></dd>
-        <dt>{$t('msg_status_secrets')}</dt>
-        <dd>{s.runtime.secrets_unlocked ? $t('msg_status_secrets_unlocked') : $t('msg_status_secrets_locked')}</dd>
-        <dt>{$t('msg_status_identity')}</dt>
-        <dd>{s.runtime.identity_present ? $t('msg_status_identity_present') : $t('msg_status_identity_none')}</dd>
-      </dl>
+    <div class="stack">
+      {#if messengerStore.identity}
+        <IdentityCard identity={messengerStore.identity} />
+      {:else}
+        <IdentityOnboarding />
+      {/if}
+
+      <div class="card status-card">
+        <div class="card-title">{$t('msg_status_title')}</div>
+        <dl class="status-grid">
+          <dt>{$t('msg_status_version')}</dt><dd><code>{s.runtime.version}</code></dd>
+          <dt>{$t('msg_status_schema')}</dt><dd><code>{s.runtime.schema_version}</code></dd>
+          <dt>{$t('msg_status_data_dir')}</dt><dd><code>{s.runtime.data_dir}</code></dd>
+          <dt>{$t('msg_status_secrets')}</dt>
+          <dd>{s.runtime.secrets_unlocked ? $t('msg_status_secrets_unlocked') : $t('msg_status_secrets_locked')}</dd>
+          <dt>{$t('msg_status_identity')}</dt>
+          <dd>{s.runtime.identity_present ? $t('msg_status_identity_present') : $t('msg_status_identity_none')}</dd>
+        </dl>
+      </div>
     </div>
   {/if}
 </div>
@@ -49,7 +59,8 @@
     padding: 3px 8px; border-radius: var(--radius-sm);
     background: var(--accent-tint); color: var(--accent-text-2);
   }
-  .status-card { max-width: 720px; }
+  .stack { display: flex; flex-direction: column; gap: var(--sp-4); }
+  .status-card { max-width: 640px; }
   .status-grid {
     display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-2) var(--sp-4);
     margin: 0; font-size: var(--fs-sm);

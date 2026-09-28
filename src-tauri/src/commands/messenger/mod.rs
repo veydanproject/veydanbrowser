@@ -8,8 +8,9 @@
 //!
 //! 1. `MessengerState`: starts `messenger_runtime::MessengerRuntime` with a
 //!    data dir under the app's data dir and the host `SecretStore`.
-//! 2. `HostSecretStore`: the `SecretStore` implementation backed by the host.
-//!    Stage 0 ships a locked placeholder; stage 1 wires `crate::vault`.
+//! 2. `HostSecretStore`: `SecretStore` backed by the password vault. Every
+//!    value is XChaCha20-Poly1305-encrypted with the vault key and kept in
+//!    the host `app_settings` table; a closed vault yields `SecretsLocked`.
 //! 3. `messenger_*` commands that forward to the runtime and translate
 //!    `MessengerError` into `AppError`.
 //!
@@ -17,18 +18,23 @@
 //! forwarding call, it belongs in a messenger crate.
 
 use crate::error::{AppError, CmdResult};
-use crate::AppState;
+use crate::{vault, AppState};
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use messenger_core::{MessengerConfig, MessengerError, SecretStore};
-use messenger_runtime::{MessengerRuntime, RuntimeStatus};
+use messenger_runtime::{CreatedIdentity, Identity, MessengerRuntime, RuntimeStatus};
 use serde::Serialize;
-use sqlx::{Pool, Sqlite};
 use std::path::Path;
 use std::sync::Arc;
+use tauri::Manager;
 use zeroize::Zeroizing;
 
 /// Host `app_settings` key that shows or hides the module in the UI.
 const ENABLED_KEY: &str = "messenger_enabled";
+
+/// Prefix of `app_settings` keys holding vault-encrypted messenger secrets.
+/// Not in the sync whitelist, so secrets never leave this device.
+const SECRET_PREFIX: &str = "messenger_secret:";
 
 /// Sub-directory of the app data dir owned entirely by the messenger.
 const DATA_SUBDIR: &str = "messenger";
@@ -41,11 +47,11 @@ pub struct MessengerState {
 }
 
 impl MessengerState {
-    /// Blocking start, called from Tauri `setup`. Never panics: a broken
-    /// messenger must not take the host down.
-    pub fn start(app_data_dir: &Path, db: Pool<Sqlite>) -> Self {
+    /// Blocking start, called from Tauri `setup` before `AppState` is managed.
+    /// Never panics: a broken messenger must not take the host down.
+    pub fn start(app: tauri::AppHandle, app_data_dir: &Path) -> Self {
         let config = MessengerConfig::new(app_data_dir.join(DATA_SUBDIR));
-        let secrets: Arc<dyn SecretStore> = Arc::new(HostSecretStore { _db: db });
+        let secrets: Arc<dyn SecretStore> = Arc::new(HostSecretStore { app });
         match tauri::async_runtime::block_on(MessengerRuntime::start(config, secrets)) {
             Ok(rt) => Self { runtime: Some(Arc::new(rt)), start_error: None },
             Err(e) => {
@@ -62,29 +68,80 @@ impl MessengerState {
     }
 }
 
-/// Host-backed secret storage. Stage 0: not wired, always locked. Stage 1
-/// replaces the body with `crate::vault` wrapping (nsec and group keys are
-/// encrypted with the vault key; a closed vault yields `SecretsLocked`).
+/// Vault-backed secret storage. Resolves `AppState` lazily because the store
+/// is created before the state is managed.
 struct HostSecretStore {
-    _db: Pool<Sqlite>,
+    app: tauri::AppHandle,
+}
+
+impl HostSecretStore {
+    fn setting_key(key: &str) -> String {
+        format!("{SECRET_PREFIX}{key}")
+    }
+
+    fn aad_id(key: &str) -> String {
+        format!("messenger:{key}")
+    }
+
+    fn locked(e: AppError) -> MessengerError {
+        match e {
+            AppError::VaultLocked | AppError::VaultMismatch => MessengerError::SecretsLocked,
+            AppError::Db(m) => MessengerError::Storage(m),
+            other => MessengerError::Crypto(other.to_string()),
+        }
+    }
 }
 
 #[async_trait]
 impl SecretStore for HostSecretStore {
-    async fn get(&self, _key: &str) -> messenger_core::Result<Option<Zeroizing<Vec<u8>>>> {
-        Err(MessengerError::SecretsLocked)
+    async fn get(&self, key: &str) -> messenger_core::Result<Option<Zeroizing<Vec<u8>>>> {
+        let state = self.app.state::<AppState>();
+        let (vk, _) = vault::require_open(&state).map_err(Self::locked)?;
+        let stored = sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = ?")
+            .bind(Self::setting_key(key))
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| MessengerError::Storage(e.to_string()))?;
+        let Some(stored) = stored else { return Ok(None) };
+        let b64 = Zeroizing::new(
+            vault::decrypt_field(&vk, &Self::aad_id(key), "secret", &stored).map_err(Self::locked)?,
+        );
+        let bytes = B64
+            .decode(b64.as_bytes())
+            .map_err(|_| MessengerError::Crypto("stored secret is not base64".into()))?;
+        Ok(Some(Zeroizing::new(bytes)))
     }
 
-    async fn put(&self, _key: &str, _value: &[u8]) -> messenger_core::Result<()> {
-        Err(MessengerError::SecretsLocked)
+    async fn put(&self, key: &str, value: &[u8]) -> messenger_core::Result<()> {
+        let state = self.app.state::<AppState>();
+        let (vk, _) = vault::ensure_key(&state).await.map_err(Self::locked)?;
+        let b64 = Zeroizing::new(B64.encode(value));
+        let enc = vault::encrypt_field(&vk, &Self::aad_id(key), "secret", &b64).map_err(Self::locked)?;
+        sqlx::query(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(Self::setting_key(key))
+        .bind(enc)
+        .execute(&state.db)
+        .await
+        .map_err(|e| MessengerError::Storage(e.to_string()))?;
+        Ok(())
     }
 
-    async fn delete(&self, _key: &str) -> messenger_core::Result<()> {
-        Err(MessengerError::SecretsLocked)
+    async fn delete(&self, key: &str) -> messenger_core::Result<()> {
+        let state = self.app.state::<AppState>();
+        sqlx::query("DELETE FROM app_settings WHERE key = ?")
+            .bind(Self::setting_key(key))
+            .execute(&state.db)
+            .await
+            .map_err(|e| MessengerError::Storage(e.to_string()))?;
+        Ok(())
     }
 
     async fn is_unlocked(&self) -> bool {
-        false
+        let state = self.app.state::<AppState>();
+        state.vault.open_key().is_some() || state.vault.pending().is_some()
     }
 }
 
@@ -93,9 +150,23 @@ fn map_err(e: MessengerError) -> AppError {
         MessengerError::SecretsLocked => AppError::VaultLocked,
         MessengerError::Storage(m) => AppError::Db(m),
         MessengerError::Io(m) => AppError::Io(m),
+        MessengerError::NotLoggedIn => AppError::NotFound("messenger identity".into()),
         other => AppError::Other(other.to_string()),
     }
 }
+
+async fn read_enabled(db: &sqlx::Pool<sqlx::Sqlite>) -> bool {
+    sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = ?")
+        .bind(ENABLED_KEY)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+// ─── Status / enable ────────────────────────────────────────────────────────
 
 /// What the UI needs to decide whether to show the module.
 #[derive(Serialize)]
@@ -107,17 +178,6 @@ pub struct MessengerStatus {
     pub enabled: bool,
     pub runtime: Option<RuntimeStatus>,
     pub error: Option<String>,
-}
-
-async fn read_enabled(db: &Pool<Sqlite>) -> bool {
-    sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = ?")
-        .bind(ENABLED_KEY)
-        .fetch_optional(db)
-        .await
-        .ok()
-        .flatten()
-        .map(|v| v == "1")
-        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -147,4 +207,52 @@ pub async fn messenger_set_enabled(enabled: bool, state: tauri::State<'_, AppSta
     .await
     .map_err(AppError::db)?;
     Ok(())
+}
+
+// ─── Identity ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn messenger_identity_get(state: tauri::State<'_, AppState>) -> CmdResult<Option<Identity>> {
+    state.messenger.runtime()?.identity().get().await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_identity_create(
+    password: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<CreatedIdentity> {
+    state.messenger.runtime()?.identity().create(&password).await.map_err(map_err)
+}
+
+/// `kind` is `nsec` (also accepts hex), `ncryptsec` (needs `password`) or
+/// `mnemonic` (`password` is the optional BIP-39 passphrase).
+#[tauri::command]
+pub async fn messenger_identity_import(
+    kind: String,
+    secret: String,
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Identity> {
+    let svc = state.messenger.runtime()?.identity();
+    let pw = password.unwrap_or_default();
+    let res = match kind.as_str() {
+        "nsec" => svc.import_nsec(&secret).await,
+        "ncryptsec" => svc.import_ncryptsec(&secret, &pw).await,
+        "mnemonic" => svc.import_mnemonic(&secret, &pw).await,
+        other => Err(MessengerError::Invalid(format!("unknown import kind: {other}"))),
+    };
+    res.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_identity_export(
+    password: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<String> {
+    state.messenger.runtime()?.identity().export_ncryptsec(&password).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_identity_delete(state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.identity().delete().await.map_err(map_err)
 }
