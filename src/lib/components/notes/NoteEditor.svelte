@@ -548,16 +548,27 @@
     window.addEventListener('mouseup', onUp);
   }
 
-  // Highlight the list search query inside the opened note
+  // Last note/query/mode that already moved the caret to the search match
+  let searchHighlightKey = '';
+  // Select the list search match when the note, query, or mode changes
   $effect(() => {
     const query = notesStore.searchQuery;
-    const content = contentValue;
-    if (!query || !content) return;
-    if (mode === 'rich') {
+    const noteId = note?.id;
+    const editorMode = mode;
+    if (!query || !noteId) {
+      if (!query) searchHighlightKey = '';
+      return;
+    }
+    const content = untrack(() => contentValue);
+    if (!content) return;
+    if (editorMode !== 'rich' && !textareaEl) return;
+    const key = `${noteId}\0${query}\0${editorMode}`;
+    if (key === searchHighlightKey) return;
+    searchHighlightKey = key;
+    if (editorMode === 'rich') {
       tick().then(() => richEditor?.selectText(query));
       return;
     }
-    if (!textareaEl) return;
     const idx = content.toLowerCase().indexOf(query.toLowerCase());
     if (idx < 0) return;
     tick().then(() => {
