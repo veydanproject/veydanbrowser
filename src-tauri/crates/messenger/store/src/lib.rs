@@ -10,6 +10,7 @@
 //! Repositories are plain functions over the pool, grouped per module
 //! (`settings`, later `identity`, `relays`, `messages`, …).
 
+pub mod identity;
 pub mod settings;
 
 use messenger_core::{MessengerConfig, MessengerError, Result};
