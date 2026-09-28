@@ -12,9 +12,15 @@ publish.workspace = true
 
 [dependencies]
 messenger-core.workspace = true
+messenger-runtime.workspace = true
+serde_json.workspace = true
 async-trait.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "signal", "io-std", "io-util"] }
 zeroize.workspace = true
+
+[[bin]]
+name = "messenger-cli"
+path = "src/bin/messenger-cli.rs"
 
 [dev-dependencies]
 serde_json.workspace = true

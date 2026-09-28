@@ -6,7 +6,12 @@
 //! - [`MemorySecretStore`]: `SecretStore` in a `Mutex<HashMap>` with a lock switch.
 //! - [`FakeTransport`]: records every `Outbound`, lets tests inject `RawEvent`s.
 //!
-//! Stage 3 adds the `messenger-cli` binary and wire-format vectors.
+//! - [`FileSecretStore`]: plaintext JSON secrets for the CLI and standalone runs.
+//!
+//! The `messenger-cli` binary (src/bin) drives `MessengerRuntime` headless.
+
+pub mod file_secrets;
+pub use file_secrets::FileSecretStore;
 
 use async_trait::async_trait;
 use messenger_core::traits::RelayStatusSnapshot;
