@@ -209,7 +209,11 @@ fn map_state(s: nostr_sdk::relay::RelayStatus) -> RelayState {
 #[async_trait]
 impl Transport for RelayPool {
     async fn send(&self, out: Outbound) -> Result<Ack> {
-        self.guard_send()?;
+        // Silent mode blocks anything that would reach a relay. Subscriptions
+        // only record intent (nostr-sdk applies them on connect), so they pass.
+        if !matches!(out, Outbound::Subscribe { .. } | Outbound::Unsubscribe { .. }) {
+            self.guard_send()?;
+        }
         match out {
             Outbound::PublishOwn { event } | Outbound::PublishScoped { event, .. } => {
                 let ev = Self::parse_event(&event.json)?;
