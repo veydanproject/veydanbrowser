@@ -7,7 +7,7 @@
 
 use async_trait::async_trait;
 use messenger_core::traits::{SystemClock, UiEvent};
-use messenger_core::{Ack, Context, DmInbound, Effect, Envelope, Handler, MetaInbound, Outbound, PubKey, Result, Timestamp, Transport};
+use messenger_core::{Ack, Context, DmInbound, Effect, Envelope, Handler, Outbound, PubKey, Result, Timestamp, Transport};
 use messenger_core::Clock;
 use messenger_ingress::{filters, Dispatcher, EffectSink, IngressLoop, Outbox};
 use messenger_store::Store;
@@ -18,7 +18,6 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 pub const UI_EVENT_INBOUND_DM: &str = "inbound.dm";
-pub const UI_EVENT_INBOUND_META: &str = "inbound.meta";
 
 /// Effects go to the outbox (with an immediate pump) and to the UI channel.
 pub struct RuntimeSink {
@@ -72,23 +71,6 @@ impl Handler<DmInbound> for DebugDmHandler {
                 "text": text,
                 "source": msg.envelope.source,
             }),
-        })])
-    }
-}
-
-pub struct DebugMetaHandler;
-
-#[async_trait]
-impl Handler<MetaInbound> for DebugMetaHandler {
-    async fn handle(&self, msg: MetaInbound, _ctx: &Context) -> Result<Vec<Effect>> {
-        let (what, author) = match &msg {
-            MetaInbound::Profile { author, .. } => ("profile", author.as_hex().to_string()),
-            MetaInbound::Follows { author, .. } => ("follows", author.as_hex().to_string()),
-            MetaInbound::RelayList { author, .. } => ("relay_list", author.as_hex().to_string()),
-        };
-        Ok(vec![Effect::Emit(UiEvent {
-            name: UI_EVENT_INBOUND_META.into(),
-            payload: serde_json::json!({ "what": what, "author": author }),
         })])
     }
 }

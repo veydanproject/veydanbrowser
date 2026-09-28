@@ -16,6 +16,7 @@ messenger-store.workspace = true
 messenger-identity.workspace = true
 messenger-transport.workspace = true
 messenger-ingress.workspace = true
+messenger-contacts.workspace = true
 async-trait.workspace = true
 nostr.workspace = true
 serde.workspace = true

@@ -14,18 +14,21 @@ pub mod session;
 
 use messenger_core::outbound::WireEvent;
 use messenger_core::traits::{RelayState, SystemClock, UiEvent};
-use messenger_core::{Envelope, EventId, MessengerConfig, MessengerError, Outbound, PubKey, Result, SecretStore};
+use messenger_contacts::{ContactService, MetaHandler, Nip05Service, ProfileService, ReqwestFetcher};
+use messenger_core::{Clock, Envelope, EventId, MessengerConfig, MessengerError, Outbound, PubKey, Result, Scope, SecretStore, SubId, Transport};
 use messenger_identity::IdentityService;
-use messenger_ingress::{Dispatcher, Outbox};
+use messenger_ingress::{filters, Dispatcher, Outbox};
 use messenger_store::Store;
 use nostr::key::Keys;
 use nostr::nips::nip17::PrivateDirectMessageBuilder;
 use nostr::prelude::*;
 use serde::{Deserialize, Serialize};
-use session::{DebugDmHandler, DebugMetaHandler, Session};
+use session::{DebugDmHandler, Session};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
+pub use messenger_contacts::book::ContactPatch;
+pub use messenger_contacts::{ContactView, ProfileInput, ProfileView};
 pub use messenger_identity::{CreatedIdentity, Identity};
 pub use relays::{ManifestInfo, RelayService, RelayView};
 
@@ -64,6 +67,9 @@ pub struct MessengerRuntime {
     secrets: Arc<dyn SecretStore>,
     identity: IdentityService,
     relays: RelayService,
+    profiles: ProfileService,
+    contacts: ContactService,
+    nip05: Nip05Service,
     outbox: Outbox,
     dispatcher: Arc<Dispatcher>,
     ui: broadcast::Sender<UiEvent>,
@@ -77,10 +83,13 @@ impl MessengerRuntime {
         let signer = load_signer(&identity).await;
         let relays = RelayService::init(store.clone(), signer.clone()).await?;
         let outbox = Outbox::new(store.clone(), Arc::new(SystemClock));
+        let profiles = ProfileService::new(store.clone());
+        let contacts = ContactService::new(store.clone(), profiles.clone());
+        let nip05 = Nip05Service::new(Arc::new(ReqwestFetcher::new()));
         let dispatcher = Arc::new(
             Dispatcher::new()
                 .with_dm(Arc::new(DebugDmHandler))
-                .with_meta(Arc::new(DebugMetaHandler)),
+                .with_meta(Arc::new(MetaHandler::new(profiles.clone(), contacts.clone()))),
         );
         let (ui, _) = broadcast::channel(256);
         let rt = Self {
@@ -89,6 +98,9 @@ impl MessengerRuntime {
             secrets,
             identity,
             relays,
+            profiles,
+            contacts,
+            nip05,
             outbox,
             dispatcher,
             ui,
@@ -124,6 +136,18 @@ impl MessengerRuntime {
         &self.outbox
     }
 
+    pub fn profiles(&self) -> &ProfileService {
+        &self.profiles
+    }
+
+    pub fn contacts(&self) -> &ContactService {
+        &self.contacts
+    }
+
+    pub fn nip05(&self) -> &Nip05Service {
+        &self.nip05
+    }
+
     /// Subscribe to UI events (`inbound.dm`, `inbound.meta`, `ignored`,
     /// `error`, `notify`). Lagging receivers drop old events.
     pub fn ui_events(&self) -> broadcast::Receiver<UiEvent> {
@@ -151,6 +175,128 @@ impl MessengerRuntime {
         )
         .await?;
         *self.session.lock().await = Some(session);
+        self.resubscribe_meta().await?;
+        Ok(())
+    }
+
+    /// Profiles of everyone we care about (contacts + me) and my follow list.
+    async fn resubscribe_meta(&self) -> Result<()> {
+        let Some(me) = self.session_pubkey().await else { return Ok(()) };
+        let mut authors: Vec<PubKey> = self
+            .contacts
+            .list()
+            .await?
+            .into_iter()
+            .filter_map(|c| PubKey::parse(&c.pubkey))
+            .collect();
+        authors.push(me.clone());
+        let pool = self.relays.pool().await;
+        pool.send(Outbound::Subscribe {
+            id: SubId(filters::SUB_PROFILES.into()),
+            filter: filters::profiles(&authors),
+            scope: Scope::Own,
+        })
+        .await?;
+        pool.send(Outbound::Subscribe {
+            id: SubId(filters::SUB_MY_FOLLOWS.into()),
+            filter: filters::my_follows(&me),
+            scope: Scope::Own,
+        })
+        .await?;
+        Ok(())
+    }
+
+    // ─── Profiles / contacts ────────────────────────────────────────────────
+
+    /// Ask relays for one profile (answer arrives through ingress as
+    /// `profile.updated`). Cheap, idempotent per pubkey.
+    pub async fn request_profile(&self, pubkey: &PubKey) -> Result<()> {
+        let pool = self.relays.pool().await;
+        pool.send(Outbound::Subscribe {
+            id: SubId(format!("profile-{}", pubkey.short())),
+            filter: filters::profile_of(pubkey),
+            scope: Scope::Own,
+        })
+        .await?;
+        Ok(())
+    }
+
+    pub async fn my_profile(&self) -> Result<Option<ProfileView>> {
+        match self.session_pubkey().await {
+            Some(me) => self.profiles.get(&me).await,
+            None => Ok(None),
+        }
+    }
+
+    /// Sign and publish our kind 0; the cache is updated immediately.
+    pub async fn publish_own_profile(&self, input: &ProfileInput) -> Result<ProfileView> {
+        let keys = self.session_keys().await?;
+        let event = self.profiles.build_own(&keys, input).await?;
+        self.enqueue_and_pump(Outbound::PublishOwn { event }).await?;
+        let me = PubKey::parse(&keys.public_key().to_hex()).expect("valid pubkey");
+        self.profiles.get(&me).await?.ok_or_else(|| MessengerError::Storage("own profile missing after publish".into()))
+    }
+
+    /// Sign and publish our kind 3 from `msg_follows`.
+    pub async fn publish_follow_list(&self) -> Result<()> {
+        let keys = self.session_keys().await?;
+        let event = self.contacts.build_follow_list(&keys).await?;
+        self.enqueue_and_pump(Outbound::PublishOwn { event }).await
+    }
+
+    /// Add a contact (hex/npub or NIP-05), fetch its profile, resubscribe.
+    pub async fn contact_add(&self, key_or_nip05: &str, nickname: Option<&str>) -> Result<ContactView> {
+        let me = self.session_pubkey().await.ok_or(MessengerError::NotLoggedIn)?;
+        let input = key_or_nip05.trim();
+        let key = if input.contains('@') || (!input.starts_with("npub1") && input.len() != 64 && input.contains('.')) {
+            self.nip05.resolve(input).await?.as_hex().to_string()
+        } else {
+            input.to_string()
+        };
+        let view = self.contacts.add(&me, &key, nickname).await?;
+        if let Some(pk) = PubKey::parse(&view.pubkey) {
+            let _ = self.request_profile(&pk).await;
+        }
+        let _ = self.resubscribe_meta().await;
+        Ok(view)
+    }
+
+    pub async fn contact_update(&self, pubkey: &PubKey, patch: &ContactPatch) -> Result<ContactView> {
+        self.contacts.update(pubkey, patch).await
+    }
+
+    pub async fn contact_remove(&self, pubkey: &PubKey) -> Result<()> {
+        self.contacts.remove(pubkey).await
+    }
+
+    /// Follow/unfollow and republish kind 3.
+    pub async fn contact_set_followed(&self, pubkey: &PubKey, followed: bool) -> Result<()> {
+        self.contacts.set_followed(pubkey, followed).await?;
+        self.publish_follow_list().await
+    }
+
+    /// Check the profile's NIP-05 claim and record the result.
+    pub async fn verify_nip05(&self, pubkey: &PubKey) -> Result<bool> {
+        let Some(profile) = self.profiles.get(pubkey).await? else {
+            return Err(MessengerError::Invalid("profile unknown".into()));
+        };
+        let Some(nip05) = profile.nip05 else {
+            return Err(MessengerError::Invalid("profile has no NIP-05".into()));
+        };
+        let ok = self.nip05.verify(&nip05, pubkey).await?;
+        let now = messenger_core::traits::SystemClock.now().secs();
+        self.profiles.set_nip05_verified(pubkey, if ok { Some(now) } else { None }).await?;
+        Ok(ok)
+    }
+
+    async fn session_keys(&self) -> Result<Keys> {
+        self.session.lock().await.as_ref().map(|s| s.keys.clone()).ok_or(MessengerError::NotLoggedIn)
+    }
+
+    async fn enqueue_and_pump(&self, out: Outbound) -> Result<()> {
+        self.outbox.enqueue(out).await?;
+        let pool = self.relays.pool().await;
+        self.outbox.pump(pool.as_ref()).await?;
         Ok(())
     }
 
@@ -305,6 +451,8 @@ mod tests {
         let cfg = MessengerConfig::new(dir.path().join("messenger"));
         let secrets = Arc::new(MemorySecretStore::unlocked());
         let rt = MessengerRuntime::start(cfg, secrets.clone()).await.unwrap();
+        // Keep the test offline: sends fail fast instead of waiting for relays.
+        rt.relays().set_silent(true).await.unwrap();
         assert!(!rt.refresh_signer().await.unwrap(), "nothing to do without identity");
         assert!(matches!(rt.send_text_dm(&"ab".repeat(32), "x").await, Err(MessengerError::NotLoggedIn)));
 
@@ -320,6 +468,18 @@ mod tests {
         let id = rt.send_text_dm(&peer, "hello").await.unwrap();
         assert!(!id.is_empty());
         assert!(rt.send_text_dm("not a key", "x").await.is_err());
+
+        // Contacts and own profile round-trip through the runtime.
+        let bob = Keys::generate();
+        let c = rt.contact_add(&bob.public_key().to_hex(), Some("Bob")).await.unwrap();
+        assert_eq!(c.nickname.as_deref(), Some("Bob"));
+        assert!(rt.contact_add(created.identity.pubkey.as_hex(), None).await.is_err(), "no self-contact");
+        let me = rt.publish_own_profile(&ProfileInput { name: Some("alice".into()), ..Default::default() }).await.unwrap();
+        assert_eq!(me.name.as_deref(), Some("alice"));
+        assert_eq!(rt.my_profile().await.unwrap().unwrap().pubkey, created.identity.pubkey.as_hex());
+        rt.contact_set_followed(&PubKey::parse(&bob.public_key().to_hex()).unwrap(), true).await.unwrap();
+        assert!(rt.contacts().list().await.unwrap()[0].followed);
+        assert!(rt.verify_nip05(&PubKey::parse(&bob.public_key().to_hex()).unwrap()).await.is_err(), "no profile yet");
 
         secrets.set_unlocked(false);
         assert!(rt.refresh_signer().await.unwrap(), "locked secrets stop the session");
