@@ -460,6 +460,20 @@ fn run_mobile() {
             commands::messenger::messenger_identity_export,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_identity_delete,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_list,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_add,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_remove,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_set_enabled,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_set_silent,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_manifest_info,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_manifest_set_region,
         ])
         .run(tauri::generate_context!())
         .expect("error while running veydan");
@@ -917,6 +931,20 @@ fn run_desktop() {
             commands::messenger::messenger_identity_export,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_identity_delete,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_list,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_add,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_remove,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_set_enabled,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_relays_set_silent,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_manifest_info,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_manifest_set_region,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
