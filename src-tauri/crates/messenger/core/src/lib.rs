@@ -17,6 +17,7 @@
 //! never sees message types.
 
 pub mod config;
+pub mod envelope;
 pub mod error;
 pub mod inbound;
 pub mod outbound;
@@ -24,6 +25,7 @@ pub mod traits;
 pub mod types;
 
 pub use config::MessengerConfig;
+pub use envelope::Envelope;
 pub use error::{MessengerError, Result};
 pub use inbound::{ChannelInbound, DmInbound, GroupInbound, Inbound, MetaInbound};
 pub use outbound::{Outbound, Scope};
