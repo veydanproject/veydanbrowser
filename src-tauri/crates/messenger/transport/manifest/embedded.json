@@ -1,13 +1,20 @@
 {
   "format": "veydan-messenger-manifest",
   "v": 1,
-  "serial": 1,
-  "issued_at": 1759017600,
+  "serial": 2,
+  "issued_at": 1759100000,
   "regions": ["default", "ru"],
   "relays": [
-    { "id": "pub-damus", "url": "wss://relay.damus.io", "regions": ["default"], "read": true, "write": true },
-    { "id": "pub-nos", "url": "wss://nos.lol", "regions": ["default"], "read": true, "write": true },
-    { "id": "pub-primal", "url": "wss://relay.primal.net", "regions": ["default"], "read": true, "write": true }
+    {
+      "id": "veydan-node-1",
+      "url": "wss://node-1.veydan.net",
+      "regions": ["default", "ru"],
+      "read": true,
+      "write": true,
+      "auth": { "type": "api_key", "key": "d0f9c18a09ab2547f5c9aaddc5dfec3b6c4a0d63675e8f8d903751be92475f15" }
+    },
+    { "id": "pub-damus", "url": "wss://relay.damus.io", "regions": ["*"], "read": true, "write": true },
+    { "id": "pub-nos", "url": "wss://nos.lol", "regions": ["*"], "read": true, "write": true }
   ],
   "media": [],
   "sources": []

@@ -74,6 +74,26 @@ pub struct ManifestRelay {
 pub enum ManifestAuth {
     /// NIP-42 challenge/response with the user's key.
     Nip42,
+    /// Static key gate in front of the relay: sent as `?key=` on the
+    /// WebSocket URL. It is shipped with the manifest, so it protects the
+    /// relay from the open internet, not from app users.
+    ApiKey { key: String },
+}
+
+impl ManifestAuth {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::Nip42 => "nip42",
+            Self::ApiKey { .. } => "api_key",
+        }
+    }
+
+    pub fn secret(&self) -> Option<&str> {
+        match self {
+            Self::ApiKey { key } => Some(key),
+            Self::Nip42 => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +193,11 @@ impl Manifest {
             }
             if RelayUrl::parse(&r.url).is_none() {
                 return Err(MessengerError::Invalid(format!("relay '{}' has an invalid url '{}'", r.id, r.url)));
+            }
+            if let Some(ManifestAuth::ApiKey { key }) = &r.auth {
+                if key.trim().is_empty() || key.chars().any(|c| c.is_whitespace() || c == '&' || c == '#') {
+                    return Err(MessengerError::Invalid(format!("relay '{}' has an invalid api key", r.id)));
+                }
             }
         }
         let mut media_ids = BTreeSet::new();
@@ -293,7 +318,8 @@ mod tests {
     #[test]
     fn embedded_manifest_parses() {
         let m = Manifest::parse_content(EMBEDDED_MANIFEST_JSON).unwrap();
-        assert_eq!(m.serial, 1);
+        assert_eq!(m.serial, 2);
+        assert!(m.relays.iter().any(|r| matches!(r.auth, Some(ManifestAuth::ApiKey { .. }))), "project relay is gated");
         assert!(!m.relays_for_region("default").is_empty());
         assert_eq!(m.relays_for_region("ru").len(), m.relays_for_region("default").len(), "ru falls back to default");
     }

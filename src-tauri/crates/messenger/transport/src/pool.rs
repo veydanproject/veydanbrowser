@@ -26,6 +26,18 @@ pub struct RelayConfig {
     pub url: RelayUrl,
     pub read: bool,
     pub write: bool,
+    /// Static gate key sent as `?key=` on the connect URL. Never logged.
+    pub api_key: Option<String>,
+}
+
+impl RelayConfig {
+    /// The URL handed to the WebSocket layer: base url plus the key query.
+    pub fn connect_url(&self) -> String {
+        match &self.api_key {
+            Some(k) if !k.is_empty() => format!("{}/?key={}", self.url.as_str(), k),
+            _ => self.url.as_str().to_string(),
+        }
+    }
 }
 
 pub struct RelayPool {
@@ -87,13 +99,13 @@ impl RelayPool {
         let wanted: HashSet<String> = relays.iter().map(|r| r.url.as_str().to_string()).collect();
         let current = self.client.relays().await;
         for (url, _) in current {
-            if !wanted.contains(url.as_str_without_trailing_slash()) {
+            if !wanted.contains(to_core_url(&url).as_str()) {
                 let _ = self.client.remove_relay(url.clone()).await;
             }
         }
         for r in &relays {
             self.client
-                .add_relay(r.url.as_str())
+                .add_relay(r.connect_url())
                 .await
                 .map_err(|e| MessengerError::Transport(e.to_string()))?;
         }
@@ -157,8 +169,12 @@ impl RelayPool {
     }
 }
 
+/// Core relay identity is the base url: the `?key=` query used for gated
+/// relays is stripped so keys never travel into status, events or logs.
 fn to_core_url(u: &nostr::types::url::RelayUrl) -> RelayUrl {
-    RelayUrl::parse(u.as_str_without_trailing_slash())
+    let s = u.as_str_without_trailing_slash();
+    let base = s.split('?').next().unwrap_or(s);
+    RelayUrl::parse(base)
         .unwrap_or_else(|| RelayUrl::parse("wss://invalid.invalid").expect("static url"))
 }
 
@@ -285,14 +301,14 @@ mod tests {
         let alice = Keys::generate();
         let sender = RelayPool::new(Some(alice.clone()));
         sender
-            .set_relays(vec![RelayConfig { url: url.clone(), read: true, write: true }])
+            .set_relays(vec![RelayConfig { url: url.clone(), read: true, write: true, api_key: None }])
             .await
             .unwrap();
 
         let receiver = RelayPool::new(None);
         let mut inbox = receiver.events();
         receiver
-            .set_relays(vec![RelayConfig { url: url.clone(), read: true, write: true }])
+            .set_relays(vec![RelayConfig { url: url.clone(), read: true, write: true, api_key: None }])
             .await
             .unwrap();
 
@@ -330,7 +346,7 @@ mod tests {
         let (_relay, url) = local_relay().await;
         let keys = Keys::generate();
         let pool = RelayPool::new(Some(keys.clone()));
-        pool.set_relays(vec![RelayConfig { url, read: true, write: true }]).await.unwrap();
+        pool.set_relays(vec![RelayConfig { url, read: true, write: true, api_key: None }]).await.unwrap();
         pool.set_silent(true).await;
         let err = pool.send(Outbound::PublishOwn { event: signed_note(&keys, "x") }).await.unwrap_err();
         assert!(matches!(err, MessengerError::Transport(m) if m.contains("silent")));
@@ -344,13 +360,55 @@ mod tests {
         let (_r1, u1) = local_relay().await;
         let (_r2, u2) = local_relay().await;
         let pool = RelayPool::new(None);
-        pool.set_relays(vec![RelayConfig { url: u1.clone(), read: true, write: true }]).await.unwrap();
+        pool.set_relays(vec![RelayConfig { url: u1.clone(), read: true, write: true, api_key: None }]).await.unwrap();
         assert_eq!(pool.status().await.relays.len(), 1);
-        pool.set_relays(vec![RelayConfig { url: u2.clone(), read: true, write: true }]).await.unwrap();
+        pool.set_relays(vec![RelayConfig { url: u2.clone(), read: true, write: true, api_key: None }]).await.unwrap();
         let st = pool.status().await;
         assert_eq!(st.relays.len(), 1);
         assert_eq!(st.relays[0].url, u2);
         pool.shutdown().await;
+    }
+
+    /// Real-network check against the project test relay. Run by hand:
+    /// `source dev-server.env && cargo test -p messenger-transport -- --ignored e2e`
+    #[tokio::test]
+    #[ignore]
+    async fn e2e_connects_to_gated_project_relay() {
+        let url = std::env::var("MESSENGER_DEV_RELAY_URL").expect("MESSENGER_DEV_RELAY_URL");
+        let key = std::env::var("MESSENGER_DEV_RELAY_API_KEY").expect("MESSENGER_DEV_RELAY_API_KEY");
+        let keys = Keys::generate();
+        let pool = RelayPool::new(Some(keys.clone()));
+        pool.set_relays(vec![RelayConfig {
+            url: RelayUrl::parse(&url).unwrap(),
+            read: true,
+            write: true,
+            api_key: Some(key),
+        }])
+        .await
+        .unwrap();
+        let mut connected = false;
+        for _ in 0..100 {
+            if pool.status().await.relays.iter().any(|r| r.state == RelayState::Connected) {
+                connected = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(connected, "relay never reached Connected: {:?}", pool.status().await);
+        let ack = pool.send(Outbound::PublishOwn { event: signed_note(&keys, "veydan e2e ping") }).await.unwrap();
+        assert!(ack.is_delivered(), "relay rejected the note: {ack:?}");
+        pool.shutdown().await;
+    }
+
+    #[test]
+    fn connect_url_carries_key_and_core_url_strips_it() {
+        let url = RelayUrl::parse("wss://gated.example").unwrap();
+        let plain = RelayConfig { url: url.clone(), read: true, write: true, api_key: None };
+        assert_eq!(plain.connect_url(), "wss://gated.example");
+        let gated = RelayConfig { url, read: true, write: true, api_key: Some("abc123".into()) };
+        assert_eq!(gated.connect_url(), "wss://gated.example/?key=abc123");
+        let parsed = nostr::types::url::RelayUrl::parse(&gated.connect_url()).unwrap();
+        assert_eq!(to_core_url(&parsed).as_str(), "wss://gated.example");
     }
 
     #[test]
