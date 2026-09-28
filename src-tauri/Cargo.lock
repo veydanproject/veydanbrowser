@@ -3643,11 +3643,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "messenger-ingress"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "messenger-core",
+ "messenger-identity",
+ "messenger-store",
+ "nostr",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "messenger-runtime"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "messenger-core",
  "messenger-identity",
+ "messenger-ingress",
  "messenger-store",
  "messenger-transport",
  "nostr",
@@ -7712,7 +7728,7 @@ dependencies = [
 
 [[package]]
 name = "veydanspace"
-version = "4.0.1-alpha.2"
+version = "4.0.1-alpha.3"
 dependencies = [
  "age",
  "anyhow",

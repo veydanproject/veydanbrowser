@@ -474,6 +474,8 @@ fn run_mobile() {
             commands::messenger::messenger_manifest_info,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_manifest_set_region,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_send_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running veydan");
@@ -945,6 +947,8 @@ fn run_desktop() {
             commands::messenger::messenger_manifest_info,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_manifest_set_region,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_send_text,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
