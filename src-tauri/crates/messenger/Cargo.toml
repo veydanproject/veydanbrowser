@@ -9,7 +9,7 @@
 
 [workspace]
 resolver = "2"
-members = ["core", "store", "identity", "transport", "runtime", "testkit"]
+members = ["core", "store", "identity", "transport", "ingress", "runtime", "testkit"]
 
 [workspace.package]
 version = "0.1.0"
@@ -35,5 +35,6 @@ messenger-core = { path = "core" }
 messenger-store = { path = "store" }
 messenger-identity = { path = "identity" }
 messenger-transport = { path = "transport" }
+messenger-ingress = { path = "ingress" }
 messenger-runtime = { path = "runtime" }
 messenger-testkit = { path = "testkit" }

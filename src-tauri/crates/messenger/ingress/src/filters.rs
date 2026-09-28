@@ -1,0 +1,53 @@
+// SPDX-FileCopyrightText: 2026 Veydan Project
+// SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
+
+//! Relay filters the runtime subscribes with. Kept as JSON (`core::Filter`)
+//! so handlers and tests can inspect them without a protocol crate.
+
+use messenger_core::outbound::Filter;
+use messenger_core::{PubKey, Timestamp};
+
+/// Gift wraps carry a `created_at` tweaked randomly up to two days into the
+/// past (NIP-59, `nostr` uses the full 0..2d range), so a live subscription
+/// must start two days before "now" or it misses wraps created moments ago.
+/// Replays are harmless: `msg_events_raw` dedups them.
+pub const DM_LIVE_MARGIN_SECS: i64 = 2 * 24 * 3600 + 600;
+
+pub const SUB_DM_LIVE: &str = "dm-live";
+
+/// Live inbox: every gift wrap addressed to me since `since`.
+pub fn dm_inbox(me: &PubKey, since: Timestamp) -> Filter {
+    Filter(serde_json::json!({
+        "kinds": [1059],
+        "#p": [me.as_hex()],
+        "since": since.secs(),
+    }))
+}
+
+/// History window for reconciliation or catch-up.
+pub fn dm_inbox_window(me: &PubKey, since: Timestamp, until: Timestamp, limit: usize) -> Filter {
+    Filter(serde_json::json!({
+        "kinds": [1059],
+        "#p": [me.as_hex()],
+        "since": since.secs(),
+        "until": until.secs(),
+        "limit": limit,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dm_filters_target_gift_wraps_for_me() {
+        let me = PubKey::parse(&"ab".repeat(32)).unwrap();
+        let f = dm_inbox(&me, Timestamp(100));
+        assert_eq!(f.0["kinds"], serde_json::json!([1059]));
+        assert_eq!(f.0["#p"][0], me.as_hex());
+        assert_eq!(f.0["since"], 100);
+        let w = dm_inbox_window(&me, Timestamp(1), Timestamp(2), 50);
+        assert_eq!(w.0["until"], 2);
+        assert_eq!(w.0["limit"], 50);
+    }
+}
