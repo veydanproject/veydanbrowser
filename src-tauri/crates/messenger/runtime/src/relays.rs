@@ -32,6 +32,8 @@ pub struct RelayView {
     pub read: bool,
     pub write: bool,
     pub enabled: bool,
+    /// `nip42` | `api_key` | none. The key itself is never exposed.
+    pub auth_type: Option<String>,
     pub state: RelayState,
 }
 
@@ -55,9 +57,11 @@ impl RelayService {
     /// a fresh database, loads rows and connects (unless silent).
     pub async fn init(store: Store, signer: Option<Keys>) -> Result<Self> {
         let svc = Self { store, pool: RwLock::new(Arc::new(RelayPool::new(signer))) };
-        if svc.manifest_serial().await?.is_none() {
-            let m = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
-            svc.apply_manifest(&m, false).await?;
+        // A newer embedded manifest (app update) is applied on top of whatever
+        // was applied before; anti-rollback keeps a remotely applied newer one.
+        let embedded = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
+        if embedded.passes_anti_rollback(svc.manifest_serial().await?) {
+            svc.apply_manifest(&embedded, false).await?;
         }
         if svc.is_silent().await? {
             svc.pool.read().await.set_silent(true).await;
@@ -143,7 +147,8 @@ impl RelayService {
                     read: r.read,
                     write: r.write,
                     enabled: true,
-                    auth_type: r.auth.as_ref().map(|_| "nip42".to_string()),
+                    auth_type: r.auth.as_ref().map(|a| a.type_name().to_string()),
+                    auth_secret: r.auth.as_ref().and_then(|a| a.secret().map(String::from)),
                 },
                 false,
             )
@@ -189,6 +194,7 @@ impl RelayService {
                     read: r.read,
                     write: r.write,
                     enabled: r.enabled,
+                    auth_type: r.auth_type,
                     state,
                 }
             })
@@ -211,6 +217,7 @@ impl RelayService {
                 write: true,
                 enabled: true,
                 auth_type: None,
+                auth_secret: None,
             },
             true,
         )
@@ -259,7 +266,7 @@ impl RelayService {
             .await?
             .into_iter()
             .filter(|r| r.enabled)
-            .filter_map(|r| Some(RelayConfig { url: RelayUrl::parse(&r.url)?, read: r.read, write: r.write }))
+            .filter_map(|r| Some(RelayConfig { url: RelayUrl::parse(&r.url)?, read: r.read, write: r.write, api_key: r.auth_secret }))
             .collect();
         self.pool.read().await.set_relays(relays).await
     }
@@ -309,16 +316,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn init_applies_embedded_manifest_once() {
+    async fn init_applies_embedded_manifest_once_and_upgrades_older_installs() {
         let store = Store::open_in_memory().await.unwrap();
         let svc = RelayService::init(store.clone(), None).await.unwrap();
-        assert_eq!(svc.manifest_serial().await.unwrap(), Some(1));
+        assert_eq!(svc.manifest_serial().await.unwrap(), Some(2));
         let n = svc.list().await.unwrap().len();
         assert!(n >= 1);
-        let again = RelayService::init(store, None).await.unwrap();
+        let again = RelayService::init(store.clone(), None).await.unwrap();
         assert_eq!(again.list().await.unwrap().len(), n, "second init does not duplicate rows");
         svc.shutdown().await;
         again.shutdown().await;
+
+        // An install that applied an older manifest gets the embedded one on start.
+        settings::set(&store, KEY_SERIAL, "1").await.unwrap();
+        let upgraded = RelayService::init(store.clone(), None).await.unwrap();
+        assert_eq!(upgraded.manifest_serial().await.unwrap(), Some(2));
+        upgraded.shutdown().await;
+
+        // A newer (remotely applied) manifest is not rolled back by the embedded one.
+        settings::set(&store, KEY_SERIAL, "99").await.unwrap();
+        let kept = RelayService::init(store, None).await.unwrap();
+        assert_eq!(kept.manifest_serial().await.unwrap(), Some(99));
+        kept.shutdown().await;
     }
 
     #[tokio::test]

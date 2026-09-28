@@ -158,7 +158,7 @@ mod tests {
         assert!(st.secrets_unlocked);
         assert!(!st.identity_present);
         assert!(!st.signer_loaded);
-        assert_eq!(st.manifest_serial, Some(1));
+        assert_eq!(st.manifest_serial, Some(2));
         assert!(st.relays_total >= 1);
         assert!(cfg.db_path().exists());
 
