@@ -120,6 +120,30 @@ impl Dispatcher {
     }
 }
 
+/// Runs several handlers of one family in order and concatenates their
+/// effects. Lets independent crates each own a slice of a family (contacts
+/// own profiles, DM owns inbox relay lists) without knowing each other.
+pub struct Fanout<I> {
+    handlers: Vec<Arc<dyn Handler<I>>>,
+}
+
+impl<I> Fanout<I> {
+    pub fn new(handlers: Vec<Arc<dyn Handler<I>>>) -> Self {
+        Self { handlers }
+    }
+}
+
+#[async_trait]
+impl<I: Clone + Send + Sync + 'static> Handler<I> for Fanout<I> {
+    async fn handle(&self, msg: I, ctx: &Context) -> Result<Vec<Effect>> {
+        let mut all = Vec::new();
+        for h in &self.handlers {
+            all.extend(h.handle(msg.clone(), ctx).await?);
+        }
+        Ok(all)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

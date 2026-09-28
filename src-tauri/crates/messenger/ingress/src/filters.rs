@@ -56,6 +56,31 @@ pub fn my_follows(me: &PubKey) -> Filter {
     Filter(serde_json::json!({ "kinds": [3], "authors": [me.as_hex()], "limit": 1 }))
 }
 
+pub const SUB_DM_RELAYS: &str = "dm-relays";
+/// Scope name of the DM history cursor in `msg_sync_cursors`.
+pub const CURSOR_DM_INBOX: &str = "dm-inbox";
+/// Upper bound of one history catch-up request.
+pub const DM_HISTORY_LIMIT: usize = 2000;
+
+/// Inbox relay lists (kind 10050) of the given authors.
+pub fn dm_relays(authors: &[PubKey]) -> Filter {
+    Filter(serde_json::json!({
+        "kinds": [10050],
+        "authors": authors.iter().map(|p| p.as_hex()).collect::<Vec<_>>(),
+    }))
+}
+
+/// History catch-up: gift wraps for me since `since` (wire time), newest
+/// `DM_HISTORY_LIMIT` at most. Used by `Outbound::Sync`.
+pub fn dm_history(me: &PubKey, since: Timestamp) -> Filter {
+    Filter(serde_json::json!({
+        "kinds": [1059],
+        "#p": [me.as_hex()],
+        "since": since.secs().max(0),
+        "limit": DM_HISTORY_LIMIT,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

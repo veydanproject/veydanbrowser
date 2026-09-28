@@ -25,6 +25,6 @@ pub mod outbox;
 pub mod r#loop;
 
 pub use classify::classify;
-pub use dispatch::{Dispatcher, EffectSink};
+pub use dispatch::{Dispatcher, EffectSink, Fanout};
 pub use outbox::Outbox;
 pub use r#loop::{IngressLoop, IngressStats};

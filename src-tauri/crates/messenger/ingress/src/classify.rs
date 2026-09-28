@@ -16,6 +16,7 @@ pub const KIND_GROUP_MESSAGE: u16 = 9;
 pub const KIND_DM_RUMOR: u16 = 14;
 pub const KIND_GIFT_WRAP: u16 = 1059;
 pub const KIND_RELAY_LIST: u16 = 10002;
+pub const KIND_DM_RELAYS: u16 = 10050;
 pub const CHANNEL_KINDS: &[u16] = &[40, 41, 42, 43, 44, 1111];
 
 /// Classify one event. `keys` is the local identity; without it gift wraps
@@ -60,6 +61,16 @@ pub fn classify(raw: &RawEvent, keys: Option<&Keys>) -> Inbound {
                     let s = t.as_slice();
                     Some((s.get(1)?.clone(), s.get(2).cloned()))
                 })
+                .collect(),
+        }),
+        KIND_DM_RELAYS => Inbound::Meta(MetaInbound::DmRelays {
+            author: pk(&event.pubkey),
+            created_at: ts(event.created_at),
+            relays: event
+                .tags
+                .iter()
+                .filter(|t| t.kind() == "relay")
+                .filter_map(|t| t.as_slice().get(1).cloned())
                 .collect(),
         }),
         k if CHANNEL_KINDS.contains(&k) => Inbound::Channel(ChannelInbound { envelope, kind: k }),
