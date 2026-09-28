@@ -10,10 +10,12 @@
 //! Repositories are plain functions over the pool, grouped per module
 //! (`settings`, later `identity`, `relays`, `messages`, …).
 
+pub mod contacts;
 pub mod cursors;
 pub mod events_raw;
 pub mod identity;
 pub mod outbox;
+pub mod profiles;
 pub mod relays;
 pub mod settings;
 
