@@ -31,6 +31,7 @@
   import HotkeySettings from '$lib/components/desktop/HotkeySettings.svelte';
   import SettingsNav, { type SettingsNavGroup } from '$lib/components/desktop/SettingsNav.svelte';
   import { formatCommand, keybindingOverrides } from '$lib/keybindings';
+  import { messengerStore } from '$lib/messenger/store.svelte';
 
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -62,6 +63,10 @@
         { id: 'backup', label: $t('settings_backup_section') },
         { id: 'sync', label: $t('settings_sync_section') },
       ],
+    },
+    {
+      label: $t('msg_settings_group'),
+      items: [{ id: 'messenger', label: $t('msg_settings_section') }],
     },
     {
       label: $t('settings_group_about'),
@@ -1042,6 +1047,27 @@
   </div>
 
   <!-- App updates -->
+  <!-- Messenger (4.0.1-alpha): the only host UI that knows about the module besides the nav entry -->
+  <div class="card" id="messenger">
+    <div class="card-title">{$t('msg_settings_section')}</div>
+    <div class="dev-tools-row">
+      <div class="dev-tools-info">
+        <span>{$t('msg_settings_enable')}</span>
+        <span class="muted">
+          {messengerStore.compiled ? $t('msg_settings_enable_hint') : $t('msg_settings_not_compiled')}
+        </span>
+      </div>
+      <button
+        class="toggle"
+        class:on={messengerStore.status?.enabled ?? false}
+        disabled={!isTauri || !messengerStore.compiled}
+        onclick={() => messengerStore.setEnabled(!(messengerStore.status?.enabled ?? false)).catch(() => {})}
+        aria-pressed={messengerStore.status?.enabled ?? false}
+        aria-label={$t('msg_settings_enable')}
+      ></button>
+    </div>
+  </div>
+
   <div class="card" id="updates">
     <div class="card-title">{$t('settings_update_section')}</div>
 

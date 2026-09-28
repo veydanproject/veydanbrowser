@@ -35,6 +35,7 @@
   import type { Window } from '@tauri-apps/api/window';
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { syncStore } from '$lib/store/sync.svelte';
+  import { messengerStore } from '$lib/messenger/store.svelte';
   import UIInspector from '$lib/inspector/UIInspector.svelte';
   import { inspectorApp } from '$lib/inspector/inspector.svelte';
   import { matches, stockHistoryChord } from '$lib/keybindings';
@@ -212,6 +213,7 @@
       passwordStore.ensureLoaded();
       void notesLock.listen();
       sshStore.ensureLoaded();
+      messengerStore.ensureLoaded().catch(() => {});
       refreshRunning();
       window.addEventListener('focus', refreshRunning);
     }
@@ -348,6 +350,12 @@
           <Icon name="file-text" size={14} />
           {$t('nav_notes')}
         </a>
+        {#if messengerStore.visible}
+          <a href="/messenger" class="nav-link" class:active={isActive('/messenger')}>
+            <Icon name="message-circle" size={14} />
+            {$t('nav_messenger')}
+          </a>
+        {/if}
       </nav>
 
       <div class="topbar-right">

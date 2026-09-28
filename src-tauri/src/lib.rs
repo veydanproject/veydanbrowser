@@ -159,6 +159,9 @@ pub struct AppState {
     pub notes_save: Arc<tokio::sync::Mutex<()>>,
     pub vault: vault::VaultState,
     pub sync: Arc<SyncManager>,
+    /// Messenger module (4.0.1-alpha); see src/commands/messenger/mod.rs.
+    #[cfg(feature = "messenger")]
+    pub messenger: commands::messenger::MessengerState,
     #[cfg(desktop)]
     pub browser: Arc<BrowserState>,
     #[cfg(desktop)]
@@ -302,6 +305,9 @@ fn run_mobile() {
                 }
             }
 
+            #[cfg(feature = "messenger")]
+            let messenger = commands::messenger::MessengerState::start(&data_dir, db.clone());
+
             app.manage(AppState {
                 db,
                 app_data_dir: data_dir.clone(),
@@ -311,6 +317,8 @@ fn run_mobile() {
                 notes_save: Arc::new(tokio::sync::Mutex::new(())),
                 vault: vault::VaultState::default(),
                 sync: Arc::new(SyncManager::default()),
+                #[cfg(feature = "messenger")]
+                messenger,
             });
 
             {
@@ -437,6 +445,11 @@ fn run_mobile() {
             notes_attachment_policy_get,
             notes_attachment_policy_set,
             sync_attachment_cancel,
+            // Messenger (4.0.1-alpha, feature-gated)
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_status,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_set_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running veydan");
@@ -485,6 +498,9 @@ pub fn init_desktop(app: &tauri::AppHandle, data_dir: PathBuf) -> tauri::Result<
         );
     });
 
+    #[cfg(feature = "messenger")]
+    let messenger = commands::messenger::MessengerState::start(&data_dir, db.clone());
+
     app.manage(AppState {
         db,
         app_data_dir: data_dir.clone(),
@@ -494,6 +510,8 @@ pub fn init_desktop(app: &tauri::AppHandle, data_dir: PathBuf) -> tauri::Result<
         notes_save: Arc::new(tokio::sync::Mutex::new(())),
         vault: vault::VaultState::default(),
         sync: Arc::new(SyncManager::default()),
+        #[cfg(feature = "messenger")]
+        messenger,
         browser: Arc::new(BrowserState::default()),
         download: DownloadManager::default(),
         ssh_sessions: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
@@ -874,6 +892,11 @@ fn run_desktop() {
             fs_rename,
             fs_delete,
             fs_chmod,
+            // Messenger (4.0.1-alpha, feature-gated)
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_status,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_set_enabled,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

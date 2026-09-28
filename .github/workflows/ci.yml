@@ -32,6 +32,29 @@ jobs:
       - name: Unit tests (vitest)
         run: pnpm test
 
+      # Messenger UI must stay extractable: no imports of host modules.
+      - name: Messenger boundaries
+        run: bash scripts/messenger-boundaries.sh
+
+  # Messenger crates are Tauri-free and test without the app or system libs.
+  # This job also proves the module builds from a clean checkout on its own
+  # (docs/messenger-spec.md §4.6).
+  messenger:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri/crates/messenger
+          key: messenger
+      - name: Tests (messenger workspace)
+        run: cargo test --workspace --all-targets --manifest-path src-tauri/crates/messenger/Cargo.toml
+      - name: Clippy (messenger workspace, blocking)
+        run: cargo clippy --workspace --all-targets --manifest-path src-tauri/crates/messenger/Cargo.toml -- -D warnings
+
   rust:
     runs-on: ubuntu-22.04
     steps:
@@ -63,8 +86,14 @@ jobs:
 
       # --all-targets so examples/ are compiled too. They construct backend
       # structs directly, which makes them the first thing a field change breaks.
+      # Default features only: this is the "main app unchanged" gate — the
+      # messenger module must not be compiled in here.
       - name: Tests (app)
         run: cargo test --all-targets --manifest-path src-tauri/Cargo.toml
+
+      # Same tree with the messenger adapter compiled in.
+      - name: Tests (app + messenger feature)
+        run: cargo test --all-targets --manifest-path src-tauri/Cargo.toml --features messenger
 
       # veydan-sync is a path dependency, not a workspace member, so its own
       # tests/ directory is invisible to the command above.

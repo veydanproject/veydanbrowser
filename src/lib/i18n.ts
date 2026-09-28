@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 import { writable, derived } from 'svelte/store';
+import { messengerTranslations } from '$lib/messenger/i18n';
 
 export type Locale = 'en' | 'ru';
 
 const translations = {
   en: {
+    // Messenger module keys (msg_*, nav_messenger) live in $lib/messenger/i18n
+    ...messengerTranslations.en,
     // Nav
     nav_workspaces: 'Workspaces',
     nav_profiles: 'Profiles',
@@ -1343,6 +1346,7 @@ const translations = {
   },
 
   ru: {
+    ...messengerTranslations.ru,
     // Nav
     nav_workspaces: 'Воркспейсы',
     nav_profiles: 'Профили',

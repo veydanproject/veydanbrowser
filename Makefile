@@ -21,6 +21,17 @@ clean:
 dev:
 	@bash dev.sh
 
+# Dev build with the messenger module compiled in (4.0.1-alpha).
+dev-msg:
+	@MESSENGER=1 bash dev.sh
+
+# Messenger crates: Tauri-free workspace, testable without the app.
+msg-test:
+	@bash -c 'source build-env.sh >/dev/null && cargo test --workspace --manifest-path src-tauri/crates/messenger/Cargo.toml'
+
+msg-check:
+	@bash scripts/messenger-boundaries.sh
+
 android-dev:
 	@bash scripts/android/dev.sh
 

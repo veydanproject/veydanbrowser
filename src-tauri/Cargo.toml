@@ -1,6 +1,6 @@
 [package]
 name = "veydanspace"
-version = "3.1.9"
+version = "4.0.1-alpha.0"
 description = "Anti-detect browser & fingerprint profile manager"
 authors = ["Veydan Project"]
 edition = "2021"
@@ -43,6 +43,15 @@ chacha20poly1305 = "0.10"
 zeroize = "1"
 # E2E-encrypted sync core (folder / S3 / WebDAV); Tauri-free so mobile can reuse it.
 veydan-sync = { path = "crates/veydan-sync" }
+# Messenger module (4.0.1-alpha). Off by default: without the `messenger`
+# feature none of these crates is compiled into the binary. See
+# docs/messenger-spec.md. The adapter lives in src/commands/messenger/.
+messenger-core = { path = "crates/messenger/core", optional = true }
+messenger-runtime = { path = "crates/messenger/runtime", optional = true }
+
+[features]
+default = []
+messenger = ["dep:messenger-core", "dep:messenger-runtime"]
 
 # ── Desktop only: browser, proxies, SSH/SFTP, backup, tray, updater ──────────
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]

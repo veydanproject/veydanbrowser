@@ -3384,6 +3384,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "messenger-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "messenger-runtime"
+version = "0.1.0"
+dependencies = [
+ "messenger-core",
+ "messenger-store",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "messenger-store"
+version = "0.1.0"
+dependencies = [
+ "messenger-core",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7250,7 +7282,7 @@ dependencies = [
 
 [[package]]
 name = "veydanspace"
-version = "3.1.8"
+version = "4.0.1-alpha.0"
 dependencies = [
  "age",
  "anyhow",
@@ -7267,6 +7299,8 @@ dependencies = [
  "jni 0.21.1",
  "ksni",
  "lz4_flex",
+ "messenger-core",
+ "messenger-runtime",
  "notify",
  "percent-encoding",
  "rand 0.10.2",

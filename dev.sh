@@ -67,4 +67,8 @@ EOF
 }
 install_dev_icon || true
 
+# MESSENGER=1 compiles the messenger module in (see docs/messenger-spec.md).
+if [ "${MESSENGER:-0}" = "1" ]; then
+  exec pnpm tauri dev -- --features messenger
+fi
 exec pnpm tauri dev

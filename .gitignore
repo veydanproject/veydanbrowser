@@ -46,3 +46,4 @@ latest.json.sig
 *.db
 *.db-shm
 *.db-wal
+src-tauri/crates/messenger/target/

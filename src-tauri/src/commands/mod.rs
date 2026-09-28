@@ -9,6 +9,10 @@ pub mod password;
 pub mod passwords;
 pub mod totp;
 
+// Messenger module: compiled only with `--features messenger` (4.0.1-alpha).
+#[cfg(feature = "messenger")]
+pub mod messenger;
+
 // Desktop only: browser profiles, proxies, SSH/SFTP, backups, tray settings
 #[cfg(desktop)]
 pub mod backup;
