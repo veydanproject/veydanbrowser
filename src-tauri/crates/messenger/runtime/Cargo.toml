@@ -14,8 +14,11 @@ publish.workspace = true
 messenger-core.workspace = true
 messenger-store.workspace = true
 messenger-identity.workspace = true
+messenger-transport.workspace = true
+nostr.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["sync", "rt"] }
+serde_json.workspace = true
 
 [dev-dependencies]
 messenger-testkit.workspace = true
