@@ -476,6 +476,26 @@ fn run_mobile() {
             commands::messenger::messenger_manifest_set_region,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_profile_get,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_profile_request,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_profile_own_get,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_profile_own_set,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_nip05_verify,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_list,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_add,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_update,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_remove,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_set_followed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running veydan");
@@ -949,6 +969,26 @@ fn run_desktop() {
             commands::messenger::messenger_manifest_set_region,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_profile_get,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_profile_request,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_profile_own_get,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_profile_own_set,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_nip05_verify,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_list,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_add,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_update,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_remove,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contacts_set_followed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
