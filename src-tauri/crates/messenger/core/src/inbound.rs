@@ -92,6 +92,8 @@ pub enum MetaInbound {
     Profile { author: PubKey, created_at: Timestamp, content: String },
     Follows { author: PubKey, created_at: Timestamp, follows: Vec<PubKey> },
     RelayList { author: PubKey, created_at: Timestamp, relays: Vec<(String, Option<String>)> },
+    /// NIP-17 inbox relay list (kind 10050): where to deliver DMs to `author`.
+    DmRelays { author: PubKey, created_at: Timestamp, relays: Vec<String> },
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 //! Everything a handler wants the transport to do. The transport never
 //! inspects event content; it only routes by the variant and the scope.
 
-use crate::types::{EventId, PubKey, RelayUrl, SubId};
+use crate::types::{EventId, PubKey, RelayUrl, SubId, Timestamp};
 use serde::{Deserialize, Serialize};
 
 /// Routing scope for scoped publish/subscribe (groups, channels, servers).
@@ -31,6 +31,14 @@ pub struct WireEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Filter(pub serde_json::Value);
 
+/// One locally known event for reconciliation: Negentropy compares
+/// `(created_at, id)` pairs, so the timestamp must be the wire `created_at`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncItem {
+    pub id: EventId,
+    pub created_at: Timestamp,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Outbound {
@@ -42,6 +50,8 @@ pub enum Outbound {
     PublishScoped { scope: Scope, event: WireEvent },
     Subscribe { id: SubId, filter: Filter, scope: Scope },
     Unsubscribe { id: SubId },
-    /// Negentropy reconciliation against `local_ids`.
-    Sync { scope: Scope, filter: Filter, local_ids: Vec<EventId> },
+    /// History reconciliation: Negentropy (NIP-77) against `local` when the
+    /// relay supports it, otherwise a plain bounded REQ. Events found this
+    /// way arrive on the event stream with `EventSource::Sync`.
+    Sync { scope: Scope, filter: Filter, local: Vec<SyncItem> },
 }

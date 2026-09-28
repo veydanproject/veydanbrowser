@@ -12,8 +12,16 @@ use serde_json::{Map, Value};
 
 pub const ENVELOPE_VERSION: u32 = 1;
 
-/// Envelope types this version knows. Others are carried as `Other`.
+/// Envelope types this version knows. Unknown ones are carried as-is.
 pub const T_TEXT: &str = "text";
+/// `{"t":"edit","target":"<rumor id>","text":"…"}` — replace a message's text.
+pub const T_EDIT: &str = "edit";
+/// `{"t":"delete","target":"<rumor id>"}` — retract a message.
+pub const T_DELETE: &str = "delete";
+/// `{"t":"control","action":"…"}` — DM relationship signal (stage 5b).
+pub const T_CONTROL: &str = "control";
+/// `{"t":"media", …}` — encrypted blob reference (stage 6).
+pub const T_MEDIA: &str = "media";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
@@ -32,6 +40,18 @@ impl Envelope {
         let mut e = Self::new(T_TEXT);
         e.fields.insert("text".into(), Value::String(text.to_string()));
         e
+    }
+
+    pub fn edit(target: &str, text: &str) -> Self {
+        Self::new(T_EDIT).with("target", target).with("text", text)
+    }
+
+    pub fn delete(target: &str) -> Self {
+        Self::new(T_DELETE).with("target", target)
+    }
+
+    pub fn control(action: &str) -> Self {
+        Self::new(T_CONTROL).with("action", action)
     }
 
     pub fn with(mut self, key: &str, value: impl Into<Value>) -> Self {
@@ -84,6 +104,16 @@ mod tests {
         let back = Envelope::parse(r#"{"v":1,"t":"text","text":"hello"}"#).unwrap();
         assert_eq!(back, e);
         assert_eq!(back.as_text(), Some("hello"));
+    }
+
+    #[test]
+    fn edit_delete_control_golden_vectors() {
+        assert_eq!(Envelope::edit("ab", "new").encode(), r#"{"v":1,"t":"edit","target":"ab","text":"new"}"#);
+        assert_eq!(Envelope::delete("ab").encode(), r#"{"v":1,"t":"delete","target":"ab"}"#);
+        assert_eq!(Envelope::control("dm_accept").encode(), r#"{"v":1,"t":"control","action":"dm_accept"}"#);
+        let e = Envelope::parse(r#"{"v":1,"t":"edit","target":"ab","text":"new"}"#).unwrap();
+        assert_eq!(e.str_field("target"), Some("ab"));
+        assert!(e.as_text().is_none(), "edits are not plain text");
     }
 
     #[test]

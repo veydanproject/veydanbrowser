@@ -28,7 +28,7 @@ pub use config::MessengerConfig;
 pub use envelope::Envelope;
 pub use error::{MessengerError, Result};
 pub use inbound::{ChannelInbound, DmInbound, GroupInbound, Inbound, MetaInbound};
-pub use outbound::{Outbound, Scope};
+pub use outbound::{Outbound, Scope, SyncItem};
 pub use traits::{Ack, Clock, Context, Effect, Handler, SecretStore, Transport};
 pub use types::{EventId, EventSource, PubKey, RawEvent, RelayUrl, SubId, Timestamp};
 
