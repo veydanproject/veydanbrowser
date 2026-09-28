@@ -201,7 +201,7 @@ impl RelayService {
             .collect())
     }
 
-    pub async fn add_user(&self, url: &str) -> Result<RelayView> {
+    pub async fn add_user(&self, url: &str, api_key: Option<String>) -> Result<RelayView> {
         let parsed = RelayUrl::parse(url).ok_or_else(|| MessengerError::Invalid("relay url must be ws:// or wss:// with a host".into()))?;
         if repo::get(&self.store, parsed.as_str()).await?.is_some() {
             return Err(MessengerError::Invalid("this relay is already configured".into()));
@@ -216,8 +216,8 @@ impl RelayService {
                 read: true,
                 write: true,
                 enabled: true,
-                auth_type: None,
-                auth_secret: None,
+                auth_type: api_key.as_ref().map(|_| "api_key".to_string()),
+                auth_secret: api_key.filter(|k| !k.trim().is_empty()),
             },
             true,
         )
@@ -347,7 +347,7 @@ mod tests {
         svc.apply_manifest(&manifest(10, vec![("a", "wss://a1.example", "default"), ("b", "wss://b.example", "default")]), false)
             .await
             .unwrap();
-        svc.add_user("wss://mine.example").await.unwrap();
+        svc.add_user("wss://mine.example", None).await.unwrap();
         svc.set_enabled("wss://a1.example", false).await.unwrap();
 
         // Rollback refused, same serial refused.
@@ -380,11 +380,11 @@ mod tests {
     async fn user_relays_add_remove_and_manifest_rows_are_protected() {
         let store = Store::open_in_memory().await.unwrap();
         let svc = RelayService::init(store, None).await.unwrap();
-        assert!(svc.add_user("https://nope").await.is_err());
-        let v = svc.add_user("wss://mine.example/").await.unwrap();
+        assert!(svc.add_user("https://nope", None).await.is_err());
+        let v = svc.add_user("wss://mine.example/", Some("k1".into())).await.unwrap();
         assert_eq!(v.url, "wss://mine.example");
         assert_eq!(v.source, "user");
-        assert!(svc.add_user("wss://mine.example").await.is_err(), "duplicate");
+        assert!(svc.add_user("wss://mine.example", None).await.is_err(), "duplicate");
         let manifest_url = svc.list().await.unwrap().into_iter().find(|r| r.source == "manifest").unwrap().url;
         assert!(svc.remove_user(&manifest_url).await.is_err());
         svc.remove_user("wss://mine.example").await.unwrap();
