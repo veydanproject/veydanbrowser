@@ -22,7 +22,12 @@ use crate::{vault, AppState};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use messenger_core::{MessengerConfig, MessengerError, SecretStore};
-use messenger_runtime::{CreatedIdentity, Identity, ManifestInfo, MessengerRuntime, RelayView, RuntimeStatus};
+use messenger_core::PubKey;
+use messenger_runtime::{
+    ContactPatch, ContactView, CreatedIdentity, Identity, ManifestInfo, MessengerRuntime, ProfileView, RelayView,
+    RuntimeStatus,
+};
+use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;
@@ -345,6 +350,110 @@ pub async fn messenger_relays_add(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<RelayView> {
     state.messenger.runtime()?.relays().add_user(&url, api_key).await.map_err(map_err)
+}
+
+// ─── Profiles / contacts ────────────────────────────────────────────────────
+
+fn parse_pubkey(hex: &str) -> CmdResult<PubKey> {
+    PubKey::parse(hex).ok_or_else(|| AppError::Other("expected a 64-hex public key".into()))
+}
+
+#[derive(Deserialize)]
+pub struct ContactPatchInput {
+    /// `null` clears; missing leaves untouched.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub nickname: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub note: Option<Option<String>>,
+    #[serde(default)]
+    pub is_muted: Option<bool>,
+    #[serde(default)]
+    pub notification_level: Option<String>,
+}
+
+fn deserialize_double_option<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(d)?))
+}
+
+#[tauri::command]
+pub async fn messenger_profile_get(pubkey: String, state: tauri::State<'_, AppState>) -> CmdResult<Option<ProfileView>> {
+    state.messenger.runtime()?.profiles().get(&parse_pubkey(&pubkey)?).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_profile_request(pubkey: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.request_profile(&parse_pubkey(&pubkey)?).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_profile_own_get(state: tauri::State<'_, AppState>) -> CmdResult<Option<ProfileView>> {
+    state.messenger.runtime()?.my_profile().await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_profile_own_set(
+    input: messenger_contacts_input::ProfileInput,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<ProfileView> {
+    state.messenger.runtime()?.publish_own_profile(&input).await.map_err(map_err)
+}
+
+/// Re-export so the command signature can name the type without the adapter
+/// depending on the contacts crate directly.
+pub mod messenger_contacts_input {
+    pub use messenger_runtime::ProfileInput;
+}
+
+#[tauri::command]
+pub async fn messenger_nip05_verify(pubkey: String, state: tauri::State<'_, AppState>) -> CmdResult<bool> {
+    state.messenger.runtime()?.verify_nip05(&parse_pubkey(&pubkey)?).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_contacts_list(state: tauri::State<'_, AppState>) -> CmdResult<Vec<ContactView>> {
+    state.messenger.runtime()?.contacts().list().await.map_err(map_err)
+}
+
+/// `key` is an npub, a hex key or a NIP-05 identifier.
+#[tauri::command]
+pub async fn messenger_contacts_add(
+    key: String,
+    nickname: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<ContactView> {
+    state.messenger.runtime()?.contact_add(&key, nickname.as_deref()).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_contacts_update(
+    pubkey: String,
+    patch: ContactPatchInput,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<ContactView> {
+    let p = ContactPatch {
+        nickname: patch.nickname,
+        note: patch.note,
+        is_muted: patch.is_muted,
+        notification_level: patch.notification_level,
+    };
+    state.messenger.runtime()?.contact_update(&parse_pubkey(&pubkey)?, &p).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_contacts_remove(pubkey: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.contact_remove(&parse_pubkey(&pubkey)?).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_contacts_set_followed(
+    pubkey: String,
+    followed: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    state.messenger.runtime()?.contact_set_followed(&parse_pubkey(&pubkey)?, followed).await.map_err(map_err)
 }
 
 // ─── DM (stage 3 building block) ────────────────────────────────────────────

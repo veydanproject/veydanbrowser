@@ -6,7 +6,11 @@ import {
   RELAY_STATUS_EVENT,
   RUNTIME_EVENT,
   type IdentityImportKind,
+  type MessengerContact,
+  type MessengerContactPatch,
   type MessengerIdentity,
+  type MessengerProfile,
+  type MessengerProfileInput,
   type MessengerManifestInfo,
   type MessengerRelay,
   type MessengerStatus,
@@ -29,6 +33,8 @@ class MessengerStore {
   manifest = $state<MessengerManifestInfo | null>(null);
   /** Newest first. Runtime events (inbound DMs, ignored events, errors). */
   feed = $state<FeedEntry[]>([]);
+  contacts = $state<MessengerContact[]>([]);
+  ownProfile = $state<MessengerProfile | null>(null);
   loaded = $state(false);
   loading = $state(false);
   private _promise: Promise<void> | null = null;
@@ -60,18 +66,24 @@ class MessengerStore {
     try {
       this.status = await messengerApi.status();
       if (this.visible) {
-        const [identity, relays, manifest] = await Promise.all([
+        const [identity, relays, manifest, contacts, ownProfile] = await Promise.all([
           messengerApi.identity.get(),
           messengerApi.relays.list(),
           messengerApi.relays.manifestInfo(),
+          messengerApi.contacts.list().catch(() => [] as MessengerContact[]),
+          messengerApi.profiles.ownGet().catch(() => null),
         ]);
         this.identity = identity;
         this.relays = relays;
         this.manifest = manifest;
+        this.contacts = contacts;
+        this.ownProfile = ownProfile;
       } else {
         this.identity = null;
         this.relays = [];
         this.manifest = null;
+        this.contacts = [];
+        this.ownProfile = null;
       }
       this.loaded = true;
     } finally {
@@ -90,8 +102,53 @@ class MessengerStore {
       await listen<MessengerUiEvent>(RUNTIME_EVENT, (e) => {
         this.feed = [{ ...e.payload, at: Date.now() }, ...this.feed].slice(0, FEED_LIMIT);
         if (e.payload.name === 'inbound.dm') messengerApi.status().then((s) => (this.status = s)).catch(() => {});
+        if (e.payload.name === 'profile.updated' || e.payload.name === 'follows.updated') {
+          this.refreshContacts().catch(() => {});
+        }
       }),
     );
+  }
+
+  async refreshContacts() {
+    const [contacts, ownProfile] = await Promise.all([messengerApi.contacts.list(), messengerApi.profiles.ownGet()]);
+    this.contacts = contacts;
+    this.ownProfile = ownProfile;
+  }
+
+  async addContact(key: string, nickname?: string) {
+    const c = await messengerApi.contacts.add(key, nickname);
+    await this.refreshContacts();
+    return c;
+  }
+
+  async updateContact(pubkey: string, patch: MessengerContactPatch) {
+    await messengerApi.contacts.update(pubkey, patch);
+    await this.refreshContacts();
+  }
+
+  async removeContact(pubkey: string) {
+    await messengerApi.contacts.remove(pubkey);
+    await this.refreshContacts();
+  }
+
+  async setFollowed(pubkey: string, followed: boolean) {
+    await messengerApi.contacts.setFollowed(pubkey, followed);
+    await this.refreshContacts();
+  }
+
+  async requestProfile(pubkey: string) {
+    await messengerApi.profiles.request(pubkey);
+  }
+
+  async verifyNip05(pubkey: string) {
+    const ok = await messengerApi.profiles.verifyNip05(pubkey);
+    await this.refreshContacts();
+    return ok;
+  }
+
+  async saveOwnProfile(input: MessengerProfileInput) {
+    this.ownProfile = await messengerApi.profiles.ownSet(input);
+    return this.ownProfile;
   }
 
   clearFeed() {

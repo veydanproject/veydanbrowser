@@ -9,6 +9,8 @@
   import IdentityCard from '../identity/IdentityCard.svelte';
   import RelaysPanel from '../relays/RelaysPanel.svelte';
   import DebugFeed from '../debug/DebugFeed.svelte';
+  import OwnProfileCard from '../contacts/OwnProfileCard.svelte';
+  import ContactsPanel from '../contacts/ContactsPanel.svelte';
 
   onMount(() => { messengerStore.refresh().catch(() => {}); });
 
@@ -35,6 +37,11 @@
         <IdentityCard identity={messengerStore.identity} />
       {:else}
         <IdentityOnboarding />
+      {/if}
+
+      {#if messengerStore.identity}
+        <OwnProfileCard />
+        <ContactsPanel />
       {/if}
 
       <RelaysPanel />

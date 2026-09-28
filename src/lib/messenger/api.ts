@@ -29,6 +29,63 @@ export interface MessengerRuntimeStatus {
   outbox_pending: number;
 }
 
+export interface MessengerProfile {
+  pubkey: string;
+  npub: string;
+  name: string | null;
+  display_name: string | null;
+  about: string | null;
+  picture: string | null;
+  banner: string | null;
+  website: string | null;
+  nip05: string | null;
+  lud16: string | null;
+  nip05_verified: boolean;
+  event_created_at: number;
+  fetched_at: number;
+}
+
+export interface MessengerProfileInput {
+  name?: string | null;
+  display_name?: string | null;
+  about?: string | null;
+  picture?: string | null;
+  banner?: string | null;
+  website?: string | null;
+  nip05?: string | null;
+  lud16?: string | null;
+}
+
+export interface MessengerContact {
+  pubkey: string;
+  npub: string;
+  nickname: string | null;
+  note: string | null;
+  is_muted: boolean;
+  notification_level: 'all' | 'mentions' | 'none';
+  followed: boolean;
+  profile: MessengerProfile | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MessengerContactPatch {
+  nickname?: string | null;
+  note?: string | null;
+  is_muted?: boolean;
+  notification_level?: 'all' | 'mentions' | 'none';
+}
+
+/** Display label: nickname → profile name → short npub. */
+export function contactLabel(c: MessengerContact): string {
+  return c.nickname?.trim() || profileLabel(c.profile) || `${c.npub.slice(0, 12)}…${c.npub.slice(-4)}`;
+}
+
+export function profileLabel(p: MessengerProfile | null): string {
+  if (!p) return '';
+  return p.display_name?.trim() || p.name?.trim() || p.nip05 || '';
+}
+
 /** Runtime UI event as forwarded by the host. */
 export interface MessengerUiEvent {
   name: string;
@@ -104,6 +161,12 @@ let mockRelays: MessengerRelay[] = [
 ];
 let mockSilent = false;
 let mockRegion = 'default';
+let mockContacts: MessengerContact[] = [];
+let mockOwnProfile: MessengerProfile | null = null;
+const emptyProfile = (pubkey: string): MessengerProfile => ({
+  pubkey, npub: `npub1${pubkey.slice(0, 58)}`, name: null, display_name: null, about: null, picture: null, banner: null,
+  website: null, nip05: null, lud16: null, nip05_verified: false, event_created_at: 0, fetched_at: 0,
+});
 
 const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_status: () => ({
@@ -127,6 +190,24 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
     error: null,
   }),
   messenger_dm_send_text: () => `local-${Date.now().toString(16)}`,
+  messenger_profile_get: () => null,
+  messenger_profile_request: () => undefined,
+  messenger_profile_own_get: () => mockOwnProfile,
+  messenger_profile_own_set: (a) => {
+    const i = (a?.input ?? {}) as MessengerProfileInput;
+    mockOwnProfile = { ...(mockOwnProfile ?? emptyProfile('ab'.repeat(32))), ...i, event_created_at: Date.now() / 1000 } as MessengerProfile;
+    return mockOwnProfile;
+  },
+  messenger_nip05_verify: () => false,
+  messenger_contacts_list: () => mockContacts,
+  messenger_contacts_add: (a) => {
+    const c: MessengerContact = { pubkey: 'ef'.repeat(32), npub: 'npub1mockcontactmockcontactmockcontactmockcontactmockcontact0000', nickname: (a?.nickname as string) ?? null, note: null, is_muted: false, notification_level: 'all', followed: false, profile: null, created_at: Date.now() / 1000, updated_at: Date.now() / 1000 };
+    mockContacts = [c, ...mockContacts];
+    return c;
+  },
+  messenger_contacts_update: (a) => { mockContacts = mockContacts.map((c) => c.pubkey === a?.pubkey ? { ...c, ...(a?.patch as object) } : c); return mockContacts.find((c) => c.pubkey === a?.pubkey); },
+  messenger_contacts_remove: (a) => { mockContacts = mockContacts.filter((c) => c.pubkey !== a?.pubkey); },
+  messenger_contacts_set_followed: (a) => { mockContacts = mockContacts.map((c) => c.pubkey === a?.pubkey ? { ...c, followed: Boolean(a?.followed) } : c); },
   messenger_relays_list: () => mockRelays,
   messenger_relays_add: (a) => {
     const r: MessengerRelay = { url: String(a?.url), relay_id: null, source: 'user', regions: [], read: true, write: true, enabled: true, auth_type: null, state: 'connecting' };
@@ -205,6 +286,25 @@ export const messengerApi = {
 
   dm: {
     sendText: (to: string, text: string) => invoke<string>('messenger_dm_send_text', { to, text }),
+  },
+
+  profiles: {
+    get: (pubkey: string) => invoke<MessengerProfile | null>('messenger_profile_get', { pubkey }),
+    request: (pubkey: string) => invoke<void>('messenger_profile_request', { pubkey }),
+    ownGet: () => invoke<MessengerProfile | null>('messenger_profile_own_get'),
+    ownSet: (input: MessengerProfileInput) => invoke<MessengerProfile>('messenger_profile_own_set', { input }),
+    verifyNip05: (pubkey: string) => invoke<boolean>('messenger_nip05_verify', { pubkey }),
+  },
+
+  contacts: {
+    list: () => invoke<MessengerContact[]>('messenger_contacts_list'),
+    add: (key: string, nickname?: string) =>
+      invoke<MessengerContact>('messenger_contacts_add', { key, nickname: nickname?.trim() || null }),
+    update: (pubkey: string, patch: MessengerContactPatch) =>
+      invoke<MessengerContact>('messenger_contacts_update', { pubkey, patch }),
+    remove: (pubkey: string) => invoke<void>('messenger_contacts_remove', { pubkey }),
+    setFollowed: (pubkey: string, followed: boolean) =>
+      invoke<void>('messenger_contacts_set_followed', { pubkey, followed }),
   },
 
   identity: {
