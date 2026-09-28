@@ -52,6 +52,23 @@ pub async fn ids_in_window(store: &Store, kind: u16, since: i64, until: i64, lim
     Ok(rows.iter().filter_map(|s| EventId::parse(s)).collect())
 }
 
+
+/// `(id, created_at)` of the newest known events of `kind` since `since`,
+/// the local set for a history reconciliation.
+pub async fn items_since(store: &Store, kind: u16, since: i64, limit: i64) -> Result<Vec<(EventId, i64)>> {
+    let rows = sqlx::query_as::<_, (String, i64)>(
+        "SELECT event_id, created_at FROM msg_events_raw WHERE kind = ? AND created_at >= ?
+         ORDER BY created_at DESC LIMIT ?",
+    )
+    .bind(kind as i64)
+    .bind(since)
+    .bind(limit)
+    .fetch_all(store.pool())
+    .await
+    .map_err(storage)?;
+    Ok(rows.into_iter().filter_map(|(id, at)| Some((EventId::parse(&id)?, at))).collect())
+}
+
 pub async fn count(store: &Store) -> Result<i64> {
     sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM msg_events_raw")
         .fetch_one(store.pool())
@@ -84,6 +101,7 @@ mod tests {
         assert!(insert_if_new(&s, &raw("3", 9, 150)).await.unwrap());
         assert!(contains(&s, &EventId::parse(&"1".repeat(64)).unwrap()).await.unwrap());
         assert_eq!(count(&s).await.unwrap(), 3);
+        assert_eq!(items_since(&s, 1059, 150, 10).await.unwrap().len(), 1);
         let ids = ids_in_window(&s, 1059, 0, 150, 10).await.unwrap();
         assert_eq!(ids.len(), 1);
         assert_eq!(ids[0].as_hex(), "1".repeat(64));
