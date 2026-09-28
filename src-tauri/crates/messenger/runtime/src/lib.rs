@@ -9,9 +9,12 @@
 //! `messenger-cli` tomorrow. Nothing here knows about Tauri.
 
 use messenger_core::{MessengerConfig, Result, SecretStore};
+use messenger_identity::IdentityService;
 use messenger_store::Store;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+pub use messenger_identity::{CreatedIdentity, Identity};
 
 /// Facts for the host's status screen. Never contains secrets.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,12 +32,18 @@ pub struct MessengerRuntime {
     config: MessengerConfig,
     store: Store,
     secrets: Arc<dyn SecretStore>,
+    identity: IdentityService,
 }
 
 impl MessengerRuntime {
     pub async fn start(config: MessengerConfig, secrets: Arc<dyn SecretStore>) -> Result<Self> {
         let store = Store::open(&config).await?;
-        Ok(Self { config, store, secrets })
+        let identity = IdentityService::new(store.clone(), secrets.clone());
+        Ok(Self { config, store, secrets, identity })
+    }
+
+    pub fn identity(&self) -> &IdentityService {
+        &self.identity
     }
 
     pub fn config(&self) -> &MessengerConfig {
@@ -55,7 +64,7 @@ impl MessengerRuntime {
             data_dir: self.config.data_dir().to_string_lossy().into_owned(),
             schema_version: self.store.schema_version().await?,
             secrets_unlocked: self.secrets.is_unlocked().await,
-            identity_present: false,
+            identity_present: self.identity.get().await?.is_some(),
         })
     }
 
