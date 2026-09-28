@@ -18,6 +18,7 @@ use nostr_sdk::prelude::*;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// One relay to keep in the pool.
@@ -169,6 +170,118 @@ impl RelayPool {
     }
 }
 
+
+/// How long a plain-REQ history fetch may take per call.
+const HISTORY_FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long to wait for a peer's inbox relay that is not in the pool.
+const EPHEMERAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
+/// At most this many foreign inbox relays are tried per message.
+const MAX_EPHEMERAL_RELAYS: usize = 3;
+
+impl RelayPool {
+    /// History catch-up. Per relay: Negentropy against `local`; when the
+    /// relay does not speak NIP-77 (or the attempt fails), a plain REQ with
+    /// the same filter. Everything found is pushed onto the event stream
+    /// with `EventSource::Sync`. Returns how many events were forwarded.
+    async fn reconcile(&self, filter: Filter, local: Vec<messenger_core::SyncItem>) -> Result<usize> {
+        let items: Vec<(nostr_sdk::prelude::EventId, nostr_sdk::prelude::Timestamp)> = local
+            .iter()
+            .filter_map(|i| {
+                Some((
+                    nostr_sdk::prelude::EventId::from_hex(i.id.as_hex()).ok()?,
+                    nostr_sdk::prelude::Timestamp::from(i.created_at.secs().max(0) as u64),
+                ))
+            })
+            .collect();
+        let known: HashSet<String> = local.iter().map(|i| i.id.as_hex().to_string()).collect();
+        let opts = SyncOptions::default().direction(SyncDirection::Down);
+        let mut forwarded = 0usize;
+        let mut any_relay = false;
+        for (url, relay) in self.client.relays().await {
+            if relay.status() != nostr_sdk::relay::RelayStatus::Connected {
+                continue;
+            }
+            any_relay = true;
+            let source = EventSource::Sync { url: to_core_url(&url) };
+            let events: Vec<Event> = match relay.sync(filter.clone()).items(items.clone()).opts(opts.clone()).await {
+                Ok(summary) => {
+                    let mut found = Vec::with_capacity(summary.received.len());
+                    for id in &summary.received {
+                        if let Ok(Some(ev)) = self.client.database().event_by_id(id).await {
+                            found.push(ev);
+                        }
+                    }
+                    found
+                }
+                Err(_) => match relay.fetch_events(filter.clone()).timeout(HISTORY_FETCH_TIMEOUT).await {
+                    Ok(events) => events.into_iter().collect(),
+                    Err(_) => continue,
+                },
+            };
+            for ev in events {
+                if known.contains(&ev.id.to_hex()) {
+                    continue;
+                }
+                if let Some(raw) = to_raw(&ev, source.clone()) {
+                    if self.tx.send(raw).await.is_ok() {
+                        forwarded += 1;
+                    }
+                }
+            }
+        }
+        if !any_relay {
+            return Err(MessengerError::Transport("no relay connected".into()));
+        }
+        Ok(forwarded)
+    }
+
+    /// Deliver to a peer: their inbox relays when we know them (relays of
+    /// ours are used directly, foreign ones through a short-lived
+    /// connection), otherwise every write relay of ours.
+    async fn publish_to_inbox(&self, ev: &Event, hints: &[RelayUrl]) -> Result<Ack> {
+        let pool_urls: HashSet<String> = self
+            .client
+            .relays()
+            .await
+            .keys()
+            .map(|u| to_core_url(u).as_str().to_string())
+            .collect();
+        let configured = self.configured();
+        let mut targets: Vec<String> = Vec::new();
+        let mut ephemeral: Vec<String> = Vec::new();
+        for h in hints {
+            if pool_urls.contains(h.as_str()) {
+                // Address the relay by its connect url (may carry the key).
+                let connect = configured
+                    .iter()
+                    .find(|c| c.url.as_str() == h.as_str())
+                    .map(|c| c.connect_url())
+                    .unwrap_or_else(|| h.as_str().to_string());
+                targets.push(connect);
+            } else if ephemeral.len() < MAX_EPHEMERAL_RELAYS {
+                ephemeral.push(h.as_str().to_string());
+            }
+        }
+        for url in &ephemeral {
+            if self.client.add_relay(url.as_str()).await.is_ok()
+                && self.client.try_connect_relay(url.as_str(), EPHEMERAL_CONNECT_TIMEOUT).await.is_ok()
+            {
+                targets.push(url.clone());
+            }
+        }
+        let res = if targets.is_empty() {
+            self.client.send_event(ev).await
+        } else {
+            self.client.send_event(ev).to(targets).await
+        };
+        for url in &ephemeral {
+            let _ = self.client.remove_relay(url.as_str()).await;
+        }
+        let res = res.map_err(|e| MessengerError::Transport(e.to_string()))?;
+        Ok(ack_from(&res))
+    }
+}
+
 /// Core relay identity is the base url: the `?key=` query used for gated
 /// relays is stripped so keys never travel into status, events or logs.
 fn to_core_url(u: &nostr::types::url::RelayUrl) -> RelayUrl {
@@ -226,23 +339,7 @@ impl Transport for RelayPool {
             }
             Outbound::PublishToInbox { event, hint_relays, .. } => {
                 let ev = Self::parse_event(&event.json)?;
-                // Stage 2: hints that are in the pool are used; otherwise the
-                // event goes to every write relay. Stage 5 adds inbox
-                // resolution and ephemeral connections.
-                let pool_urls: HashSet<String> =
-                    self.client.relays().await.keys().map(|u| u.as_str_without_trailing_slash().to_string()).collect();
-                let targets: Vec<String> = hint_relays
-                    .iter()
-                    .map(|u| u.as_str().to_string())
-                    .filter(|u| pool_urls.contains(u))
-                    .collect();
-                let res = if targets.is_empty() {
-                    self.client.send_event(&ev).await
-                } else {
-                    self.client.send_event(&ev).to(targets).await
-                }
-                .map_err(|e| MessengerError::Transport(e.to_string()))?;
-                Ok(ack_from(&res))
+                self.publish_to_inbox(&ev, &hint_relays).await
             }
             Outbound::Subscribe { id, filter, .. } => {
                 let f = Self::parse_filter(&filter)?;
@@ -259,7 +356,11 @@ impl Transport for RelayPool {
                 let _ = self.client.unsubscribe(&SubscriptionId::new(id.0)).await;
                 Ok(Ack { accepted_by: vec![], rejected_by: vec![] })
             }
-            Outbound::Sync { .. } => Err(MessengerError::Transport("negentropy sync arrives in stage 3".into())),
+            Outbound::Sync { filter, local, .. } => {
+                let f = Self::parse_filter(&filter)?;
+                self.reconcile(f, local).await?;
+                Ok(Ack { accepted_by: vec![], rejected_by: vec![] })
+            }
         }
     }
 
