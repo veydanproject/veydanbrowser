@@ -6,7 +6,7 @@
 //! `Outbound`s and reports the outbox id back with `attach_outbox`).
 
 use crate::view::{preview, ChatView, MessageView, ReplyPreview};
-use crate::wrap::wrap;
+use crate::wrap::{wrap_as, Wake};
 use messenger_contacts::{ContactService, ProfileService};
 use messenger_core::envelope::{T_CONTROL, T_DELETE, T_EDIT, T_MEDIA, T_TEXT};
 use messenger_core::traits::UiEvent;
@@ -271,8 +271,9 @@ impl DmService {
         content: &str,
         created_at: i64,
         reply_to: Option<&str>,
+        wake: Wake,
     ) -> Result<(String, String, Outbound, Option<Outbound>)> {
-        let w = wrap(keys, peer, content, created_at, reply_to)?;
+        let w = wrap_as(keys, peer, content, created_at, reply_to, wake)?;
         let hint_relays = self.hints(peer).await?;
         let wire_id = w.to_peer.id.as_hex().to_string();
         let to_peer = Outbound::PublishToInbox { recipient: peer.clone(), event: w.to_peer, hint_relays };
@@ -320,7 +321,8 @@ impl DmService {
         let gate = self.gate_outbound(&chat.id, peer, &me_hex, content_type == repo::CT_TEXT).await?;
         let content = envelope.encode();
         let created_at = self.next_created_at(&chat.id).await?;
-        let (id, wire_id, to_peer, to_self) = self.publish_pair(keys, peer, &content, created_at, reply_to).await?;
+        let (id, wire_id, to_peer, to_self) =
+            self.publish_pair(keys, peer, &content, created_at, reply_to, Wake::Peer).await?;
         repo::insert(
             &self.store,
             &NewMessage {
@@ -438,7 +440,9 @@ impl DmService {
         }
         let content = Envelope::edit(message_id, text).encode();
         let created_at = self.next_created_at(&row.chat_id).await?;
-        let (id, wire_id, to_peer, to_self) = self.publish_pair(keys, &peer, &content, created_at, None).await?;
+        // The peer's phone told of the message; the correction is for the app.
+        let (id, wire_id, to_peer, to_self) =
+            self.publish_pair(keys, &peer, &content, created_at, None, Wake::Nobody).await?;
         self.insert_hidden(keys, &row.chat_id, &id, &wire_id, repo::CT_EDIT, content, message_id, created_at).await?;
         repo::set_text(&self.store, message_id, text, created_at).await?;
         chats::recompute_last(&self.store, &row.chat_id).await?;
@@ -451,7 +455,8 @@ impl DmService {
         let (row, peer) = self.own_target(keys, message_id).await?;
         let content = Envelope::delete(message_id).encode();
         let created_at = self.next_created_at(&row.chat_id).await?;
-        let (id, wire_id, to_peer, to_self) = self.publish_pair(keys, &peer, &content, created_at, None).await?;
+        let (id, wire_id, to_peer, to_self) =
+            self.publish_pair(keys, &peer, &content, created_at, None, Wake::Nobody).await?;
         self.insert_hidden(keys, &row.chat_id, &id, &wire_id, repo::CT_DELETE, content, message_id, created_at).await?;
         repo::mark_deleted(&self.store, message_id, created_at).await?;
         chats::recompute_last(&self.store, &row.chat_id).await?;
@@ -680,6 +685,7 @@ fn updated(chat_id: &str, message_id: &str) -> UiEvent {
 
 #[cfg(test)]
 mod tests {
+    use crate::wrap::wrap;
     use super::*;
     use messenger_core::inbound::Envelope as WireEnvelope;
     use messenger_core::outbound::WireEvent;

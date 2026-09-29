@@ -17,6 +17,8 @@
 //! Keep this file free of messenger logic; if something needs more than a
 //! forwarding call, it belongs in a messenger crate.
 
+pub mod push;
+
 use crate::error::{AppError, CmdResult};
 use crate::{vault, AppState};
 use async_trait::async_trait;
@@ -76,6 +78,8 @@ impl MessengerState {
             Ok(rt) => {
                 let rt = Arc::new(rt);
                 spawn_relay_status_watcher(app.clone(), rt.clone());
+                #[cfg(target_os = "android")]
+                push::spawn_bridge(app.clone(), rt.clone());
                 spawn_ui_event_forwarder(app, rt.clone());
                 Self { runtime: Some(rt), start_error: None }
             }
@@ -337,6 +341,12 @@ pub async fn messenger_identity_export(
 #[tauri::command]
 pub async fn messenger_identity_delete(state: tauri::State<'_, AppState>) -> CmdResult<()> {
     let rt = state.messenger.runtime()?;
+    // The push server is told to forget the device while there is still a
+    // key to sign the request with. It is not a reason to keep the identity:
+    // a registration nobody renews runs out by itself.
+    if let Err(e) = rt.push_unregister().await {
+        eprintln!("messenger push: the registration was not taken back: {e}");
+    }
     rt.identity().delete().await.map_err(map_err)?;
     rt.refresh_signer().await.map_err(map_err)?;
     Ok(())

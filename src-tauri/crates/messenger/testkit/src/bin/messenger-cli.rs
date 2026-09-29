@@ -19,6 +19,8 @@
 //! messenger-cli [--data-dir DIR] delete <message-id>
 //! messenger-cli [--data-dir DIR] relation <npub|hex>
 //! messenger-cli [--data-dir DIR] request|accept|decline|block|unblock|remove <npub|hex>
+//! messenger-cli [--data-dir DIR] push-on <token> [--server URL] [--locale L]
+//! messenger-cli [--data-dir DIR] push-status | push-test | push-off
 //! ```
 //!
 //! Secrets live in `<data-dir>/secrets.json` in plaintext: development only.
@@ -33,7 +35,7 @@ use std::time::Duration;
 fn usage() -> ! {
     eprintln!(
         "usage: messenger-cli [--data-dir DIR] <keygen [--password PW] | import <nsec|ncryptsec> <secret> [--password PW] \
-         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer>>"
+         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] [--locale L] | push-status | push-test | push-off>"
     );
     std::process::exit(2)
 }
@@ -450,6 +452,36 @@ async fn main() {
             }
             println!("waveform: {} values", m.get("waveform").and_then(|w| w.as_array()).map(|a| a.len()).unwrap_or(0));
         }
+        // Push notifications. The token is what a phone would bring; here it
+        // is given by hand, a real one to see a push arrive, or any string
+        // to see the registration alone.
+        "push-on" => {
+            if args.is_empty() {
+                usage();
+            }
+            let server = take_flag(&mut args, "--server");
+            let locale = take_flag(&mut args, "--locale");
+            let channel = messenger_runtime::push::PushChannel {
+                provider: "fcm".into(),
+                token: args[0].clone(),
+                app_id: take_flag(&mut args, "--app").unwrap_or_else(|| "net.veydan.mobile".into()),
+                app_version: Some(format!("cli {}", messenger_core::VERSION)),
+            };
+            rt.push_set_channel(Some(channel)).await.unwrap_or_else(die);
+            if let Some(locale) = locale {
+                rt.push_set_locale(&locale).await.unwrap_or_else(die);
+            }
+            if let Some(server) = server {
+                rt.push_set_server(Some(server)).await.unwrap_or_else(die);
+            }
+            print_push(&rt.push_set_enabled(true).await.unwrap_or_else(die));
+        }
+        "push-status" => print_push(&rt.push_reconcile(false).await.unwrap_or_else(die)),
+        "push-test" => {
+            let answer = rt.push_test().await.unwrap_or_else(die);
+            println!("outcome {}  trace {}", answer.outcome, answer.trace);
+        }
+        "push-off" => print_push(&rt.push_set_enabled(false).await.unwrap_or_else(die)),
         "groups" => {
             for g in rt.group_list().await.unwrap_or_else(die) {
                 println!(
@@ -709,6 +741,26 @@ async fn flush(rt: &MessengerRuntime) {
         }
     }
     eprintln!("warning: some events are still queued");
+}
+
+fn print_push(s: &messenger_runtime::push::PushStatus) {
+    println!("state    {}", s.state);
+    println!("server   {}{}", s.server.as_deref().unwrap_or("-"), if s.server_custom { " (named by hand)" } else { "" });
+    println!("tell me  dm={} groups={}", s.dm, s.groups);
+    if let Some(at) = s.expires_at {
+        println!("expires  {at}");
+    }
+    if let Some(e) = &s.error {
+        println!("error    {e}");
+    }
+    for r in &s.relays {
+        println!(
+            "relay    {:<12} {}{}",
+            format!("{:?}", r.status).to_lowercase(),
+            r.url,
+            r.detail.as_deref().map(|d| format!("  ({d})")).unwrap_or_default()
+        );
+    }
 }
 
 fn take_switch(args: &mut Vec<String>, name: &str) -> bool {

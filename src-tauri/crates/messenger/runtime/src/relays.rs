@@ -312,6 +312,7 @@ mod tests {
                 .collect(),
             media: vec![],
             sources: vec![],
+            push: vec![],
         }
     }
 

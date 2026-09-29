@@ -96,6 +96,8 @@ echo ">> Signing $unsigned -> $signed"
   --out "$signed" "$unsigned"
 
 if [ "$MODE" = "test" ]; then
+  # Never install over an app signed by another key: see check-signing.sh.
+  bash "$ANDROID_SCRIPTS_DIR/check-signing.sh" "$signed"
   echo ">> Installing $signed"
   adb install -r "$signed"
 else

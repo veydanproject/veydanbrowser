@@ -648,7 +648,7 @@ async fn the_new_link_opens_everything_and_the_old_one_cannot_be_forced() {
     ];
     for op in forged {
         let signed = crate::wire::sign_op(&cheat_keys, &op).unwrap();
-        let sealed = crate::wire::seal_op(&g, &old_key, &signed, vec![]).unwrap();
+        let sealed = crate::wire::seal_op(&g, &old_key, &signed, vec![], &cheat_keys).unwrap();
         w.run(cheat, Outcome { publish: vec![GroupService::scoped(&g, sealed)], ..Default::default() }).await;
     }
     for d in [alice, bob, newcomer] {
@@ -695,7 +695,7 @@ async fn joining_too_early_by_an_old_link_ends_as_a_stale_link() {
     let op = crate::op::Op::new(&g, &me, vec![rotate], 9_000, OpBody::Join)
         .with_proof(crate::op::JoinProof { epoch: 1, mac: key.join_mac(&g, &me, 1) });
     let signed = crate::wire::sign_op(&keys, &op).unwrap();
-    let sealed = crate::wire::seal_op(&g, &key, &signed, vec![]).unwrap();
+    let sealed = crate::wire::seal_op(&g, &key, &signed, vec![], &keys).unwrap();
     w.run(troll, Outcome { publish: vec![GroupService::scoped(&g, sealed)], ..Default::default() }).await;
     let v = w.devices[alice].group(&g).await.unwrap();
     assert_eq!((v.members.len(), v.banned.len()), (1, 1));

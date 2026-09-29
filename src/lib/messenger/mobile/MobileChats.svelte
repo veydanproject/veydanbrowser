@@ -15,6 +15,8 @@
   import IdentityOnboarding from '../identity/IdentityOnboarding.svelte';
   import MobileFrame from './MobileFrame.svelte';
   import { chatHref } from './routes';
+  import PushOffer from '../push/PushOffer.svelte';
+  import { pushSeen, startPushBridge } from '../push/bridge';
   import type { MessengerChat } from '../api';
 
   let query = $state('');
@@ -25,6 +27,9 @@
     chatStore.close();
     messengerStore.refresh().catch(() => {});
     messengerStore.startListeners().catch(() => {});
+    // The list shows what is new: the notification about direct messages
+    // has done its work.
+    startPushBridge().then(() => pushSeen()).catch(() => {});
   });
 
   const s = $derived(messengerStore.status);
@@ -72,6 +77,7 @@
       <input type="search" bind:value={query} placeholder={$t('msg_chats_search')} spellcheck="false" enterkeyhint="search" />
       {#if query}<button class="clear" onclick={() => (query = '')} aria-label={$t('msg_back')}><Icon name="x" size={14} /></button>{/if}
     </div>
+    <PushOffer />
     <InvitesBar />
     <ChatList {query} onopen={open} />
     <button class="fab" onclick={() => (newChat = true)} aria-label={$t('msg_newchat_title')}><Icon name="edit" size={22} /></button>

@@ -281,10 +281,14 @@ pub fn run() {
 /// standalone mobile app, so existing installs keep their notes and vault).
 #[cfg(mobile)]
 fn run_mobile() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_barcode_scanner::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+    // Push notifications of the messenger; see commands/messenger/push.rs.
+    #[cfg(all(feature = "messenger", target_os = "android"))]
+    let builder = builder.plugin(tauri_plugin_veydan_push::init());
+    builder
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -476,6 +480,26 @@ fn run_mobile() {
             commands::messenger::messenger_manifest_info,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_manifest_set_region,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_status,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_set_enabled,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_mark_offered,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_set_server,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_set_prefs,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_set_locale,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_refresh,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_test,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_take_tap,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_clear,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
             #[cfg(feature = "messenger")]
@@ -1084,6 +1108,26 @@ fn run_desktop() {
             commands::messenger::messenger_manifest_info,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_manifest_set_region,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_status,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_set_enabled,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_mark_offered,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_set_server,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_set_prefs,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_set_locale,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_refresh,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_test,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_take_tap,
+            #[cfg(feature = "messenger")]
+            commands::messenger::push::messenger_push_clear,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
             #[cfg(feature = "messenger")]

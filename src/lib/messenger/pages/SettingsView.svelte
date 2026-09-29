@@ -8,6 +8,7 @@
   import OwnProfileCard from '../contacts/OwnProfileCard.svelte';
   import RelaysPanel from '../relays/RelaysPanel.svelte';
   import MediaServersPanel from '../media/MediaServersPanel.svelte';
+  import NotificationsPanel from '../push/NotificationsPanel.svelte';
   import DebugFeed from '../debug/DebugFeed.svelte';
 
   interface Props {
@@ -16,7 +17,7 @@
   }
   let { compact = false }: Props = $props();
 
-  type Tab = 'profile' | 'network' | 'diagnostics';
+  type Tab = 'profile' | 'network' | 'notifications' | 'diagnostics';
   let tab = $state<Tab>('profile');
   const s = $derived(messengerStore.status);
 </script>
@@ -24,7 +25,7 @@
 <div class="settings">
   {#if !compact}<h2>{$t('msg_settings_title')}</h2>{/if}
   <div class="tabs" role="tablist">
-    {#each ['profile', 'network', 'diagnostics'] as const as id}
+    {#each ['profile', 'network', 'notifications', 'diagnostics'] as const as id}
       <button role="tab" class="tab" class:active={tab === id} aria-selected={tab === id} onclick={() => (tab = id)}>
         {$t(`msg_settings_tab_${id}` as 'msg_settings_tab_profile')}
       </button>
@@ -37,6 +38,8 @@
   {:else if tab === 'network'}
     <RelaysPanel />
     <MediaServersPanel />
+  {:else if tab === 'notifications'}
+    <NotificationsPanel />
   {:else if s?.runtime}
     <div class="card status-card">
       <div class="card-title">{$t('msg_status_title')}</div>

@@ -22,6 +22,9 @@ messenger-media.workspace = true
 messenger-groups.workspace = true
 messenger-links.workspace = true
 messenger-preview.workspace = true
+messenger-push.workspace = true
+sha2.workspace = true
+hex.workspace = true
 getrandom.workspace = true
 async-trait.workspace = true
 nostr.workspace = true
@@ -33,5 +36,6 @@ base64.workspace = true
 
 [dev-dependencies]
 messenger-testkit.workspace = true
+wiremock.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

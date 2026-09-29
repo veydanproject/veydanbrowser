@@ -13,6 +13,7 @@
   import MobileFrame from './MobileFrame.svelte';
   import { BASE, chatHref } from './routes';
   import { onChatOpened } from '../content/actions';
+  import { pushSeen, startPushBridge } from '../push/bridge';
 
   const id = $derived(page.url.searchParams.get('id') ?? '');
   let missing = $state(false);
@@ -30,6 +31,9 @@
     if (!chatStore.chats.length) await chatStore.loadChats().catch(() => {});
     if (!chatStore.chats.some((c) => c.id === chatId)) { missing = true; return; }
     if (chatStore.activeId !== chatId) await chatStore.open(chatId);
+    // What the notification was about is on the screen now. A tap may have
+    // opened this page before the list of chats was ever shown.
+    startPushBridge().then(() => pushSeen(chatId)).catch(() => {});
   }
 
   $effect(() => { if (id) load(id); });

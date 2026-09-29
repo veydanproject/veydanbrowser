@@ -4,3 +4,6 @@
 /tauri.build.gradle.kts
 /proguard-tauri.pro
 /tauri.properties
+# Firebase client config of the project. Not a secret by itself, but it names
+# the project; builds that need it get it from outside the repository.
+/google-services.json

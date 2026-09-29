@@ -15,7 +15,7 @@ use crate::state::{GroupState, Rejection};
 use crate::wire::{self, SecretEnvelope};
 use messenger_core::traits::UiEvent;
 use messenger_core::{Clock, Envelope, MessengerError, Outbound, PubKey, RelayUrl, Result, Scope, SecretStore};
-use messenger_dm::wrap::wrap;
+use messenger_dm::wrap::{wrap_as, Wake};
 use messenger_dm::{DmService, MessageView};
 use messenger_store::groups::{self as repo, GroupRow};
 use messenger_store::messages::{self as msgs, NewMessage};
@@ -528,8 +528,18 @@ impl GroupService {
 
     /// A direct message of the group protocol, with a copy for my other
     /// devices when they have to know.
-    pub(crate) async fn dm(&self, keys: &Keys, to: &PubKey, content: String, self_copy: bool) -> Result<Vec<Outbound>> {
-        let w = wrap(keys, to, &content, self.now(), None)?;
+    ///
+    /// `wake` says whether the one it is for should hear of it at once: an
+    /// invitation is for a person, a key is for the app.
+    pub(crate) async fn dm(
+        &self,
+        keys: &Keys,
+        to: &PubKey,
+        content: String,
+        self_copy: bool,
+        wake: Wake,
+    ) -> Result<Vec<Outbound>> {
+        let w = wrap_as(keys, to, &content, self.now(), None, wake)?;
         let mut out = vec![Outbound::PublishToInbox { recipient: to.clone(), event: w.to_peer, hint_relays: self.dm.hints(to).await? }];
         if self_copy {
             if let Some(event) = w.to_self {
@@ -661,7 +671,7 @@ impl GroupService {
             }
         }
         let signed = wire::sign_op(keys, &op)?;
-        let sealed = wire::seal_op(group_id, &sealing, &signed, envelopes)?;
+        let sealed = wire::seal_op(group_id, &sealing, &signed, envelopes, keys)?;
         if let Some(k) = &new_key {
             self.keep_key(group_id, k).await?;
         }
@@ -673,7 +683,7 @@ impl GroupService {
             let mut older: Vec<GroupKey> = self.all_keys(group_id).await?.into_iter().filter(|k| k.id() != new.id()).collect();
             let skip = older.len().saturating_sub(wire::MAX_CHAIN_KEYS);
             older.drain(..skip);
-            outcome.publish.push(Self::scoped(group_id, wire::seal_chain(group_id, new, &older, op.created_at)?));
+            outcome.publish.push(Self::scoped(group_id, wire::seal_chain(group_id, new, &older, op.created_at, keys)?));
         }
         let membership = match &op.body {
             OpBody::Leave => Some(MEMBERSHIP_LEFT),
@@ -712,7 +722,7 @@ impl GroupService {
                 GroupKind::Private => None,
             },
         };
-        self.dm(keys, to, wire::dm_envelope(wire::T_WELCOME, &body)?, false).await
+        self.dm(keys, to, wire::dm_envelope(wire::T_WELCOME, &body)?, false, Wake::Peer).await
     }
 
     // ─── What the user does ─────────────────────────────────────────────────
@@ -776,7 +786,7 @@ impl GroupService {
             GroupKind::Private => vec![wire::envelope_for(keys, &me, key.as_bytes())?],
             GroupKind::Public => vec![],
         };
-        let sealed = wire::seal_op(&group_id, &key, &signed, envelopes)?;
+        let sealed = wire::seal_op(&group_id, &key, &signed, envelopes, keys)?;
         self.keep_op(&op, &serde_json::to_value(&signed)?).await?;
 
         let mut outcome = Outcome { publish: vec![Self::scoped(&group_id, sealed)], resubscribe: true, ..Default::default() };
@@ -853,7 +863,7 @@ impl GroupService {
             },
         )
         .await?;
-        let publish = self.dm(keys, who, wire::dm_envelope(wire::T_INVITE, &body)?, false).await?;
+        let publish = self.dm(keys, who, wire::dm_envelope(wire::T_INVITE, &body)?, false, Wake::Peer).await?;
         let view = self.invites("out").await?.into_iter().find(|i| i.invite_id == body.invite_id);
         Ok((
             view.ok_or_else(|| MessengerError::Storage("invite vanished".into()))?,
@@ -877,7 +887,7 @@ impl GroupService {
         let inviter = PubKey::parse(&inv.peer).ok_or_else(|| MessengerError::Storage("bad inviter".into()))?;
         repo::set_invite_status(&self.store, invite_id, if accept { "accepted" } else { "declined" }).await?;
         let reply = wire::InviteReply { invite_id: invite_id.to_string(), group_id: inv.group_id.clone(), accept };
-        let publish = self.dm(keys, &inviter, wire::dm_envelope(wire::T_INVITE_REPLY, &reply)?, true).await?;
+        let publish = self.dm(keys, &inviter, wire::dm_envelope(wire::T_INVITE_REPLY, &reply)?, true, Wake::Nobody).await?;
         Ok(Outcome { publish, events: vec![Self::updated(&inv.group_id)], ..Default::default() })
     }
 
@@ -940,7 +950,7 @@ impl GroupService {
                 .await?;
                 let content = wire::dm_envelope(wire::T_JOIN_REQUEST, &body)?;
                 for (i, manager) in ask.iter().enumerate() {
-                    outcome.publish.extend(self.dm(keys, manager, content.clone(), i == 0).await?);
+                    outcome.publish.extend(self.dm(keys, manager, content.clone(), i == 0, Wake::Peer).await?);
                 }
             }
         }
@@ -1001,7 +1011,7 @@ impl GroupService {
             .ok_or_else(|| MessengerError::Invalid("group_request_unknown".into()))?;
         repo::put_request(&self.store, &repo::RequestRow { status: "rejected".into(), ..req }).await?;
         let body = wire::Rejected { group_id: group_id.to_string() };
-        let publish = self.dm(keys, requester, wire::dm_envelope(wire::T_REJECTED, &body)?, false).await?;
+        let publish = self.dm(keys, requester, wire::dm_envelope(wire::T_REJECTED, &body)?, false, Wake::Nobody).await?;
         Ok(Outcome { publish, events: vec![Self::updated(group_id)], ..Default::default() })
     }
 
@@ -1056,7 +1066,7 @@ impl GroupService {
                 let content = wire::dm_envelope(wire::T_KEYS, &body)?;
                 let mut outcome = Outcome::default();
                 for who in list {
-                    outcome.publish.extend(self.dm(keys, &who, content.clone(), false).await?);
+                    outcome.publish.extend(self.dm(keys, &who, content.clone(), false, Wake::Nobody).await?);
                 }
                 Ok(outcome)
             }
@@ -1107,7 +1117,7 @@ impl GroupService {
         };
         let content = envelope.encode();
         let signed = wire::sign_message(keys, group_id, &content, created_at, reply_to)?;
-        let sealed = wire::seal_message(group_id, &key, &signed)?;
+        let sealed = wire::seal_message(group_id, &key, &signed, keys)?;
         let id = signed.id.to_hex();
         let hidden = matches!(content_type, msgs::CT_EDIT | msgs::CT_DELETE);
         msgs::insert(

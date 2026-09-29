@@ -51,6 +51,19 @@ pub struct Manifest {
     pub media: Vec<ManifestMedia>,
     #[serde(default)]
     pub sources: Vec<ManifestSource>,
+    /// Push servers. Absent in manifests written before pushes existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub push: Vec<ManifestPush>,
+}
+
+/// A server that watches relays for the user and wakes the phone.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestPush {
+    pub id: String,
+    /// `https://…`, without a trailing slash.
+    pub url: String,
+    #[serde(default)]
+    pub regions: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,6 +270,17 @@ impl Manifest {
         }
     }
 
+    /// Push servers for `region`, by the rule of the media servers: the
+    /// region's own when it has any, the `default` ones otherwise.
+    pub fn push_for_region(&self, region: &str) -> Vec<&ManifestPush> {
+        let has = self.push.iter().any(|p| p.regions.iter().any(|g| g == region));
+        let tag = if has || region == REGION_DEFAULT { region } else { REGION_DEFAULT };
+        self.push
+            .iter()
+            .filter(|p| p.regions.iter().any(|g| g == tag || g == REGION_ANY))
+            .collect()
+    }
+
     pub fn media_for_region(&self, region: &str) -> Vec<&ManifestMedia> {
         let has = self.media.iter().any(|m| m.regions.iter().any(|g| g == region));
         let tag = if has || region == REGION_DEFAULT { region } else { REGION_DEFAULT };
@@ -331,6 +355,7 @@ mod tests {
             ],
             media: vec![ManifestMedia { id: "m1".into(), url: "https://media.example".into(), regions: vec!["default".into()], kind: "blossom".into(), bucket: None, s3_region: None }],
             sources: vec![ManifestSource::Http { url: "https://cfg.example/m.json".into(), regions: vec![], priority: 10 }],
+            push: vec![ManifestPush { id: "p1".into(), url: "https://push.example".into(), regions: vec!["default".into()] }],
         }
     }
 

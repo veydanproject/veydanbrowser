@@ -36,6 +36,11 @@ jobs:
       - name: Messenger boundaries
         run: bash scripts/messenger-boundaries.sh
 
+      # The messenger and the push server share no code, only a protocol:
+      # the messenger's copy of its examples must be the server's.
+      - name: Push protocol contract
+        run: bash scripts/vpush-contract.sh
+
   # Messenger crates are Tauri-free and test without the app or system libs.
   # This job also proves the module builds from a clean checkout on its own
   # (docs/messenger-spec.md §4.6).

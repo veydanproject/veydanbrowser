@@ -55,7 +55,8 @@ rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"],
 
 [features]
 default = []
-messenger = ["dep:messenger-core", "dep:messenger-runtime", "dep:rustls"]
+# The push bridge exists on Android only; elsewhere the name stands for nothing.
+messenger = ["dep:messenger-core", "dep:messenger-runtime", "dep:rustls", "dep:tauri-plugin-veydan-push"]
 
 # ── Desktop only: browser, proxies, SSH/SFTP, backup, tray, updater ──────────
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
@@ -103,6 +104,10 @@ tauri-plugin-fs = "2"
 # ContentResolver queries for picked files (display name, size).
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+# Push notifications of the messenger: token, permission, showing a push
+# while the app is not running. Compiled in with the `messenger` feature only,
+# so a build without the messenger has no Firebase in it.
+tauri-plugin-veydan-push = { path = "crates/tauri-plugin-veydan-push", optional = true }
 
 # Linux-only: native GTK signal for reliable minimize-to-tray detection
 # (Tauri's WindowEvent::Resized / is_minimized() are unreliable on GTK/Wayland).

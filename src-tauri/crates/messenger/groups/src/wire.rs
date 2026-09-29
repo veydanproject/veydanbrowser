@@ -17,6 +17,7 @@ use crate::op::{KeyId, Op};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use messenger_core::outbound::WireEvent;
 use messenger_core::{EventId, MessengerError, PubKey, Result};
+use messenger_dm::pushtags;
 use nostr::key::Keys;
 use nostr::nips::nip44;
 use nostr::prelude::*;
@@ -163,24 +164,44 @@ fn verify_message(signed: &serde_json::Value, group_id: &str) -> Result<InnerMes
 
 /// Seal a payload with the group key into an event for the relay, signed
 /// by a key that is used once and thrown away.
-pub fn seal(group_id: &str, key: &GroupKey, payload: &Payload, created_at: i64) -> Result<WireEvent> {
+///
+/// `author` signs nothing here. It makes the mark by which the author's push
+/// server tells the author's events from the others; `quiet` says the event
+/// is not worth a push to anybody. See `messenger_dm::pushtags`.
+pub fn seal(
+    group_id: &str,
+    key: &GroupKey,
+    payload: &Payload,
+    created_at: i64,
+    author: &Keys,
+    quiet: bool,
+) -> Result<WireEvent> {
     let sealed = key.seal(serde_json::to_string(payload)?.as_bytes())?;
-    let event = EventBuilder::new(Kind::from(KIND_GROUP_EVENT), sealed)
+    let once = Keys::generate();
+    let mut builder = EventBuilder::new(Kind::from(KIND_GROUP_EVENT), sealed)
         .tag(Tag::parse(["h", group_id]).map_err(crypto)?)
         .tag(Tag::parse(["k", key.id().0.as_str()]).map_err(crypto)?)
-        .custom_created_at(Timestamp::from_secs(created_at.max(0) as u64))
-        .finalize(&Keys::generate())
-        .map_err(crypto)?;
-    wire(&event)
+        .tag(pushtags::author_tag(author, &once.public_key())?)
+        .custom_created_at(Timestamp::from_secs(created_at.max(0) as u64));
+    if quiet {
+        builder = builder.tag(pushtags::silent_tag()?);
+    }
+    wire(&builder.finalize(&once).map_err(crypto)?)
 }
 
-pub fn seal_message(group_id: &str, key: &GroupKey, signed: &Event) -> Result<WireEvent> {
+pub fn seal_message(group_id: &str, key: &GroupKey, signed: &Event, author: &Keys) -> Result<WireEvent> {
     let payload = Payload { v: PAYLOAD_VERSION, t: "msg".into(), event: serde_json::to_value(signed)?, envelopes: vec![], keys: vec![] };
-    seal(group_id, key, &payload, signed.created_at.as_secs() as i64)
+    seal(group_id, key, &payload, signed.created_at.as_secs() as i64, author, false)
 }
 
 /// Older keys for the holders of a newer one.
-pub fn seal_chain(group_id: &str, key: &GroupKey, older: &[GroupKey], created_at: i64) -> Result<WireEvent> {
+pub fn seal_chain(
+    group_id: &str,
+    key: &GroupKey,
+    older: &[GroupKey],
+    created_at: i64,
+    author: &Keys,
+) -> Result<WireEvent> {
     let payload = Payload {
         v: PAYLOAD_VERSION,
         t: "chain".into(),
@@ -188,12 +209,18 @@ pub fn seal_chain(group_id: &str, key: &GroupKey, older: &[GroupKey], created_at
         envelopes: vec![],
         keys: encode_keys(older),
     };
-    seal(group_id, key, &payload, created_at)
+    seal(group_id, key, &payload, created_at, author, true)
 }
 
-pub fn seal_op(group_id: &str, key: &GroupKey, signed: &Event, envelopes: Vec<SecretEnvelope>) -> Result<WireEvent> {
+pub fn seal_op(
+    group_id: &str,
+    key: &GroupKey,
+    signed: &Event,
+    envelopes: Vec<SecretEnvelope>,
+    author: &Keys,
+) -> Result<WireEvent> {
     let payload = Payload { v: PAYLOAD_VERSION, t: "op".into(), event: serde_json::to_value(signed)?, envelopes, keys: vec![] };
-    seal(group_id, key, &payload, signed.created_at.as_secs() as i64)
+    seal(group_id, key, &payload, signed.created_at.as_secs() as i64, author, true)
 }
 
 /// Open the content of a group event and verify what is inside.
@@ -350,11 +377,12 @@ mod tests {
         let alice = Keys::generate();
         let key = GroupKey::generate().unwrap();
         let signed = sign_message(&alice, GID, r#"{"v":1,"t":"text","text":"secret words"}"#, 1_700_000_000, None).unwrap();
-        let a = seal_message(GID, &key, &signed).unwrap();
-        let b = seal_message(GID, &key, &signed).unwrap();
+        let a = seal_message(GID, &key, &signed, &alice).unwrap();
+        let b = seal_message(GID, &key, &signed, &alice).unwrap();
         let text = a.json.to_string();
         assert!(!text.contains(&alice.public_key().to_hex()), "the author is not on the outside");
         assert!(!text.contains("secret words"));
+        assert!(!text.contains(&pushtags::author_key(&alice)), "neither is the key of the author's marks");
         assert_ne!(a.json["pubkey"], b.json["pubkey"], "a new throw-away signer every time");
         assert_eq!(a.json["kind"], 9);
         let tags = a.json["tags"].as_array().unwrap();
@@ -401,7 +429,7 @@ mod tests {
         assert!(verify_op(&serde_json::to_value(&spaced).unwrap(), GID).is_err());
 
         let envelope = envelope_for(&alice, &me(&mallory), key.as_bytes()).unwrap();
-        let sealed = seal_op(GID, &key, &signed, vec![envelope]).unwrap();
+        let sealed = seal_op(GID, &key, &signed, vec![envelope], &alice).unwrap();
         match open(GID, &key, sealed.json["content"].as_str().unwrap()).unwrap() {
             Opened::Op { op: got, envelopes, .. } => {
                 assert_eq!(got, op);
@@ -409,6 +437,53 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    fn outer_tag(w: &WireEvent, name: &str) -> Option<String> {
+        w.json["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t[0] == name)
+            .map(|t| t[1].as_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn a_message_is_worth_a_push_and_what_serves_the_group_is_not() {
+        let alice = Keys::generate();
+        let key = GroupKey::generate().unwrap();
+        let signed = sign_message(&alice, GID, r#"{"v":1,"t":"text","text":"hi"}"#, 1_700_000_000, None).unwrap();
+        let message = seal_message(GID, &key, &signed, &alice).unwrap();
+        assert_eq!(outer_tag(&message, "silent"), None);
+
+        let op = Op::new(GID, &me(&alice), vec![crate::op::OpId("p".into())], 5, OpBody::RotateKey).with_key(key.id());
+        let sealed_op = seal_op(GID, &key, &sign_op(&alice, &op).unwrap(), vec![], &alice).unwrap();
+        assert_eq!(outer_tag(&sealed_op, "silent").as_deref(), Some("1"));
+
+        let chain = seal_chain(GID, &key, &[GroupKey::generate().unwrap()], 1_700_000_000, &alice).unwrap();
+        assert_eq!(outer_tag(&chain, "silent").as_deref(), Some("1"));
+
+        // The tags changed nothing inside.
+        assert!(matches!(open(GID, &key, message.json["content"].as_str().unwrap()).unwrap(), Opened::Message(_)));
+        assert!(matches!(open(GID, &key, sealed_op.json["content"].as_str().unwrap()).unwrap(), Opened::Op { .. }));
+    }
+
+    #[test]
+    fn the_author_is_recognized_by_the_holder_of_the_authors_mark_key_only() {
+        let (alice, bob) = (Keys::generate(), Keys::generate());
+        let key = GroupKey::generate().unwrap();
+        let signed = sign_message(&alice, GID, r#"{"v":1,"t":"text","text":"hi"}"#, 1_700_000_000, None).unwrap();
+        let sealed = seal_message(GID, &key, &signed, &alice).unwrap();
+
+        let mark = outer_tag(&sealed, "vp").unwrap();
+        let signer = sealed.json["pubkey"].as_str().unwrap();
+        assert_eq!(pushtags::author_mark(&pushtags::author_key(&alice), signer).unwrap(), mark);
+        assert_ne!(pushtags::author_mark(&pushtags::author_key(&bob), signer).unwrap(), mark);
+
+        // Every event has a mark, and no two are alike: a mark says nothing
+        // to the one who cannot check it.
+        let again = seal_message(GID, &key, &signed, &alice).unwrap();
+        assert_ne!(outer_tag(&again, "vp").unwrap(), mark);
     }
 
     #[test]

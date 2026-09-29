@@ -11,7 +11,7 @@ use crate::relationship::{
     ScreenMode, Signal, SystemLine,
 };
 use crate::service::{DmService, UI_EVENT_DM_MESSAGE};
-use crate::wrap::wrap;
+use crate::wrap::{wrap_as, Wake};
 use messenger_core::traits::UiEvent;
 use messenger_core::{Effect, Envelope, MessengerError, Outbound, PubKey, Result};
 use messenger_store::chats;
@@ -171,7 +171,8 @@ impl DmService {
                 _ => now,
             }
         };
-        let w = wrap(keys, peer, &content, at, None)?;
+        // A signal between the two apps: nobody is woken for it.
+        let w = wrap_as(keys, peer, &content, at, None, Wake::Nobody)?;
         repo::insert(
             &self.store,
             &NewMessage {

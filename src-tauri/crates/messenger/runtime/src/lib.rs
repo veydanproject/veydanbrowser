@@ -17,6 +17,7 @@ pub mod bindings;
 pub mod groups;
 pub mod links;
 pub mod preview;
+pub mod push;
 pub mod relays;
 pub mod session;
 pub mod shared;

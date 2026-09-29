@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="veydan_push_channel_dm">Direct messages</string>
+    <string name="veydan_push_channel_groups">Groups</string>
+    <string name="veydan_push_channel_service">Service messages</string>
+    <string name="veydan_push_update_title">New notification</string>
+    <string name="veydan_push_update_body">Update the app to see it.</string>
+</resources>

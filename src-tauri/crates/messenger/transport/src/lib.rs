@@ -14,7 +14,7 @@
 pub mod manifest;
 pub mod pool;
 
-pub use manifest::{Manifest, ManifestMedia, ManifestRelay, RelayChanges, EMBEDDED_MANIFEST_JSON};
+pub use manifest::{Manifest, ManifestMedia, ManifestPush, ManifestRelay, RelayChanges, EMBEDDED_MANIFEST_JSON};
 pub use pool::{RelayConfig, RelayPool};
 
 /// Make sure the process has a TLS crypto provider. More than one rustls

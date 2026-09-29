@@ -398,6 +398,84 @@ export interface MessengerManifestInfo {
 /** Event name: payload is `MessengerRelay[]`. */
 export const RELAY_STATUS_EVENT = 'messenger://relay-status';
 
+export type PushPermission = 'granted' | 'denied' | 'prompt' | 'prompt-with-rationale';
+
+/** What the phone says about pushes. */
+export interface MessengerPushDevice {
+  /** False on a desktop: there is no push service to talk to. */
+  supported: boolean;
+  /** False when this phone cannot receive pushes; `reason` says why. */
+  available: boolean;
+  /** 'no_firebase_config' | 'no_play_services' | 'token_failed' */
+  reason: string | null;
+  detail: string | null;
+  permission: PushPermission | null;
+}
+
+/** `unknown` is a word of a newer server. */
+export type PushRelayStatus =
+  | 'ok' | 'pending' | 'not_allowed' | 'invalid' | 'restricted' | 'unreachable' | 'unknown';
+
+/** What the push server does with a relay of the user. */
+export interface MessengerPushRelay {
+  url: string;
+  status: PushRelayStatus;
+  detail?: string | null;
+}
+
+export type PushStateName =
+  | 'off' | 'paused' | 'waiting_unlock' | 'no_channel' | 'no_server'
+  | 'pending' | 'registered' | 'failed';
+
+/** Where pushes stand with the push server. */
+export interface MessengerPushStatus {
+  /** The user agreed to pushes. */
+  enabled: boolean;
+  /** The user was asked, whatever the answer. */
+  offered: boolean;
+  server: string | null;
+  /** The server was named by the user, not by the manifest. */
+  server_custom: boolean;
+  dm: boolean;
+  groups: boolean;
+  state: PushStateName;
+  /** Unix seconds. */
+  last_ok_at: number | null;
+  expires_at: number | null;
+  /** `push_unreachable: …`, `push_refused_<code>: … (request <id>)` */
+  error: string | null;
+  relays: MessengerPushRelay[];
+}
+
+export interface MessengerPushView {
+  device: MessengerPushDevice;
+  status: MessengerPushStatus;
+}
+
+/** What the push service answered to a test push. */
+export interface MessengerPushTest {
+  /** 'delivered' | 'dead_token' | 'rejected' | 'retry' */
+  outcome: string;
+  /** Id of the push in the server's log. */
+  trace: string;
+}
+
+/** The server's word in `push_refused_<code>`, or the kind of failure. */
+export function pushErrorCode(e: unknown): string | null {
+  const m = /\bpush_[a-z_]+\b/.exec(messengerError(e));
+  return m ? m[0] : null;
+}
+
+/** A notification the user tapped. */
+export interface MessengerPushTap {
+  type: string;
+  /** `group:<id>`, or null: a direct message names no chat. */
+  chat: string | null;
+}
+
+/** Event name, no payload: ask `push.takeTap()`. */
+export const PUSH_TAP_EVENT = 'messenger://push-tap';
+
 export interface MessengerStatus {
   /** False when the host binary was built without the `messenger` feature. */
   compiled: boolean;
@@ -443,6 +521,13 @@ let mockRelays: MessengerRelay[] = [
   { url: 'wss://relay.damus.io', relay_id: 'pub-damus', source: 'manifest', regions: ['default'], read: true, write: true, enabled: true, auth_type: 'api_key', state: 'connected' },
   { url: 'wss://nos.lol', relay_id: 'pub-nos', source: 'manifest', regions: ['default'], read: true, write: true, enabled: false, auth_type: null, state: 'disconnected' },
 ];
+let mockPush: MessengerPushView = {
+  device: { supported: true, available: true, reason: null, detail: null, permission: 'prompt' },
+  status: {
+    enabled: false, offered: false, server: 'https://vpush.veydan.net', server_custom: false,
+    dm: true, groups: true, state: 'off', last_ok_at: null, expires_at: null, error: null, relays: [],
+  },
+};
 let mockSilent = false;
 let mockRegion = 'default';
 let mockContacts: MessengerContact[] = demo?.contacts ?? [];
@@ -761,6 +846,44 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   },
   messenger_identity_export: () => 'ncryptsec1devbackupdevbackupdevbackup',
   messenger_identity_delete: () => { mockIdentity = null; },
+  // In the browser the phone is played: the panel can be looked at and clicked through.
+  messenger_push_status: (): MessengerPushView => mockPush,
+  messenger_push_set_enabled: (a): MessengerPushView => {
+    const on = Boolean(a?.enabled);
+    const now = Math.floor(Date.now() / 1000);
+    mockPush = {
+      device: { ...mockPush.device, permission: on ? 'granted' : mockPush.device.permission },
+      status: {
+        ...mockPush.status, enabled: on, offered: true,
+        state: on ? 'registered' : 'off',
+        last_ok_at: on ? now : null,
+        expires_at: on ? now + 30 * 86400 : null,
+        relays: on
+          ? [
+              { url: 'wss://node-1.veydan.net', status: 'ok' },
+              { url: 'wss://nos.lol', status: 'pending' },
+              { url: 'wss://relay.example.org', status: 'not_allowed', detail: 'this server does not watch this relay' },
+            ]
+          : [],
+      },
+    };
+    return mockPush;
+  },
+  messenger_push_mark_offered: () => { mockPush = { ...mockPush, status: { ...mockPush.status, offered: true } }; },
+  messenger_push_set_server: (a): MessengerPushView => {
+    const url = a?.url ? String(a.url) : null;
+    mockPush = { ...mockPush, status: { ...mockPush.status, server: url ?? 'https://vpush.veydan.net', server_custom: Boolean(url) } };
+    return mockPush;
+  },
+  messenger_push_set_prefs: (a): MessengerPushView => {
+    mockPush = { ...mockPush, status: { ...mockPush.status, dm: Boolean(a?.dm), groups: Boolean(a?.groups) } };
+    return mockPush;
+  },
+  messenger_push_set_locale: () => undefined,
+  messenger_push_refresh: (): MessengerPushView => mockPush,
+  messenger_push_test: (): MessengerPushTest => ({ outcome: 'delivered', trace: '5f3a9c1e' }),
+  messenger_push_take_tap: () => null,
+  messenger_push_clear: () => undefined,
 };
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -812,6 +935,28 @@ export const messengerApi = {
     contact: (pubkey: string) => invoke<string>('messenger_contact_link', { pubkey }),
     /** Asks the page: only when the user said so. */
     preview: (url: ExternalUrl) => invoke<LinkPreview>('messenger_link_preview', { url }),
+  },
+
+  push: {
+    /** Asks nothing of the push service or the push server. */
+    status: () => invoke<MessengerPushView>('messenger_push_status'),
+    /**
+     * On: the permission is asked for, then the phone's address at the push
+     * service, then the push server is told. What failed is in the answer.
+     * Off: the registration is taken back.
+     */
+    setEnabled: (enabled: boolean) => invoke<MessengerPushView>('messenger_push_set_enabled', { enabled }),
+    /** The user was asked and said "not now". */
+    markOffered: () => invoke<void>('messenger_push_mark_offered'),
+    /** Nothing goes back to the server of the manifest. */
+    setServer: (url: string | null) => invoke<MessengerPushView>('messenger_push_set_server', { url }),
+    setPrefs: (dm: boolean, groups: boolean) => invoke<MessengerPushView>('messenger_push_set_prefs', { dm, groups }),
+    setLocale: (locale: string) => invoke<void>('messenger_push_set_locale', { locale }),
+    refresh: () => invoke<MessengerPushView>('messenger_push_refresh'),
+    test: () => invoke<MessengerPushTest>('messenger_push_test'),
+    takeTap: () => invoke<MessengerPushTap | null>('messenger_push_take_tap'),
+    /** `dm`, `group:<id>`, or nothing for every notification about messages. */
+    clear: (key?: string) => invoke<void>('messenger_push_clear', { key: key ?? null }),
   },
 
   relays: {

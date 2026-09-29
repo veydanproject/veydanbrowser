@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="veydan_push_channel_dm">Личные сообщения</string>
+    <string name="veydan_push_channel_groups">Группы</string>
+    <string name="veydan_push_channel_service">Служебные сообщения</string>
+    <string name="veydan_push_update_title">Новое уведомление</string>
+    <string name="veydan_push_update_body">Обновите приложение, чтобы его увидеть.</string>
+</resources>

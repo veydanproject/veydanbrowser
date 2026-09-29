@@ -17,6 +17,7 @@ pub mod relations;
 pub mod relationship;
 pub mod service;
 pub mod view;
+pub mod pushtags;
 pub mod wrap;
 
 pub use handler::{DmHandler, DmRoutesHandler, UI_EVENT_CHATS_UPDATED, UI_EVENT_DM_MESSAGE, UI_EVENT_DM_UPDATED};

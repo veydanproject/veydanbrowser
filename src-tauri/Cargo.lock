@@ -3650,12 +3650,15 @@ name = "messenger-dm"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hex",
+ "hmac 0.13.0",
  "messenger-contacts",
  "messenger-core",
  "messenger-store",
  "nostr",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -3760,12 +3763,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "messenger-push"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.3.4",
+ "hex",
+ "messenger-core",
+ "messenger-http",
+ "nostr",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "messenger-runtime"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "getrandom 0.3.4",
+ "hex",
  "messenger-contacts",
  "messenger-core",
  "messenger-dm",
@@ -3775,11 +3795,13 @@ dependencies = [
  "messenger-links",
  "messenger-media",
  "messenger-preview",
+ "messenger-push",
  "messenger-store",
  "messenger-transport",
  "nostr",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tokio",
  "ts-rs",
 ]
@@ -6960,6 +6982,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-veydan-push"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "tauri-runtime"
 version = "2.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7920,6 +7953,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tauri-plugin-veydan-push",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

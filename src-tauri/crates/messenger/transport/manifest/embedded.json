@@ -26,5 +26,8 @@
       "regions": ["default", "ru"]
     }
   ],
-  "sources": []
+  "sources": [],
+  "push": [
+    { "id": "veydan-vpush", "url": "https://vpush.veydan.net", "regions": ["*"] }
+  ]
 }

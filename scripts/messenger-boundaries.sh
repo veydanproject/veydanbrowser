@@ -34,7 +34,8 @@ allowed() {
     dm)        echo "messenger-core messenger-store messenger-contacts" ;;
     media)     echo "messenger-core messenger-store messenger-http" ;;
     groups)    echo "messenger-core messenger-store messenger-media messenger-dm messenger-links" ;;
-    runtime)   echo "messenger-core messenger-store messenger-transport messenger-identity messenger-ingress messenger-contacts messenger-dm messenger-media messenger-groups messenger-links messenger-preview" ;;
+    push)      echo "messenger-core messenger-http" ;;
+    runtime)   echo "messenger-core messenger-store messenger-transport messenger-identity messenger-ingress messenger-contacts messenger-dm messenger-media messenger-groups messenger-links messenger-preview messenger-push" ;;
     testkit)   echo "messenger-core messenger-store messenger-runtime" ;;
     *)         echo "__unknown__" ;;
   esac
