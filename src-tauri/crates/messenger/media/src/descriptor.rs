@@ -27,6 +27,7 @@ pub const ALGO: &str = "aes-256-gcm";
 /// descriptor must fit a message).
 pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub const MAX_CHUNKS: usize = 4096;
+pub const MAX_WAVEFORM: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +36,10 @@ pub enum MediaKind {
     Video,
     Audio,
     File,
+    /// A voice message recorded in the app.
+    Voice,
+    /// A short round video recorded in the app.
+    Circle,
 }
 
 impl MediaKind {
@@ -47,12 +52,26 @@ impl MediaKind {
         }
     }
 
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "image" => Self::Image,
+            "video" => Self::Video,
+            "audio" => Self::Audio,
+            "file" => Self::File,
+            "voice" => Self::Voice,
+            "circle" => Self::Circle,
+            _ => return None,
+        })
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Image => "image",
             Self::Video => "video",
             Self::Audio => "audio",
             Self::File => "file",
+            Self::Voice => "voice",
+            Self::Circle => "circle",
         }
     }
 }
@@ -88,6 +107,12 @@ pub struct MediaDescriptor {
     pub batch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dim: Option<(u32, u32)>,
+    /// Length of a recording in milliseconds (voice, circle, audio, video).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Loudness outline of a voice message: up to 64 values, 0..=255.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waveform: Option<Vec<u8>>,
 }
 
 impl MediaDescriptor {
@@ -133,6 +158,12 @@ impl MediaDescriptor {
         }
         if !self.servers.iter().all(|s| s.starts_with("https://") || s.starts_with("http://")) {
             return bad("servers must be http(s)");
+        }
+        if self.waveform.as_ref().is_some_and(|w| w.len() > MAX_WAVEFORM) {
+            return bad("waveform is too long");
+        }
+        if self.duration_ms.is_some_and(|d| d > 24 * 3600 * 1000) {
+            return bad("duration out of range");
         }
         self.file_key()?;
         if safe_name(&self.name) != self.name {
@@ -216,6 +247,7 @@ pub fn mime_for(name: &str) -> &'static str {
         "ogg" | "oga" | "opus" => "audio/ogg",
         "wav" => "audio/wav",
         "m4a" => "audio/mp4",
+        "weba" => "audio/webm",
         "flac" => "audio/flac",
         "pdf" => "application/pdf",
         "zip" => "application/zip",
@@ -226,7 +258,7 @@ pub fn mime_for(name: &str) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn sample() -> MediaDescriptor {
@@ -245,6 +277,8 @@ mod tests {
             caption: Some("look".into()),
             batch: None,
             dim: Some((1280, 720)),
+            duration_ms: None,
+            waveform: None,
         };
         d.set_key(&FileKey { key: [1; 32], base_nonce: [2; 12] });
         d
@@ -283,6 +317,7 @@ mod tests {
             ("key", Box::new(|d| d.key = "AAAA".into())),
             ("path name", Box::new(|d| d.name = "../../etc/passwd".into())),
             ("hidden name", Box::new(|d| d.name = ".bashrc".into())),
+            ("waveform", Box::new(|d| d.waveform = Some(vec![1; MAX_WAVEFORM + 1]))),
         ];
         for (what, change) in cases {
             let mut d = ok.clone();
@@ -305,5 +340,28 @@ mod tests {
         assert_eq!(mime_for("noext"), "application/octet-stream");
         assert_eq!(MediaKind::from_mime("video/mp4"), MediaKind::Video);
         assert_eq!(MediaKind::from_mime("application/pdf"), MediaKind::File);
+    }
+}
+
+#[cfg(test)]
+mod recording_tests {
+    use super::tests::sample;
+    use super::*;
+
+    #[test]
+    fn voice_fields_round_trip_and_stay_out_of_plain_files() {
+        let mut d = sample();
+        assert!(!d.to_envelope().encode().contains("duration_ms"), "absent fields are not written");
+        d.kind = MediaKind::Voice;
+        d.mime = "audio/webm".into();
+        d.name = "voice.weba".into();
+        d.duration_ms = Some(4200);
+        d.waveform = Some(vec![0, 40, 255, 12]);
+        d.validate().unwrap();
+        let back = MediaDescriptor::from_envelope(&Envelope::parse(&d.to_envelope().encode()).unwrap()).unwrap();
+        assert_eq!(back, d);
+        assert_eq!(MediaKind::parse("circle"), Some(MediaKind::Circle));
+        assert_eq!(MediaKind::parse("hologram"), None);
+        assert_eq!(mime_for("v.weba"), "audio/webm");
     }
 }

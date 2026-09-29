@@ -196,6 +196,8 @@ where
         caption: params.caption.filter(|c| !c.trim().is_empty()),
         batch: params.batch,
         dim: None,
+        duration_ms: None,
+        waveform: None,
     };
     descriptor.set_key(&key);
     Ok(UploadOutcome::Done(Box::new(descriptor)))
