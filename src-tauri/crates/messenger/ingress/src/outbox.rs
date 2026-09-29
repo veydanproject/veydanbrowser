@@ -14,6 +14,8 @@ use std::sync::Arc;
 const BACKOFF_SECS: [i64; 5] = [5, 15, 30, 60, 120];
 /// A `publishing` row older than this is considered abandoned (crash mid-send).
 const STALE_PUBLISHING_SECS: i64 = 60;
+/// How many outbox items are published at the same time.
+const PUMP_CONCURRENCY: usize = 8;
 
 pub fn retry_delay(attempts: i64) -> i64 {
     let i = attempts.clamp(0, BACKOFF_SECS.len() as i64 - 1) as usize;
@@ -24,6 +26,8 @@ pub fn retry_delay(attempts: i64) -> i64 {
 pub struct Outbox {
     store: Store,
     clock: Arc<dyn Clock>,
+    /// Wakes the background pump when something was queued.
+    kick: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -34,7 +38,18 @@ pub struct PumpReport {
 
 impl Outbox {
     pub fn new(store: Store, clock: Arc<dyn Clock>) -> Self {
-        Self { store, clock }
+        Self { store, clock, kick: Arc::new(tokio::sync::Notify::new()) }
+    }
+
+    /// Ask the background pump to run now. Callers do not wait for relays:
+    /// what they queued is already stored.
+    pub fn kick(&self) {
+        self.kick.notify_one();
+    }
+
+    /// Resolves when `kick` was called (at once if it already was).
+    pub async fn kicked(&self) {
+        self.kick.notified().await;
     }
 
     /// Persist and return the local id (a uuid-like random hex string).
@@ -46,42 +61,53 @@ impl Outbox {
 
     /// Send everything due. Never fails on a single item; the report says
     /// how many went through.
+    ///
+    /// Items go out concurrently (a message, its self-copy and a control
+    /// signal do not wait for each other), a few at a time.
     pub async fn pump(&self, transport: &dyn Transport) -> Result<PumpReport> {
         let now = self.clock.now().secs();
         let due = repo::due(&self.store, now, STALE_PUBLISHING_SECS).await?;
         let mut report = PumpReport::default();
-        for row in due {
-            let out = match row.outbound() {
-                Ok(o) => o,
-                Err(e) => {
-                    repo::mark_failed(&self.store, &row.local_id, &format!("corrupt: {e}"), i64::MAX / 2).await?;
-                    report.failed += 1;
-                    continue;
-                }
-            };
-            repo::mark_publishing(&self.store, &row.local_id).await?;
-            let outcome = match transport.send(out).await {
-                Ok(ack) if ack.is_delivered() || is_non_publish(&row) => Ok(()),
-                Ok(ack) => Err(MessengerError::Transport(format!(
-                    "no relay accepted ({} rejected)",
-                    ack.rejected_by.len()
-                ))),
-                Err(e) => Err(e),
-            };
-            match outcome {
-                Ok(()) => {
-                    repo::mark_published(&self.store, &row.local_id).await?;
+        for batch in due.chunks(PUMP_CONCURRENCY) {
+            let results = futures_util::future::join_all(batch.iter().map(|row| self.pump_one(transport, row, now))).await;
+            for r in results {
+                if r? {
                     report.published += 1;
-                }
-                Err(e) => {
-                    // Backoff grows with the failures so far: 1st failure waits 5 s.
-                    let next = now + retry_delay(row.attempts);
-                    repo::mark_failed(&self.store, &row.local_id, &e.to_string(), next).await?;
+                } else {
                     report.failed += 1;
                 }
             }
         }
         Ok(report)
+    }
+
+    /// `Ok(true)` published, `Ok(false)` failed and rescheduled.
+    async fn pump_one(&self, transport: &dyn Transport, row: &repo::OutboxRow, now: i64) -> Result<bool> {
+        let out = match row.outbound() {
+            Ok(o) => o,
+            Err(e) => {
+                repo::mark_failed(&self.store, &row.local_id, &format!("corrupt: {e}"), i64::MAX / 2).await?;
+                return Ok(false);
+            }
+        };
+        repo::mark_publishing(&self.store, &row.local_id).await?;
+        let outcome = match transport.send(out).await {
+            Ok(ack) if ack.is_delivered() || is_non_publish(row) => Ok(()),
+            Ok(ack) => Err(MessengerError::Transport(format!("no relay accepted ({} rejected)", ack.rejected_by.len()))),
+            Err(e) => Err(e),
+        };
+        match outcome {
+            Ok(()) => {
+                repo::mark_published(&self.store, &row.local_id).await?;
+                Ok(true)
+            }
+            Err(e) => {
+                // Backoff grows with the failures so far: 1st failure waits 5 s.
+                let next = now + retry_delay(row.attempts);
+                repo::mark_failed(&self.store, &row.local_id, &e.to_string(), next).await?;
+                Ok(false)
+            }
+        }
     }
 
     pub async fn retry_now(&self, local_id: &str) -> Result<()> {

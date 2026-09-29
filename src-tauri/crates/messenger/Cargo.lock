@@ -1469,6 +1469,7 @@ name = "messenger-ingress"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-util",
  "messenger-core",
  "messenger-identity",
  "messenger-store",
