@@ -345,6 +345,8 @@ pub fn apply_peer_signal(r: &Relationship, signal: Signal, at: i64, live: bool) 
         None
     } else {
         match target {
+            // Re-approval after a block or a pause is not news.
+            P::Approved if r.my_contact == MyContact::Approved && r.was_ever_mutual => None,
             P::Approved if r.my_contact == MyContact::Approved => Some(SystemLine::RequestAccepted),
             P::Approved => Some(SystemLine::RequestReceived),
             P::Declined => Some(SystemLine::RequestDeclined),

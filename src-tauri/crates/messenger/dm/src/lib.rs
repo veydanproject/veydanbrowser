@@ -12,6 +12,7 @@
 //! - `view`: what the host shows.
 
 pub mod handler;
+pub mod media;
 pub mod relations;
 pub mod relationship;
 pub mod service;

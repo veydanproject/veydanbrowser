@@ -586,7 +586,12 @@ impl DmService {
             }
         }
 
-        let line = text.as_deref().map(preview).unwrap_or_else(|| format!("[{content_type}]"));
+        let line = if content_type == repo::CT_MEDIA {
+            let name = envelope.str_field("name").unwrap_or("file");
+            format!("📎 {}", text.as_deref().map(preview).unwrap_or_else(|| name.to_string()))
+        } else {
+            text.as_deref().map(preview).unwrap_or_else(|| format!("[{content_type}]"))
+        };
         let live_incoming = !from_me && !historical;
         let floor = self.unread_floor.load(Ordering::SeqCst);
         let counts_unread = !from_me && (live_incoming || (floor >= 0 && msg.created_at.secs() >= floor));
@@ -1320,5 +1325,60 @@ mod tests {
             Outbound::PublishOwn { event } => Some(event),
             _ => None,
         }).unwrap()).await.is_empty());
+    }
+
+    // ─── Stage 6: attachments ───────────────────────────────────────────────
+
+    fn media_fields(name: &str) -> serde_json::Value {
+        serde_json::json!({ "name": name, "mime": "image/png", "size": 10, "kind": "image" })
+    }
+
+    #[tokio::test]
+    async fn placeholder_becomes_a_message_and_reaches_the_peer() {
+        let (alice, bob) = mutual().await;
+        let ph = alice.dm.media_placeholder(&alice.keys, &bob.pk(), media_fields("cat.png"), Some(" look ")).await.unwrap();
+        assert!(ph.id.starts_with("local:"));
+        assert_eq!(ph.status, "uploading");
+        assert_eq!(ph.text.as_deref(), Some("look"));
+        assert_eq!(ph.media.as_ref().unwrap()["name"], "cat.png");
+        assert_eq!(alice.dm.open_chat(&bob.pk()).await.unwrap().last_preview.as_deref(), Some("📎 cat.png"));
+
+        let envelope = Envelope::new("media").with("name", "cat.png").with("caption", "look").with("key", "k");
+        let mut local = media_fields("cat.png");
+        local["local_path"] = "/home/a/cat.png".into();
+        let p = alice.dm.media_finish(&alice.keys, &ph.id, envelope, local).await.unwrap();
+        assert!(alice.dm.message(&ph.id).await.unwrap().is_none(), "placeholder is gone");
+        assert_eq!(p.message.content_type, "media");
+        assert_eq!(p.message.status, "queued");
+        assert_eq!(p.message.media.as_ref().unwrap()["local_path"], "/home/a/cat.png");
+
+        let fx = bob.receive(&peer_event(&p)).await;
+        assert!(names(&fx).contains(&"dm.message".to_string()));
+        let chat = bob.dm.open_chat(&alice.pk()).await.unwrap();
+        let got = bob.dm.messages(&chat.id, None, 50).await.unwrap().pop().unwrap();
+        assert_eq!(got.content_type, "media");
+        assert_eq!(got.text.as_deref(), Some("look"), "caption is the text");
+        assert_eq!(got.media.as_ref().unwrap()["key"], "k");
+        assert!(got.media.as_ref().unwrap().get("local_path").is_none(), "paths never travel");
+
+        bob.dm.media_set_local_path(&got.id, "/cache/cat.png").await.unwrap();
+        assert_eq!(bob.dm.message(&got.id).await.unwrap().unwrap().media.unwrap()["local_path"], "/cache/cat.png");
+    }
+
+    #[tokio::test]
+    async fn media_is_refused_as_a_first_message_and_discard_cleans_up() {
+        let alice = gated().await;
+        let bob = gated().await;
+        let err = alice.dm.media_placeholder(&alice.keys, &bob.pk(), media_fields("a.png"), None).await.unwrap_err();
+        assert_eq!(reason(err), "dm_first_message_must_be_text");
+
+        let (alice, bob) = mutual().await;
+        let ph = alice.dm.media_placeholder(&alice.keys, &bob.pk(), media_fields("a.png"), None).await.unwrap();
+        assert!(alice.dm.media_discard("not-a-placeholder").await.is_ok());
+        let real = alice.dm.prepare_text(&alice.keys, &bob.pk(), "text", None).await.unwrap();
+        assert!(alice.dm.media_discard(&real.message.id).await.is_err(), "only placeholders can be discarded");
+        alice.dm.media_discard(&ph.id).await.unwrap();
+        assert!(alice.dm.message(&ph.id).await.unwrap().is_none());
+        assert_eq!(alice.dm.open_chat(&bob.pk()).await.unwrap().last_preview.as_deref(), Some("text"));
     }
 }
