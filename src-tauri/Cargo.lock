@@ -3684,15 +3684,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "messenger-media"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "async-trait",
+ "base64 0.22.1",
+ "getrandom 0.3.4",
+ "hex",
+ "hmac 0.13.0",
+ "messenger-core",
+ "messenger-store",
+ "nostr",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+]
+
+[[package]]
 name = "messenger-runtime"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "messenger-contacts",
  "messenger-core",
  "messenger-dm",
  "messenger-identity",
  "messenger-ingress",
+ "messenger-media",
  "messenger-store",
  "messenger-transport",
  "nostr",
@@ -7758,7 +7780,7 @@ dependencies = [
 
 [[package]]
 name = "veydanspace"
-version = "4.0.1-alpha.6"
+version = "4.0.1-alpha.7"
 dependencies = [
  "age",
  "anyhow",

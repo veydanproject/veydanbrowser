@@ -503,6 +503,34 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_blocked,
             #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_servers,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_server_put,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_server_remove,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_server_set_enabled,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_server_check,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_send_file,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_download,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_transfer,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_pause,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_resume,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_cancel,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_save_as,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_data_url,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_local_path,
+            #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_get,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_request,
@@ -1021,6 +1049,34 @@ fn run_desktop() {
             commands::messenger::messenger_dm_action,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_blocked,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_servers,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_server_put,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_server_remove,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_server_set_enabled,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_server_check,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_send_file,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_download,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_transfer,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_pause,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_resume,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_cancel,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_save_as,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_data_url,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_local_path,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_get,
             #[cfg(feature = "messenger")]
