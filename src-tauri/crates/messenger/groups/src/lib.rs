@@ -18,12 +18,22 @@
 //! Signatures are checked where operations enter (the wire layer); here an
 //! operation's `author` is already known to be genuine.
 
+pub mod keys;
 pub mod log;
 pub mod op;
 pub mod roles;
+pub mod handler;
+pub mod inbound;
+#[cfg(test)]
+mod scenarios;
+pub mod service;
 pub mod state;
+pub mod wire;
 
+pub use keys::{GroupKey, GroupLink, LinkSecret};
 pub use log::{Insert, KeyStatus, OpLog};
 pub use op::{GroupKind, KeyId, Op, OpBody, OpId};
 pub use roles::{permits, Action, Role};
+pub use handler::{GroupDmHandler, GroupHandler, Signal, Signals};
+pub use service::{GroupService, GroupView, InviteView, MemberView, Outcome};
 pub use state::{GroupState, Member, Rejection};
