@@ -3,11 +3,15 @@
 //! The binary crate only parses the command line; everything it runs is here.
 
 pub mod admin;
+pub mod auth;
 pub mod api;
 pub mod config;
 pub mod delivery;
 pub mod logging;
+pub mod relays;
 pub mod serve;
+pub mod store;
+pub mod texts;
 pub mod version;
 
 pub use config::Config;

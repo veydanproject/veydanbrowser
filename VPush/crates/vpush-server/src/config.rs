@@ -30,6 +30,77 @@ pub struct Config {
     /// belong to an app, so each app brings its own keys.
     #[serde(default)]
     pub apps: BTreeMap<String, AppConfig>,
+    #[serde(default)]
+    pub store: StoreConfig,
+    #[serde(default)]
+    pub relays: RelaysConfig,
+    #[serde(default)]
+    pub limits: LimitsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct StoreConfig {
+    /// The database file. Created when missing.
+    pub path: PathBuf,
+}
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::from("/opt/vpush/data/vpush.db"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RelaysConfig {
+    /// `allow_list`: only the relays named in `allow` are watched.
+    pub policy: String,
+    pub allow: Vec<AllowedRelayConfig>,
+}
+
+impl Default for RelaysConfig {
+    fn default() -> Self {
+        Self {
+            policy: "allow_list".to_string(),
+            allow: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllowedRelayConfig {
+    /// `wss://relay.example.org`, without a key in it.
+    pub url: String,
+    /// File with the key the relay's gate asks for, when it has a gate.
+    pub api_key_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LimitsConfig {
+    pub devices_per_pubkey: u32,
+    pub relays_per_device: u32,
+    pub groups_per_device: u32,
+    /// A registration nobody renewed for this long is forgotten.
+    pub registration_days: u32,
+    /// Test pushes a device may ask for in an hour.
+    pub test_per_hour: u32,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            devices_per_pubkey: 10,
+            relays_per_device: 16,
+            groups_per_device: 500,
+            registration_days: 30,
+            test_per_hour: 3,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -261,6 +332,53 @@ impl Config {
             }
         }
 
+        if !self.store.path.is_absolute() {
+            out.push(format!(
+                "store.path: `{}` must be an absolute path",
+                self.store.path.display()
+            ));
+        }
+
+        if self.relays.policy != "allow_list" {
+            out.push(format!(
+                "relays.policy: `{}` is not known; the only one today is allow_list",
+                self.relays.policy
+            ));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, relay) in self.relays.allow.iter().enumerate() {
+            match crate::relays::normalize(&relay.url) {
+                Err(e) => out.push(format!(
+                    "relays.allow[{i}].url: `{}`: {e}",
+                    crate::relays::shown(&relay.url)
+                )),
+                Ok(url) => {
+                    if !seen.insert(url.clone()) {
+                        out.push(format!("relays.allow[{i}].url: `{url}` is named twice"));
+                    }
+                }
+            }
+            if let Some(path) = &relay.api_key_file {
+                if !path.is_absolute() {
+                    out.push(format!(
+                        "relays.allow[{i}].api_key_file: `{}` must be an absolute path",
+                        path.display()
+                    ));
+                }
+            }
+        }
+
+        for (name, value) in [
+            ("devices_per_pubkey", self.limits.devices_per_pubkey),
+            ("relays_per_device", self.limits.relays_per_device),
+            ("groups_per_device", self.limits.groups_per_device),
+            ("registration_days", self.limits.registration_days),
+        ] {
+            if value == 0 {
+                out.push(format!("limits.{name}: must be above zero"));
+            }
+        }
+
         out
     }
 
@@ -268,6 +386,9 @@ impl Config {
     /// is loaded from disk, on the machine it will run on.
     fn file_problems(&self) -> Vec<String> {
         let mut out = Vec::new();
+        if let Err(e) = crate::relays::RelayPolicy::from_config(self) {
+            out.push(format!("relays.allow: {e}"));
+        }
         for (id, app) in &self.apps {
             if let Some(fcm) = &app.fcm {
                 if let Err(e) = crate::delivery::fcm::ServiceAccount::read(&fcm.service_account) {
@@ -322,6 +443,24 @@ impl Config {
                 ));
             }
         }
+        out.push(("store.path".to_string(), self.store.path.display().to_string()));
+        out.push(("relays.policy".to_string(), self.relays.policy.clone()));
+        for relay in &self.relays.allow {
+            // Whether there is a key, never the key.
+            let gate = if relay.api_key_file.is_some() { " (with a key)" } else { "" };
+            out.push((
+                "relays.allow".to_string(),
+                format!("{}{gate}", crate::relays::shown(&relay.url)),
+            ));
+        }
+        let l = &self.limits;
+        out.push((
+            "limits".to_string(),
+            format!(
+                "devices_per_pubkey={} relays_per_device={} groups_per_device={} registration_days={} test_per_hour={}",
+                l.devices_per_pubkey, l.relays_per_device, l.groups_per_device, l.registration_days, l.test_per_hour
+            ),
+        ));
         out
     }
 

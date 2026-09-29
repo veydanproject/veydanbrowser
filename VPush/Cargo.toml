@@ -7,7 +7,7 @@ resolver = "2"
 members = ["crates/vpush-proto", "crates/vpush-server", "crates/vpush"]
 
 [workspace.package]
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 publish = false
 license = "MIT OR Apache-2.0"
@@ -34,6 +34,9 @@ ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 webpki-roots = "1"
 wiremock = "0.6"
+async-trait = "0.1"
+nostr = { version = "0.45", default-features = false, features = ["std", "os-rng"] }
+sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros"] }
 
 [profile.release]
 opt-level = 3

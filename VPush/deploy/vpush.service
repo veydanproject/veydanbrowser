@@ -16,6 +16,10 @@ Restart=always
 RestartSec=2
 TimeoutStopSec=20
 
+# What the server makes is for itself and its group: the database holds the
+# devices' addresses at the push service.
+UMask=0027
+
 # /run/vpush, where the admin socket lives.
 RuntimeDirectory=vpush
 RuntimeDirectoryMode=0750

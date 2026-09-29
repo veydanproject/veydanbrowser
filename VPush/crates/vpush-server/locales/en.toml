@@ -1,0 +1,16 @@
+# Texts of pushes. One file per language; the name of the file is the
+# language. `{name}` and `{count}` are filled in by the server.
+#
+# A language without a file gets English.
+
+dm_title = "Direct message"
+dm_body = "New message"
+dm_body_many = "New messages: {count}"
+
+group_title = "Group: {name}"
+group_title_unnamed = "Group"
+group_body = "New message"
+group_body_many = "New messages: {count}"
+
+test_title = "VPush"
+test_body = "Test notification: pushes work."

@@ -59,6 +59,13 @@ enum Ctl {
     /// Log levels.
     #[command(subcommand)]
     Log(LogCmd),
+    /// The devices of one owner, and what is watched for each.
+    Devices {
+        /// The owner's public key: npub or hex.
+        owner: String,
+    },
+    /// How many devices and owners there are.
+    Stats,
     /// Send one push to one token, to see that pushes arrive.
     TestPush {
         /// App id, as in the config.
@@ -130,6 +137,8 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 Ctl::Health => Request::Health,
                 Ctl::Log(LogCmd::Show) => Request::LogShow,
                 Ctl::Log(LogCmd::Reset) => Request::LogReset,
+                Ctl::Devices { owner } => Request::Devices { owner },
+                Ctl::Stats => Request::Stats,
                 Ctl::TestPush {
                     app,
                     provider,

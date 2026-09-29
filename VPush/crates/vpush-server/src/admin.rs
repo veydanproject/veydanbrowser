@@ -14,7 +14,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::delivery::retry::{self, RetryPolicy};
-use crate::delivery::{Message, ProviderKind, Providers, Target};
+use crate::delivery::{mask, Message, ProviderKind, Providers, Target};
+use crate::store::{Device, Store};
 use crate::logging::{LogControl, LogSpec};
 use crate::version;
 use vpush_proto::{Payload, PushType};
@@ -42,6 +43,10 @@ pub enum Request {
         title: Option<String>,
         body: Option<String>,
     },
+    /// The devices of one owner, and what is watched for each.
+    Devices { owner: String },
+    /// How many devices and owners there are.
+    Stats,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +88,74 @@ impl Request {
             Self::LogSet { .. } => "log_set",
             Self::LogReset => "log_reset",
             Self::TestPush { .. } => "test_push",
+            Self::Devices { .. } => "devices",
+            Self::Stats => "stats",
+        }
+    }
+}
+
+/// A device as `vpush ctl devices` shows it: everything but the token,
+/// which is shown as its mark.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceLine {
+    pub device_id: String,
+    pub app_id: String,
+    pub provider: String,
+    pub token: String,
+    pub locale: String,
+    pub app_version: Option<String>,
+    pub state: String,
+    pub dm: bool,
+    pub groups: bool,
+    pub author_mark: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub expires_at: u64,
+    pub last_push_at: Option<u64>,
+    pub last_outcome: Option<String>,
+    pub relays: Vec<String>,
+    pub watched_groups: Vec<String>,
+}
+
+impl From<Device> for DeviceLine {
+    fn from(d: Device) -> Self {
+        Self {
+            token: mask(&d.token),
+            relays: d
+                .relays
+                .iter()
+                .map(|r| {
+                    let what = match (r.dm, r.groups) {
+                        (true, true) => "dm+groups",
+                        (true, false) => "dm",
+                        (false, true) => "groups",
+                        (false, false) => "nothing",
+                    };
+                    format!("{} ({what})", r.url)
+                })
+                .collect(),
+            watched_groups: d
+                .groups
+                .iter()
+                .map(|g| match &g.name {
+                    Some(name) => format!("{} {name}", &g.id[..g.id.len().min(12)]),
+                    None => g.id[..g.id.len().min(12)].to_string(),
+                })
+                .collect(),
+            device_id: d.device_id,
+            app_id: d.app_id,
+            provider: d.provider,
+            locale: d.locale,
+            app_version: d.app_version,
+            state: d.state,
+            dm: d.prefs.dm,
+            groups: d.prefs.groups,
+            author_mark: d.author_key.is_some(),
+            created_at: d.created_at,
+            updated_at: d.updated_at,
+            expires_at: d.expires_at,
+            last_push_at: d.last_push_at,
+            last_outcome: d.last_outcome,
         }
     }
 }
@@ -92,6 +165,7 @@ impl Request {
 pub struct AdminState {
     pub log: Arc<LogControl>,
     pub providers: Arc<Providers>,
+    pub store: Arc<dyn Store>,
 }
 
 /// The socket file; removed when dropped.
@@ -204,6 +278,24 @@ async fn handle(request: Request, state: &AdminState) -> Response {
             title,
             body,
         } => test_push(state, &app, provider, token, title, body).await,
+        Request::Devices { owner } => {
+            // An owner is named as people name them: npub or hex.
+            let pubkey = match nostr::key::PublicKey::parse(owner.trim()) {
+                Ok(key) => key.to_hex(),
+                Err(_) => return Response::err("not a public key: give an npub or 64 hex characters"),
+            };
+            match state.store.devices_of(&pubkey).await {
+                Ok(devices) => Response::ok(serde_json::json!({
+                    "owner": pubkey,
+                    "devices": devices.into_iter().map(DeviceLine::from).collect::<Vec<_>>(),
+                })),
+                Err(e) => Response::err(e.to_string()),
+            }
+        }
+        Request::Stats => match state.store.counts().await {
+            Ok(counts) => Response::ok(counts),
+            Err(e) => Response::err(e.to_string()),
+        },
     }
 }
 

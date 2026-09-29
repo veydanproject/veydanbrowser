@@ -21,8 +21,10 @@ public_url = "http://localhost:$port"
 listen = "127.0.0.1:$port"
 [admin]
 socket = "$ROOT/admin.sock"
+[store]
+path = "$DIR/data/vpush.db"
 CONF
-echo "pretend database" > "$DIR/data/vpush.db"
+# The database is made by the first release; the deploy of the second saves it.
 
 cat > "$ROOT/start.sh" <<START
 #!/usr/bin/env bash
@@ -66,12 +68,13 @@ activate r1 dist/vpush > "$ROOT/out" 2>&1 || { cat "$ROOT/out"; fail "first rele
 expect "current is r1"            [ "$(current)" = releases/r1 ]
 expect "no previous yet"          [ "$(previous)" = none ]
 expect "server is alive"          alive
-expect "database was saved"       [ "$(ls "$DIR/data/backups" | wc -l)" = 1 ]
+expect "the first release made the database" [ -f "$DIR/data/vpush.db" ]
 
 echo "== second release"
 activate r2 dist/vpush > "$ROOT/out" 2>&1 || { cat "$ROOT/out"; fail "second release"; }
 expect "current is r2"            [ "$(current)" = releases/r2 ]
 expect "previous is r1"           [ "$(previous)" = releases/r1 ]
+expect "database was saved"       [ "$(ls "$DIR/data/backups" | wc -l)" = 1 ]
 expect "server is alive"          alive
 
 echo "== a release that does not start"

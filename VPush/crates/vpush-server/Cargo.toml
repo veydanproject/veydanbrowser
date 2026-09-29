@@ -25,6 +25,11 @@ reqwest = { workspace = true }
 ring = { workspace = true }
 rustls = { workspace = true }
 webpki-roots = { workspace = true }
+async-trait = { workspace = true }
+nostr = { workspace = true }
+sqlx = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }

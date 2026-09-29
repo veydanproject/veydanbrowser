@@ -30,6 +30,27 @@ pub enum ErrorCode {
     NotFound,
     PayloadTooLarge,
     Internal,
+    /// No `Authorization: Nostr …` header.
+    AuthMissing,
+    /// The header is not a signed kind 27235 event, or names another method,
+    /// or another body.
+    AuthInvalid,
+    /// The event is too old or from the future. `server_time` is in the
+    /// answer, so a client with a wrong clock can correct itself.
+    AuthExpired,
+    /// This very event was used already.
+    AuthReplay,
+    /// The event was signed for another address than the one asked.
+    AuthUrlMismatch,
+    /// The server does not serve this app.
+    UnknownApp,
+    /// The server serves the app, but not through this push service.
+    ProviderDisabled,
+    LimitDevices,
+    LimitRelays,
+    LimitGroups,
+    /// Too many requests; `Retry-After` says when to come back.
+    RateLimited,
 }
 
 /// Body of every non-2xx answer.
@@ -43,6 +64,208 @@ pub struct ErrorBody {
 pub struct ErrorDetail {
     pub code: ErrorCode,
     pub message: String,
+    /// Unix seconds by the server's clock. Present with `auth_expired`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_time: Option<u64>,
+}
+
+/// Which service carries pushes to the device, and the device's address there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "provider", rename_all = "snake_case")]
+pub enum Channel {
+    Fcm { token: String },
+    Apns {
+        token: String,
+        /// `production` or `sandbox`.
+        environment: String,
+    },
+    Unifiedpush {
+        endpoint: String,
+        p256dh: String,
+        auth: String,
+    },
+}
+
+impl Channel {
+    pub fn provider(&self) -> &'static str {
+        match self {
+            Self::Fcm { .. } => "fcm",
+            Self::Apns { .. } => "apns",
+            Self::Unifiedpush { .. } => "unifiedpush",
+        }
+    }
+}
+
+/// What the user wants to be told about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prefs {
+    #[serde(default = "yes")]
+    pub dm: bool,
+    #[serde(default = "yes")]
+    pub groups: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self { dm: true, groups: true }
+    }
+}
+
+/// A relay to watch for this device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayWatch {
+    /// `wss://…`
+    pub url: String,
+    /// Watch for direct messages to the user.
+    #[serde(default = "yes")]
+    pub dm: bool,
+    /// Watch for messages of the user's groups.
+    #[serde(default = "yes")]
+    pub groups: bool,
+}
+
+/// A group to watch, and what the user calls it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupWatch {
+    /// 64 hex characters.
+    pub id: String,
+    /// Shown in the push: "Group: <name>". Kept for this device only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// Body of `PUT /v1/devices/{device_id}`: everything about the device, every
+/// time. What is not named is no longer watched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DevicePut {
+    pub app_id: String,
+    pub channel: Channel,
+    /// Language of the push texts: `ru`, `en-US`. English when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<String>,
+    #[serde(default)]
+    pub prefs: Prefs,
+    /// Key of the marks the user puts on their own group messages, 64 hex
+    /// characters. With it the server does not push a user's message back
+    /// to the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_key: Option<String>,
+    #[serde(default)]
+    pub relays: Vec<RelayWatch>,
+    #[serde(default)]
+    pub groups: Vec<GroupWatch>,
+}
+
+/// What the server does with a relay the device named.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayStatus {
+    /// Connected and watching.
+    Ok,
+    /// Accepted; not connected yet.
+    Pending,
+    /// The server does not watch this relay.
+    NotAllowed,
+    /// Not an address of a relay.
+    Invalid,
+    /// The relay does not let the server read.
+    Restricted,
+    /// The relay cannot be reached.
+    Unreachable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayAnswer {
+    pub url: String,
+    pub status: RelayStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Answer of `PUT /v1/devices/{device_id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceAnswer {
+    pub device_id: String,
+    /// Unix seconds. Registration is forgotten after it; every PUT moves it.
+    pub expires_at: u64,
+    pub relays: Vec<RelayAnswer>,
+}
+
+/// Answer of `GET /v1/devices/{device_id}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceView {
+    pub device_id: String,
+    pub app_id: String,
+    pub provider: String,
+    pub locale: String,
+    pub prefs: Prefs,
+    /// `active`, or `dead_token`: the push service says the token is gone.
+    pub state: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub expires_at: u64,
+    pub relays: Vec<RelayView>,
+    pub groups: Vec<GroupWatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_push_at: Option<u64>,
+    /// `delivered`, `dead_token`, `rejected`, `retry`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_outcome: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayView {
+    pub url: String,
+    pub dm: bool,
+    pub groups: bool,
+    pub status: RelayStatus,
+}
+
+/// Answer of `POST /v1/devices/{device_id}/test`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestAnswer {
+    /// `delivered`, `dead_token`, `rejected`, `retry`.
+    pub outcome: String,
+    /// Id of the push in the server's log, and in the push itself.
+    pub trace: String,
+}
+
+/// Answer of `GET /v1/info`: what a client needs to know before it registers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Info {
+    pub version: String,
+    pub apps: Vec<AppInfo>,
+    pub relays: RelayPolicy,
+    pub limits: Limits,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppInfo {
+    pub id: String,
+    pub providers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayPolicy {
+    /// `allow_list`: only the relays named in `allowed` are watched.
+    pub policy: String,
+    pub allowed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Limits {
+    pub devices_per_pubkey: u32,
+    pub relays_per_device: u32,
+    pub groups_per_device: u32,
+    pub registration_days: u32,
+    pub test_per_hour: u32,
+    pub max_body_bytes: u32,
 }
 
 /// What a push is about.

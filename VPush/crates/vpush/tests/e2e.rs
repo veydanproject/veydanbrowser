@@ -44,8 +44,10 @@ fn write_config_with(dir: &Path, port: u16, log: &str, extra: &str) -> PathBuf {
             "public_url = \"http://localhost:{port}\"\n\
              [server]\nlisten = \"127.0.0.1:{port}\"\n\
              [admin]\nsocket = \"{}\"\n\
+             [store]\npath = \"{}\"\n\
              [log]\n{log}\n{extra}\n",
-            dir.join("admin.sock").display()
+            dir.join("admin.sock").display(),
+            dir.join("vpush.db").display()
         ),
     )
     .unwrap();

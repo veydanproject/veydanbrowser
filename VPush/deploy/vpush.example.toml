@@ -46,3 +46,30 @@ level = "info"
 #key_id = "ABC123DEFG"
 #team_id = "TEAM123456"
 #topic = "net.veydan.mobile"
+
+[store]
+# The database: one file, made when missing.
+path = "/opt/vpush/data/vpush.db"
+
+# Which relays are watched. Today the only policy is the list below: a relay
+# that is not on it is refused, and the client is told so.
+[relays]
+policy = "allow_list"
+
+#[[relays.allow]]
+#url = "wss://relay.example.org"
+#
+# A relay behind a gate: the key is kept in a file, never in this one, and
+# never in the address.
+#[[relays.allow]]
+#url = "wss://node-1.veydan.net"
+#api_key_file = "/opt/vpush/etc/secrets/node-1-relay.key"
+
+[limits]
+devices_per_pubkey = 10
+relays_per_device = 16
+groups_per_device = 500
+# A registration nobody renewed for this long is forgotten.
+registration_days = 30
+# Test pushes a device may ask for in an hour.
+test_per_hour = 3
