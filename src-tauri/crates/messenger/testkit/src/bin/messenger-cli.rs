@@ -122,7 +122,7 @@ async fn main() {
             wait_connect(&rt).await;
             let id = rt.dm_send_text(&to, &text, None).await.unwrap_or_else(die).id;
             // Give the outbox pump a moment to report.
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            flush(&rt).await;
             let pending = rt.outbox().pending().await.unwrap_or(0);
             println!("queued {id} (pending in outbox: {pending})");
         }
@@ -181,7 +181,7 @@ async fn main() {
             let id = full_id(&rt, &args.remove(0)).await;
             wait_connect(&rt).await;
             let m = rt.dm_edit(&id, &args.join(" ")).await.unwrap_or_else(die);
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            flush(&rt).await;
             println!("edited {} -> {}", m.id, m.text.unwrap_or_default());
         }
         "delete" => {
@@ -191,7 +191,7 @@ async fn main() {
             let id = full_id(&rt, &args[0]).await;
             wait_connect(&rt).await;
             rt.dm_delete(&id, true).await.unwrap_or_else(die);
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            flush(&rt).await;
             println!("deleted {id}");
         }
         "sync" => {
@@ -236,7 +236,7 @@ async fn main() {
             };
             wait_connect(&rt).await;
             let r = rt.dm_act(&args[0], action).await.unwrap_or_else(die);
-            tokio::time::sleep(Duration::from_millis(1500)).await;
+            flush(&rt).await;
             println!("mode={} can_send={}", r.mode, r.can_send);
         }
         "media-servers" => {
@@ -315,7 +315,7 @@ async fn main() {
                     eprintln!("  {} {}/{}", t.status, t.done_bytes, t.size);
                 }
                 if matches!(t.status.as_str(), "done" | "failed" | "cancelled" | "paused") {
-                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                    flush(&rt).await;
                     println!(
                         "{} {} bytes in {:.1}s {}",
                         t.status,
@@ -360,10 +360,10 @@ async fn main() {
             let started = std::time::Instant::now();
             rt.media_resume(&args[0]).await.unwrap_or_else(die);
             loop {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                flush(&rt).await;
                 let Some(t) = rt.media().transfer(&args[0]).await.unwrap_or_else(die) else { break };
                 if matches!(t.status.as_str(), "done" | "failed" | "cancelled" | "paused") {
-                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                    flush(&rt).await;
                     println!(
                         "{} {}/{} in {:.1}s {}",
                         t.status,
@@ -375,6 +375,21 @@ async fn main() {
                     break;
                 }
             }
+        }
+        "bench-send" => {
+            // bench-send <to> [count]: how long the caller waits per message.
+            if args.is_empty() {
+                usage();
+            }
+            let n: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5);
+            wait_connect(&rt).await;
+            for i in 0..n {
+                let t = std::time::Instant::now();
+                let m = rt.dm_send_text(&args[0], &format!("bench {i}"), None).await.unwrap_or_else(die);
+                println!("send {i}: {} ms, status on return: {}", t.elapsed().as_millis(), m.status);
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            println!("outbox pending after 3 s: {}", rt.outbox().pending().await.unwrap_or(0));
         }
         _ => usage(),
     }
@@ -412,4 +427,16 @@ async fn full_id(rt: &MessengerRuntime, short: &str) -> String {
     }
     eprintln!("error: no message starts with {short}");
     std::process::exit(1)
+}
+
+/// Publishing happens in the background; a command line tool must not
+/// exit before its events left. Waits until the outbox is empty.
+async fn flush(rt: &MessengerRuntime) {
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if rt.outbox().pending().await.unwrap_or(0) == 0 {
+            return;
+        }
+    }
+    eprintln!("warning: some events are still queued");
 }
