@@ -33,8 +33,10 @@ const MODULES: &[&str] = &[
     "netguard",
     "pipeline",
     "relay",
+    "relays",
     "serve",
     "store",
+    "texts",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,8 +368,80 @@ fn view(state: &State) -> LogView {
     }
 }
 
+/// What is written in place of a secret.
+const REDACTED: &str = "***";
+/// A secret shorter than this is not looked for: it would be found in
+/// words that are no secret at all.
+const SHORTEST_SECRET: usize = 8;
+
+/// Takes the known secrets out of whatever is logged, by whomever: this
+/// server, or a library that logs an address with a key in it.
+///
+/// The secrets are the keys of gated relays. They have to be put into an
+/// address to connect, and an address is what libraries like to log.
+#[derive(Clone, Default)]
+pub struct Redactor {
+    secrets: Arc<Vec<String>>,
+}
+
+impl Redactor {
+    pub fn new(secrets: impl IntoIterator<Item = String>) -> Self {
+        let mut secrets: Vec<String> = secrets
+            .into_iter()
+            .filter(|s| s.len() >= SHORTEST_SECRET)
+            .collect();
+        // The longer first, in case one is a part of another.
+        secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        secrets.dedup();
+        Self { secrets: Arc::new(secrets) }
+    }
+
+    /// `None`: there is nothing to take out.
+    pub fn clean(&self, text: &str) -> Option<String> {
+        if !self.secrets.iter().any(|s| text.contains(s.as_str())) {
+            return None;
+        }
+        let mut out = text.to_string();
+        for secret in self.secrets.iter() {
+            out = out.replace(secret.as_str(), REDACTED);
+        }
+        Some(out)
+    }
+}
+
+pub struct RedactingWriter {
+    redactor: Redactor,
+    out: std::io::Stdout,
+}
+
+impl std::io::Write for RedactingWriter {
+    // A line of the log comes in one piece, so a secret is never cut in two.
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self.redactor.clean(&String::from_utf8_lossy(buf)) {
+            Some(cleaned) => self.out.write_all(cleaned.as_bytes())?,
+            None => self.out.write_all(buf)?,
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.out.flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Redactor {
+    type Writer = RedactingWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        RedactingWriter {
+            redactor: self.clone(),
+            out: std::io::stdout(),
+        }
+    }
+}
+
 /// Installs the process-wide logger. Call once, before anything logs.
-pub fn init(format: LogFormat, base: LogSpec) -> Arc<LogControl> {
+pub fn init(format: LogFormat, base: LogSpec, redactor: Redactor) -> Arc<LogControl> {
     let state = State {
         base,
         overrides: Vec::new(),
@@ -378,12 +452,14 @@ pub fn init(format: LogFormat, base: LogSpec) -> Arc<LogControl> {
         LogFormat::Text => tracing_subscriber::fmt::layer()
             .with_ansi(false)
             .with_target(true)
+            .with_writer(redactor)
             .boxed(),
         LogFormat::Json => tracing_subscriber::fmt::layer()
             .json()
             .flatten_event(true)
             .with_current_span(true)
             .with_span_list(false)
+            .with_writer(redactor)
             .boxed(),
     };
 
@@ -395,6 +471,49 @@ pub fn init(format: LogFormat, base: LogSpec) -> Arc<LogControl> {
         handle,
         state: Mutex::new(state),
     })
+}
+
+#[cfg(test)]
+mod redactor_tests {
+    use super::*;
+
+    const KEY: &str = "d0f9c18a09ab2547f5c9aaddc5dfec3b";
+
+    #[test]
+    fn a_key_in_an_address_is_taken_out() {
+        let r = Redactor::new([KEY.to_string()]);
+        let line = format!("connecting to wss://node-1.veydan.net/?key={KEY} (attempt 2)\n");
+        assert_eq!(
+            r.clean(&line).unwrap(),
+            "connecting to wss://node-1.veydan.net/?key=*** (attempt 2)\n"
+        );
+    }
+
+    #[test]
+    fn every_place_and_every_secret() {
+        let r = Redactor::new(["first-secret".to_string(), "second-secret".to_string()]);
+        let cleaned = r.clean("a first-secret b second-secret c first-secret").unwrap();
+        assert_eq!(cleaned, "a *** b *** c ***");
+    }
+
+    #[test]
+    fn a_line_without_secrets_is_left_as_it_is() {
+        let r = Redactor::new([KEY.to_string()]);
+        assert_eq!(r.clean("relay state=connected"), None);
+        assert_eq!(Redactor::default().clean(KEY), None);
+    }
+
+    #[test]
+    fn what_is_too_short_to_be_a_secret_is_not_looked_for() {
+        let r = Redactor::new(["key".to_string(), String::new()]);
+        assert_eq!(r.clean("the key of the relay"), None);
+    }
+
+    #[test]
+    fn a_secret_that_holds_another_is_taken_out_whole() {
+        let r = Redactor::new(["abcdefgh".to_string(), "abcdefgh-and-more".to_string()]);
+        assert_eq!(r.clean("x abcdefgh-and-more y").unwrap(), "x *** y");
+    }
 }
 
 #[cfg(test)]

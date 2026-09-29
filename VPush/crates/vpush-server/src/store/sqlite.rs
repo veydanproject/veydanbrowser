@@ -41,7 +41,7 @@ impl SqliteStore {
             .connect_with(options)
             .await
             .map_err(|e| db(format!("cannot open {}: {e}", path.display())))?;
-        sqlx::migrate!("./migrations").run(&pool).await.map_err(db)?;
+        migrate(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -56,7 +56,7 @@ impl SqliteStore {
             .connect_with(options)
             .await
             .map_err(db)?;
-        sqlx::migrate!("./migrations").run(&pool).await.map_err(db)?;
+        migrate(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -358,13 +358,13 @@ impl Store for SqliteStore {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests_support {
+    pub use super::super::RelayPlan;
+    pub use super::*;
 
-    const ALICE: &str = "aa";
-    const BOB: &str = "bb";
-
-    fn input(pubkey: &str, device_id: &str, token: &str) -> DeviceInput {
+    /// A phone that watches one relay and one group; registered at 1000,
+    /// runs out at 2000.
+    pub fn input(pubkey: &str, device_id: &str, token: &str) -> DeviceInput {
         DeviceInput {
             pubkey: pubkey.into(),
             device_id: device_id.into(),
@@ -389,6 +389,15 @@ mod tests {
             expires_at: 2000,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::input;
+    use super::*;
+
+    const ALICE: &str = "aa";
+    const BOB: &str = "bb";
 
     async fn store() -> SqliteStore {
         SqliteStore::in_memory().await.unwrap()
@@ -532,11 +541,338 @@ mod tests {
 
         let s = SqliteStore::open(&path).await.unwrap();
         s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
-        assert_eq!(s.schema_version().await.unwrap(), 1);
+        assert_eq!(s.schema_version().await.unwrap(), 2);
         s.close().await;
 
         let s = SqliteStore::open(&path).await.unwrap();
         assert!(s.device(ALICE, "phone-1").await.unwrap().is_some());
+        s.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+
+fn recipient(row: &SqliteRow, group_name: Option<String>) -> Result<super::Recipient> {
+    Ok(super::Recipient {
+        pubkey: row.try_get("pubkey").map_err(db)?,
+        device_id: row.try_get("device_id").map_err(db)?,
+        app_id: row.try_get("app_id").map_err(db)?,
+        provider: row.try_get("provider").map_err(db)?,
+        token: row.try_get("token").map_err(db)?,
+        locale: row.try_get("locale").map_err(db)?,
+        author_key: row.try_get("author_key").map_err(db)?,
+        group_name,
+    })
+}
+
+#[async_trait]
+impl super::WatchStore for SqliteStore {
+    async fn watch_plan(&self, now: u64) -> Result<Vec<super::RelayPlan>> {
+        let mut plans: std::collections::BTreeMap<String, super::RelayPlan> = Default::default();
+        let dm = sqlx::query(
+            "SELECT DISTINCT r.url AS url, d.pubkey AS target
+             FROM device_relays r JOIN devices d ON d.id = r.device
+             WHERE r.dm = 1 AND d.pref_dm = 1 AND d.state = 'active' AND d.expires_at > ?
+             ORDER BY 1, 2"
+        )
+        .bind(now as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        for row in dm {
+            let url: String = row.try_get("url").map_err(db)?;
+            let plan = plans.entry(url.clone()).or_insert_with(|| super::RelayPlan { url, ..Default::default() });
+            plan.dm.push(row.try_get("target").map_err(db)?);
+        }
+        let groups = sqlx::query(
+            "SELECT DISTINCT r.url AS url, g.group_id AS target
+             FROM device_relays r
+             JOIN devices d ON d.id = r.device
+             JOIN device_groups g ON g.device = d.id
+             WHERE r.groups = 1 AND d.pref_groups = 1 AND d.state = 'active' AND d.expires_at > ?
+             ORDER BY 1, 2"
+        )
+        .bind(now as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        for row in groups {
+            let url: String = row.try_get("url").map_err(db)?;
+            let plan = plans.entry(url.clone()).or_insert_with(|| super::RelayPlan { url, ..Default::default() });
+            plan.groups.push(row.try_get("target").map_err(db)?);
+        }
+        Ok(plans.into_values().collect())
+    }
+
+    async fn baselined(&self, url: &str) -> Result<Vec<(super::WatchKind, String)>> {
+        sqlx::query("SELECT kind, target FROM baselines WHERE url = ?")
+            .bind(url)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?
+            .into_iter()
+            .map(|row| {
+                let kind: String = row.try_get("kind").map_err(db)?;
+                let kind = if kind == "dm" { super::WatchKind::Dm } else { super::WatchKind::Group };
+                Ok((kind, row.try_get("target").map_err(db)?))
+            })
+            .collect()
+    }
+
+    async fn set_baselined(
+        &self,
+        url: &str,
+        targets: &[(super::WatchKind, String)],
+        now: u64,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        for (kind, target) in targets {
+            sqlx::query("INSERT OR IGNORE INTO baselines (url, kind, target, at) VALUES (?, ?, ?, ?)")
+                .bind(url)
+                .bind(kind.as_str())
+                .bind(target)
+                .bind(now as i64)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
+        tx.commit().await.map_err(db)
+    }
+
+    async fn first_seen(&self, event_id: &str, what: super::Seen, now: u64) -> Result<bool> {
+        let done = sqlx::query("INSERT OR IGNORE INTO seen_events (event_id, flag, seen_at) VALUES (?, ?, ?)")
+            .bind(event_id)
+            .bind(what as i64)
+            .bind(now as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    async fn purge_seen(&self, before: u64) -> Result<u64> {
+        let done = sqlx::query("DELETE FROM seen_events WHERE seen_at < ?")
+            .bind(before as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(done.rows_affected())
+    }
+
+    async fn dm_recipients(&self, pubkey: &str, now: u64) -> Result<Vec<super::Recipient>> {
+        sqlx::query(
+            "SELECT d.pubkey, d.device_id, d.app_id, d.provider, d.token, d.locale, d.author_key
+             FROM devices d
+             WHERE d.pubkey = ? AND d.pref_dm = 1 AND d.state = 'active' AND d.expires_at > ?
+               AND EXISTS (SELECT 1 FROM device_relays r WHERE r.device = d.id AND r.dm = 1)
+             ORDER BY d.id"
+        )
+        .bind(pubkey)
+        .bind(now as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|row| recipient(row, None))
+        .collect()
+    }
+
+    async fn group_recipients(&self, group_id: &str, now: u64) -> Result<Vec<super::Recipient>> {
+        sqlx::query(
+            "SELECT d.pubkey, d.device_id, d.app_id, d.provider, d.token, d.locale, d.author_key,
+                    g.name AS group_name
+             FROM device_groups g JOIN devices d ON d.id = g.device
+             WHERE g.group_id = ? AND d.pref_groups = 1 AND d.state = 'active' AND d.expires_at > ?
+               AND EXISTS (SELECT 1 FROM device_relays r WHERE r.device = d.id AND r.groups = 1)
+             ORDER BY d.id"
+        )
+        .bind(group_id)
+        .bind(now as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?
+        .iter()
+        .map(|row| recipient(row, row.try_get("group_name").map_err(db)?))
+        .collect()
+    }
+
+    async fn relay_alive(&self, url: &str, now: u64) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO relay_state (url, last_alive_at) VALUES (?, ?)
+             ON CONFLICT (url) DO UPDATE SET last_alive_at = excluded.last_alive_at",
+        )
+        .bind(url)
+        .bind(now as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    async fn relay_last_alive(&self, url: &str) -> Result<Option<u64>> {
+        Ok(
+            sqlx::query_scalar::<_, i64>("SELECT last_alive_at FROM relay_state WHERE url = ?")
+                .bind(url)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db)?
+                .map(|v| v.max(0) as u64),
+        )
+    }
+}
+
+#[cfg(test)]
+mod watch_tests {
+    use super::super::{Seen, WatchKind, WatchStore};
+    use super::tests_support::*;
+
+
+    #[tokio::test]
+    async fn the_plan_is_what_living_devices_want_watched() {
+        let s = SqliteStore::in_memory().await.unwrap();
+        s.put_device(input("aa", "phone", "t1"), 10).await.unwrap();
+        // A second device of the same owner: the key is watched once.
+        s.put_device(input("aa", "tablet", "t2"), 10).await.unwrap();
+        let mut bob = input("bb", "phone", "t3");
+        bob.relays[0].groups = false;
+        bob.relays.push(WatchedRelay { url: "wss://nos.lol".into(), dm: false, groups: true });
+        bob.groups = vec![GroupWatch { id: "22".repeat(32), name: None }];
+        s.put_device(bob, 10).await.unwrap();
+
+        let plan = s.watch_plan(1500).await.unwrap();
+        assert_eq!(
+            plan,
+            vec![
+                RelayPlan {
+                    url: "wss://node-1.veydan.net".into(),
+                    dm: vec!["aa".into(), "bb".into()],
+                    groups: vec!["11".repeat(32)],
+                },
+                RelayPlan { url: "wss://nos.lol".into(), dm: vec![], groups: vec!["22".repeat(32)] },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn what_is_dead_expired_or_turned_off_is_not_watched() {
+        let s = SqliteStore::in_memory().await.unwrap();
+        s.put_device(input("aa", "dead", "t1"), 10).await.unwrap();
+        s.record_outcome("aa", "dead", "dead_token", 1100).await.unwrap();
+        let mut off = input("bb", "off", "t2");
+        off.prefs.dm = false;
+        off.prefs.groups = false;
+        s.put_device(off, 10).await.unwrap();
+        s.put_device(input("cc", "expired", "t3"), 10).await.unwrap();
+
+        assert!(s.watch_plan(2500).await.unwrap().is_empty(), "cc ran out at 2000");
+        let plan = s.watch_plan(1500).await.unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].dm, ["cc"]);
+
+        assert!(s.dm_recipients("aa", 1500).await.unwrap().is_empty());
+        assert!(s.dm_recipients("bb", 1500).await.unwrap().is_empty());
+        assert_eq!(s.dm_recipients("cc", 1500).await.unwrap().len(), 1);
+        assert!(s.dm_recipients("cc", 2500).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn every_device_of_the_owner_is_told_and_each_by_its_own_name_of_the_group() {
+        let s = SqliteStore::in_memory().await.unwrap();
+        let mut phone = input("aa", "phone", "t1");
+        phone.groups[0].name = Some("Работа".into());
+        let mut tablet = input("aa", "tablet", "t2");
+        tablet.groups[0].name = None;
+        let mut bob = input("bb", "phone", "t3");
+        bob.groups[0].name = Some("Спам".into());
+        for d in [phone, tablet, bob] {
+            s.put_device(d, 10).await.unwrap();
+        }
+
+        let dm = s.dm_recipients("aa", 1500).await.unwrap();
+        assert_eq!(dm.iter().map(|r| r.device_id.as_str()).collect::<Vec<_>>(), ["phone", "tablet"]);
+
+        let group = s.group_recipients(&"11".repeat(32), 1500).await.unwrap();
+        let names: Vec<_> = group.iter().map(|r| (r.token.as_str(), r.group_name.as_deref())).collect();
+        assert_eq!(names, [("t1", Some("Работа")), ("t2", None), ("t3", Some("Спам"))]);
+        assert!(s.group_recipients(&"99".repeat(32), 1500).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_event_is_new_once() {
+        let s = SqliteStore::in_memory().await.unwrap();
+        assert!(s.first_seen("e1", Seen::Pushed, 100).await.unwrap());
+        assert!(!s.first_seen("e1", Seen::Pushed, 101).await.unwrap());
+        assert!(!s.first_seen("e1", Seen::Baseline, 102).await.unwrap());
+        assert!(s.first_seen("e2", Seen::Quiet, 200).await.unwrap());
+
+        assert_eq!(s.purge_seen(150).await.unwrap(), 1);
+        assert!(s.first_seen("e1", Seen::Pushed, 300).await.unwrap(), "forgotten, so new again");
+        assert!(!s.first_seen("e2", Seen::Pushed, 300).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn stock_is_taken_per_relay() {
+        let s = SqliteStore::in_memory().await.unwrap();
+        let targets = vec![(WatchKind::Dm, "aa".to_string()), (WatchKind::Group, "11".repeat(32))];
+        s.set_baselined("wss://a", &targets, 100).await.unwrap();
+        s.set_baselined("wss://a", &targets, 200).await.unwrap();
+
+        let mut got = s.baselined("wss://a").await.unwrap();
+        got.sort();
+        assert_eq!(got, targets);
+        assert!(s.baselined("wss://b").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_last_time_a_relay_was_on_the_line() {
+        let s = SqliteStore::in_memory().await.unwrap();
+        assert_eq!(s.relay_last_alive("wss://a").await.unwrap(), None);
+        s.relay_alive("wss://a", 100).await.unwrap();
+        s.relay_alive("wss://a", 200).await.unwrap();
+        assert_eq!(s.relay_last_alive("wss://a").await.unwrap(), Some(200));
+    }
+}
+
+/// Brings the schema up to date.
+///
+/// A database that a newer release has been at holds migrations this
+/// release does not know. They only added to the schema, so this release
+/// runs on it as it is: that is what makes going back a release possible.
+async fn migrate(pool: &Pool<Sqlite>) -> Result<()> {
+    let mut migrator = sqlx::migrate!("./migrations");
+    migrator.set_ignore_missing(true);
+    migrator.run(pool).await.map_err(db)
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::tests_support::input;
+    use super::*;
+
+    #[tokio::test]
+    async fn a_database_a_newer_release_has_been_at_is_opened_by_an_older_one() {
+        let dir = std::env::temp_dir().join(format!("vpush-rollback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("vpush.db");
+
+        let s = SqliteStore::open(&path).await.unwrap();
+        s.put_device(input("aa", "phone", "t1"), 10).await.unwrap();
+        // What a release of the future would leave behind.
+        sqlx::query("CREATE TABLE of_the_future (id INTEGER PRIMARY KEY)")
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+             VALUES (999, 'of the future', 1, x'00', 0)",
+        )
+        .execute(&s.pool)
+        .await
+        .unwrap();
+        s.close().await;
+
+        let s = SqliteStore::open(&path).await.expect("the older release opens it");
+        assert!(s.device("aa", "phone").await.unwrap().is_some());
         s.close().await;
         let _ = std::fs::remove_dir_all(&dir);
     }

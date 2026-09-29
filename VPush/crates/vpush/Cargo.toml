@@ -21,3 +21,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 wiremock = { workspace = true }
 serde_json = { workspace = true }
+base64 = { workspace = true }
+nostr = { workspace = true }
+nostr-sdk = { workspace = true, features = ["local-relay"] }
+reqwest = { workspace = true }
+ring = { workspace = true }

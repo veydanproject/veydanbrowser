@@ -64,6 +64,8 @@ enum Ctl {
         /// The owner's public key: npub or hex.
         owner: String,
     },
+    /// The relays on the line, and how each is doing.
+    Relays,
     /// How many devices and owners there are.
     Stats,
     /// Send one push to one token, to see that pushes arrive.
@@ -139,6 +141,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 Ctl::Log(LogCmd::Reset) => Request::LogReset,
                 Ctl::Devices { owner } => Request::Devices { owner },
                 Ctl::Stats => Request::Stats,
+                Ctl::Relays => Request::Relays,
                 Ctl::TestPush {
                     app,
                     provider,

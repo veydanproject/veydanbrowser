@@ -7,7 +7,7 @@ resolver = "2"
 members = ["crates/vpush-proto", "crates/vpush-server", "crates/vpush"]
 
 [workspace.package]
-version = "0.0.3"
+version = "0.1.0"
 edition = "2021"
 publish = false
 license = "MIT OR Apache-2.0"
@@ -36,6 +36,10 @@ webpki-roots = "1"
 wiremock = "0.6"
 async-trait = "0.1"
 nostr = { version = "0.45", default-features = false, features = ["std", "os-rng"] }
+# The API of nostr-sdk changes with every release: the version is pinned, and
+# the server reaches it through one module (watch/relay.rs).
+nostr-sdk = { version = "=0.45.4", default-features = false, features = ["ring", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros"] }
 
 [profile.release]

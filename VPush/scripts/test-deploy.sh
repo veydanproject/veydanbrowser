@@ -39,7 +39,7 @@ for i in \$(seq 50); do [ -e "$ROOT/admin.sock" ] || break; sleep 0.1; done
 exit 0
 STOP
 
-export VPUSH_NO_SUDO=1 VPUSH_HEALTH_SECS=4 VPUSH_KEEP_RELEASES=2
+export VPUSH_NO_SUDO=1 VPUSH_HEALTH_SECS=6 VPUSH_STEADY_SECS=2 VPUSH_KEEP_RELEASES=2 VPUSH_RESET_CMD=
 export VPUSH_START_CMD="bash $ROOT/start.sh" VPUSH_STOP_CMD="bash $ROOT/stop.sh"
 
 pass=0
@@ -82,6 +82,27 @@ if activate r3 "$ROOT/broken" > "$ROOT/out" 2>&1; then fail "broken release was 
 expect "deploy reported failure"  grep -q "rolled back to releases/r2, which is alive" "$ROOT/out"
 expect "current is r2 again"      [ "$(current)" = releases/r2 ]
 expect "previous is still r1"     [ "$(previous)" = releases/r1 ]
+expect "server is alive"          alive
+
+echo "== a release that answers and falls a moment later"
+# It passes check-config, starts, answers the health check, and is gone in
+# a second: what a crash right after the start looks like.
+cat > "$ROOT/flaky" <<FLAKY
+#!/usr/bin/env bash
+if [ "\$1" = serve ]; then
+  "$VPUSH_DIR/dist/vpush" "\$@" &
+  pid=\$!
+  sleep 1
+  kill \$pid
+  wait \$pid
+  exit 1
+fi
+exec "$VPUSH_DIR/dist/vpush" "\$@"
+FLAKY
+chmod +x "$ROOT/flaky"
+if activate r3b "$ROOT/flaky" > "$ROOT/out" 2>&1; then fail "a release that fell was taken for alive"; fi
+expect "deploy reported failure"  grep -q "rolled back to releases/r2, which is alive" "$ROOT/out"
+expect "current is r2 again"      [ "$(current)" = releases/r2 ]
 expect "server is alive"          alive
 
 echo "== a wrong checksum"

@@ -16,6 +16,7 @@ use tokio::net::{UnixListener, UnixStream};
 use crate::delivery::retry::{self, RetryPolicy};
 use crate::delivery::{mask, Message, ProviderKind, Providers, Target};
 use crate::store::{Device, Store};
+use crate::relay::Watch;
 use crate::logging::{LogControl, LogSpec};
 use crate::version;
 use vpush_proto::{Payload, PushType};
@@ -47,6 +48,8 @@ pub enum Request {
     Devices { owner: String },
     /// How many devices and owners there are.
     Stats,
+    /// The relays on the line, and how each is doing.
+    Relays,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +93,7 @@ impl Request {
             Self::TestPush { .. } => "test_push",
             Self::Devices { .. } => "devices",
             Self::Stats => "stats",
+            Self::Relays => "relays",
         }
     }
 }
@@ -166,6 +170,7 @@ pub struct AdminState {
     pub log: Arc<LogControl>,
     pub providers: Arc<Providers>,
     pub store: Arc<dyn Store>,
+    pub watch: Arc<Watch>,
 }
 
 /// The socket file; removed when dropped.
@@ -292,6 +297,7 @@ async fn handle(request: Request, state: &AdminState) -> Response {
                 Err(e) => Response::err(e.to_string()),
             }
         }
+        Request::Relays => Response::ok(state.watch.health()),
         Request::Stats => match state.store.counts().await {
             Ok(counts) => Response::ok(counts),
             Err(e) => Response::err(e.to_string()),

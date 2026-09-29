@@ -14,6 +14,9 @@ HEALTH_SECS="${VPUSH_HEALTH_SECS:-30}"
 # Replaced in tests, where there is no systemd.
 STOP_CMD="${VPUSH_STOP_CMD:-systemctl stop vpush}"
 START_CMD="${VPUSH_START_CMD:-systemctl start vpush}"
+RESET_CMD="${VPUSH_RESET_CMD-systemctl reset-failed vpush}"
+# A release counts as alive when it has answered for this long without a restart.
+STEADY_SECS="${VPUSH_STEADY_SECS:-8}"
 
 SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo"
 [ -n "${VPUSH_NO_SUDO:-}" ] && SUDO=""
@@ -47,13 +50,31 @@ point() {  # point <link> <target>: atomic
   $SUDO mv -T "$DIR/.$1.new" "$DIR/$1"
 }
 
+# Alive is more than answering once: a release that starts, answers, and
+# falls a moment later would pass for alive while systemd starts it over
+# and over. So it has to have been up for STEADY_SECS: the time it reports
+# starts from nothing whenever it is started anew.
+uptime_of() {
+  $SUDO "$DIR/current/vpush" ctl --config "$CONFIG" health 2>/dev/null \
+    | sed -n 's/.*"uptime_secs": *\([0-9]*\).*/\1/p'
+}
+
 alive() {
   local deadline=$(( $(date +%s) + HEALTH_SECS ))
+  local up
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    $SUDO "$DIR/current/vpush" ctl --config "$CONFIG" health >/dev/null 2>&1 && return 0
+    up="$(uptime_of)"
+    [ -n "$up" ] && [ "$up" -ge "$STEADY_SECS" ] && return 0
     sleep 1
   done
   return 1
+}
+
+# A release that kept falling leaves systemd unwilling to start the unit
+# again for a while. The release that fixes it must not be held back by that.
+start() {
+  [ -n "$RESET_CMD" ] && { $SUDO $RESET_CMD >/dev/null 2>&1 || true; }
+  $SUDO $START_CMD || true
 }
 
 say "stopping"
@@ -70,7 +91,7 @@ fi
 
 point current "releases/$REL"
 say "starting $REL"
-$SUDO $START_CMD || true
+start
 
 if alive; then
   [ -n "$OLD" ] && [ "$OLD" != "releases/$REL" ] && point previous "$OLD"
@@ -90,7 +111,7 @@ say "release $REL did not answer in ${HEALTH_SECS}s"
 $SUDO $STOP_CMD || true
 if [ -n "$OLD" ]; then
   point current "$OLD"
-  $SUDO $START_CMD || true
+  start
   if alive; then
     die "rolled back to $OLD, which is alive. Look at the log: make vpush-logs"
   fi

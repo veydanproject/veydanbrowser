@@ -161,6 +161,22 @@ fn asked(
     })
 }
 
+/// What to tell about a relay: whether the server agrees to watch it, and
+/// if it does, how the relay is doing.
+fn judge(api: &Api, url: &str) -> (String, RelayStatus, Option<String>) {
+    let (url, status, detail) = api.relays.judge(url);
+    if status != RelayStatus::Pending {
+        return (url, status, detail);
+    }
+    let status = api.watch.status(&url);
+    let detail = match status {
+        RelayStatus::Restricted => Some("the relay does not let the push server read".to_string()),
+        RelayStatus::Unreachable => Some("the push server cannot reach the relay".to_string()),
+        _ => None,
+    };
+    (url, status, detail)
+}
+
 /// Names are shown on a lock screen: one line, no control characters, not long.
 fn clean_name(name: &str) -> Option<String> {
     let cleaned: String = name
@@ -266,11 +282,14 @@ fn accepted(
     let mut answers = Vec::with_capacity(put.relays.len());
     let mut relays: Vec<WatchedRelay> = Vec::new();
     for relay in &put.relays {
-        let (url, status, detail) = api.relays.judge(&relay.url);
+        let (url, status, detail) = judge(api, &relay.url);
         if answers.iter().any(|a: &RelayAnswer| a.url == url) {
             continue;
         }
-        if matches!(status, RelayStatus::Ok | RelayStatus::Pending) {
+        // Kept when the server agrees to watch the relay, however the relay
+        // is doing at the moment: a relay that is down today is watched
+        // again when it comes back.
+        if api.relays.get(&url).is_some() {
             relays.push(WatchedRelay {
                 url: url.clone(),
                 dm: relay.dm,
@@ -308,7 +327,7 @@ fn view(api: &Api, device: Device) -> DeviceView {
             .relays
             .iter()
             .map(|r| RelayView {
-                status: api.relays.judge(&r.url).1,
+                status: judge(api, &r.url).1,
                 url: r.url.clone(),
                 dm: r.dm,
                 groups: r.groups,
@@ -374,7 +393,10 @@ pub async fn put(
             .put_device(input, api.config.limits.devices_per_pubkey)
             .await
         {
-            Ok(()) => Ok(answer),
+            Ok(()) => {
+                api.watch.plan_changed();
+                Ok(answer)
+            }
             Err(StoreError::TooManyDevices) => Err(Refusal::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 ErrorCode::LimitDevices,
@@ -442,6 +464,9 @@ pub async fn delete(
             was,
             "device removed"
         );
+        if was {
+            api.watch.plan_changed();
+        }
         // Removing what is not there is what the client wanted anyway.
         Ok::<_, Refusal>(())
     }

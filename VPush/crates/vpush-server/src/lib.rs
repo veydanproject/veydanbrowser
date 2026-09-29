@@ -8,6 +8,8 @@ pub mod api;
 pub mod config;
 pub mod delivery;
 pub mod logging;
+pub mod pipeline;
+pub mod relay;
 pub mod relays;
 pub mod serve;
 pub mod store;

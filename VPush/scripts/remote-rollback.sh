@@ -8,6 +8,7 @@ DIR="$1"
 HEALTH_SECS="${VPUSH_HEALTH_SECS:-30}"
 STOP_CMD="${VPUSH_STOP_CMD:-systemctl stop vpush}"
 START_CMD="${VPUSH_START_CMD:-systemctl start vpush}"
+RESET_CMD="${VPUSH_RESET_CMD-systemctl reset-failed vpush}"
 SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo"
 [ -n "${VPUSH_NO_SUDO:-}" ] && SUDO=""
 
@@ -28,6 +29,7 @@ say "going from $NOW back to $BACK"
 $SUDO $STOP_CMD || true
 point current "$BACK"
 point previous "$NOW"
+[ -n "$RESET_CMD" ] && { $SUDO $RESET_CMD >/dev/null 2>&1 || true; }
 $SUDO $START_CMD || true
 
 deadline=$(( $(date +%s) + HEALTH_SECS ))

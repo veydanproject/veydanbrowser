@@ -87,6 +87,11 @@ impl RelayPolicy {
         Ok(Self { allowed })
     }
 
+    /// The keys of the gated relays: what must never be seen in a log.
+    pub fn secrets(&self) -> Vec<String> {
+        self.allowed.values().filter_map(|r| r.api_key.clone()).collect()
+    }
+
     pub fn urls(&self) -> Vec<String> {
         self.allowed.keys().cloned().collect()
     }

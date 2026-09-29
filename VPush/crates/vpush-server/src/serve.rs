@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use tokio::net::TcpListener;
@@ -13,17 +14,28 @@ use crate::api::Api;
 use crate::config::Config;
 use crate::delivery::Providers;
 use crate::relays::RelayPolicy;
-use crate::store::{SqliteStore, Store};
-use crate::logging::{self, LogControl};
+use crate::store::{AllStore, SqliteStore, Store};
+use crate::relay::Watch;
+use crate::logging::{self, LogControl, Redactor};
+use crate::pipeline::Pipeline;
 use crate::{api, version};
 
 /// Runs until SIGINT or SIGTERM.
 pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
+    // Whoever in this process opens a TLS connection without naming the
+    // crypto it wants gets this one. The connections to relays are such:
+    // without this line the first of them takes the process down.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let config = Config::load(&config_path)?;
     let format = config.log_format().map_err(anyhow::Error::msg)?;
     let base = config.log_spec().map_err(anyhow::Error::msg)?;
 
-    let log = logging::init(format, base);
+    // Before the first line is logged: the keys of the relays are what the
+    // log writer takes out of every line.
+    let relays = Arc::new(RelayPolicy::from_config(&config).map_err(anyhow::Error::msg)?);
+
+    let log = logging::init(format, base, Redactor::new(relays.secrets()));
     log.spawn_expiry();
     version::mark_started();
 
@@ -43,7 +55,6 @@ pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
         tracing::info!(app, providers = kinds, "app");
     }
 
-    let relays = Arc::new(RelayPolicy::from_config(&config).map_err(anyhow::Error::msg)?);
     let sqlite = SqliteStore::open(&config.store.path).await?;
     tracing::info!(
         path = %config.store.path.display(),
@@ -51,8 +62,16 @@ pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
         devices = sqlite.counts().await?.devices,
         "database opened"
     );
-    let store: Arc<dyn Store> = Arc::new(sqlite.clone());
+    let everything: Arc<dyn AllStore> = Arc::new(sqlite.clone());
+    let store: Arc<dyn Store> = everything.clone();
     tokio::spawn(forget_expired(Arc::clone(&store)));
+
+    let pipeline = Pipeline::new(
+        Arc::clone(&everything),
+        Arc::clone(&providers),
+        Duration::from_secs(config.pipeline.throttle_secs),
+    );
+    let watcher = Watch::new();
 
     let admin = AdminSocket::bind(&config.admin.socket)
         .await
@@ -69,21 +88,31 @@ pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
     let (stop_tx, stop_rx) = watch::channel(false);
     tokio::spawn(watch_signals(stop_tx, config_path, Arc::clone(&log)));
 
+    let watch_task = tokio::spawn(crate::relay::run(
+        Arc::clone(&watcher),
+        everything,
+        Arc::clone(&relays),
+        pipeline,
+        stop_rx.clone(),
+    ));
+
     let admin_task = tokio::spawn(admin.run(
         AdminState {
             log,
             providers: Arc::clone(&providers),
             store: Arc::clone(&store),
+            watch: Arc::clone(&watcher),
         },
         stopped(stop_rx.clone()),
     ));
 
-    let api = Api::new(Arc::new(config), store, providers, relays);
+    let api = Api::new(Arc::new(config), store, providers, relays, watcher);
     axum::serve(listener, api::router(api))
         .with_graceful_shutdown(stopped(stop_rx))
         .await
         .context("http server")?;
     let _ = admin_task.await;
+    let _ = watch_task.await;
     sqlite.close().await;
 
     tracing::info!("vpush stopped");

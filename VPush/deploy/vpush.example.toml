@@ -73,3 +73,8 @@ groups_per_device = 500
 registration_days = 30
 # Test pushes a device may ask for in an hour.
 test_per_hour = 3
+
+[pipeline]
+# A device is woken about one chat once in this many seconds. What comes in
+# between is counted, and told in one push when the time is up.
+throttle_secs = 20

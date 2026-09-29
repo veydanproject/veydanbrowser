@@ -115,3 +115,89 @@ pub trait Store: Send + Sync + 'static {
 
     async fn counts(&self) -> Result<Counts>;
 }
+
+/// What is watched on one relay.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RelayPlan {
+    /// Normalized.
+    pub url: String,
+    /// Keys whose direct messages are watched, sorted.
+    pub dm: Vec<String>,
+    /// Groups whose events are watched, sorted.
+    pub groups: Vec<String>,
+}
+
+/// What a watch is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum WatchKind {
+    Dm,
+    Group,
+}
+
+impl WatchKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dm => "dm",
+            Self::Group => "group",
+        }
+    }
+}
+
+/// What became of an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seen {
+    Pushed = 0,
+    /// It was on the relay before the watch began.
+    Baseline = 1,
+    /// Marked by its author as not worth a push.
+    Quiet = 2,
+    /// For nobody who is registered.
+    Nobody = 3,
+}
+
+/// A device a push goes to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recipient {
+    pub pubkey: String,
+    pub device_id: String,
+    pub app_id: String,
+    pub provider: String,
+    pub token: String,
+    pub locale: String,
+    pub author_key: Option<String>,
+    /// What this device calls the group the push is about.
+    pub group_name: Option<String>,
+}
+
+/// What the server does on the relays.
+#[async_trait]
+pub trait WatchStore: Send + Sync + 'static {
+    /// What to watch, by relay: for the devices that are registered, alive,
+    /// and want to be told.
+    async fn watch_plan(&self, now: u64) -> Result<Vec<RelayPlan>>;
+
+    /// What was taken stock of on a relay.
+    async fn baselined(&self, url: &str) -> Result<Vec<(WatchKind, String)>>;
+
+    async fn set_baselined(&self, url: &str, targets: &[(WatchKind, String)], now: u64) -> Result<()>;
+
+    /// True the first time an event is seen, false ever after.
+    async fn first_seen(&self, event_id: &str, what: Seen, now: u64) -> Result<bool>;
+
+    /// Forgets the events seen before `before`. Returns how many.
+    async fn purge_seen(&self, before: u64) -> Result<u64>;
+
+    /// The devices to tell about a direct message to `pubkey`.
+    async fn dm_recipients(&self, pubkey: &str, now: u64) -> Result<Vec<Recipient>>;
+
+    /// The devices to tell about an event of a group.
+    async fn group_recipients(&self, group_id: &str, now: u64) -> Result<Vec<Recipient>>;
+
+    async fn relay_alive(&self, url: &str, now: u64) -> Result<()>;
+
+    async fn relay_last_alive(&self, url: &str) -> Result<Option<u64>>;
+}
+
+/// Everything the server keeps.
+pub trait AllStore: Store + WatchStore {}
+impl<T: Store + WatchStore> AllStore for T {}

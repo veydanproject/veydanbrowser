@@ -36,6 +36,8 @@ pub struct Config {
     pub relays: RelaysConfig,
     #[serde(default)]
     pub limits: LimitsConfig,
+    #[serde(default)]
+    pub pipeline: PipelineConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,6 +102,20 @@ impl Default for LimitsConfig {
             registration_days: 30,
             test_per_hour: 3,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PipelineConfig {
+    /// A device is woken about one chat once in this many seconds. What
+    /// comes in between is counted and told in one push when the time is up.
+    pub throttle_secs: u64,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self { throttle_secs: 20 }
     }
 }
 
@@ -460,6 +476,10 @@ impl Config {
                 "devices_per_pubkey={} relays_per_device={} groups_per_device={} registration_days={} test_per_hour={}",
                 l.devices_per_pubkey, l.relays_per_device, l.groups_per_device, l.registration_days, l.test_per_hour
             ),
+        ));
+        out.push((
+            "pipeline.throttle_secs".to_string(),
+            self.pipeline.throttle_secs.to_string(),
         ));
         out
     }

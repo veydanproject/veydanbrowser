@@ -68,23 +68,8 @@ impl Server {
         let port = free_port();
         let config = write_config_with(&dir, port, "level = \"info\"", &extra(&dir));
 
-        let mut child = Command::new(BIN)
-            .args(["serve", "--config"])
-            .arg(&config)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-
         let out = Arc::new(Mutex::new(Vec::new()));
-        let stdout = child.stdout.take().unwrap();
-        let sink = Arc::clone(&out);
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                sink.lock().unwrap().push(line);
-            }
-        });
-
+        let child = Self::spawn(&config, &out);
         let server = Self {
             child,
             dir,
@@ -93,6 +78,44 @@ impl Server {
         };
         server.wait_for("ready");
         server
+    }
+
+    /// Starts the server. What it logs, and what it says when it falls, is
+    /// gathered in `out`.
+    fn spawn(config: &Path, out: &Arc<Mutex<Vec<String>>>) -> Child {
+        let mut child = Command::new(BIN)
+            .args(["serve", "--config"])
+            .arg(config)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pipes: [Box<dyn Read + Send>; 2] = [
+            Box::new(child.stdout.take().unwrap()),
+            Box::new(child.stderr.take().unwrap()),
+        ];
+        for pipe in pipes {
+            let sink = Arc::clone(out);
+            std::thread::spawn(move || {
+                for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                    sink.lock().unwrap().push(line);
+                }
+            });
+        }
+        child
+    }
+
+    /// Stops the server and starts it again, with the config as it is now.
+    fn restart(&mut self) {
+        self.signal("TERM");
+        let _ = self.child.wait();
+        let before = self.count("ready");
+        self.child = Self::spawn(&self.config(), &self.out);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while self.count("ready") == before {
+            assert!(Instant::now() < deadline, "not started again:\n{}", self.lines().join("\n"));
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn config(&self) -> PathBuf {
@@ -486,4 +509,221 @@ fn a_broken_service_account_stops_the_start_with_a_reason() {
     let text = String::from_utf8_lossy(&out.stderr);
     assert!(text.contains("apps.app.fcm.service_account"), "{text}");
     assert!(text.contains("not a service account file"), "{text}");
+}
+
+/// A request signed the way a client signs it (NIP-98).
+fn signed(keys: &nostr::key::Keys, method: &str, url: &str, body: &[u8]) -> String {
+    use base64::Engine;
+    use nostr::prelude::*;
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let mut tags = vec![
+        Tag::parse(["u", url]).unwrap(),
+        Tag::parse(["method", method]).unwrap(),
+        Tag::parse(["nonce", hex(Keys::generate().public_key().as_bytes()).as_str()]).unwrap(),
+    ];
+    if !body.is_empty() {
+        let hash = ring::digest::digest(&ring::digest::SHA256, body);
+        tags.push(Tag::parse(["payload", hex(hash.as_ref()).as_str()]).unwrap());
+    }
+    let event = EventBuilder::new(Kind::HttpAuth, "").tags(tags).finalize(keys).unwrap();
+    format!(
+        "Nostr {}",
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&event).unwrap())
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_on_a_gated_relay_becomes_a_push_and_the_key_of_the_relay_stays_out_of_the_log() {
+    use nostr::prelude::*;
+    use nostr_sdk::local_relay::LocalRelay;
+
+    const GATE_KEY: &str = "gate-key-0123456789abcdef0123456789abcdef";
+
+    let relay = LocalRelay::new();
+    relay.run().await.unwrap();
+    let relay_url = relay.url().await.to_string().trim_end_matches('/').to_string();
+
+    let sent = wiremock::ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "name": "projects/veydan-test/messages/1" }));
+    let google = wiremock::MockServer::start().await;
+    {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "access-1", "expires_in": 3600
+            })))
+            .mount(&google)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/projects/veydan-test/messages:send"))
+            .respond_with(sent)
+            .mount(&google)
+            .await;
+    }
+
+    let uri = google.uri();
+    let server = tokio::task::block_in_place(|| {
+        Server::start_with("gated", |dir| {
+            std::fs::write(dir.join("relay.key"), format!("{GATE_KEY}\n")).unwrap();
+            let account = dir.join("fcm.json");
+            std::fs::write(
+                &account,
+                serde_json::json!({
+                    "project_id": "veydan-test",
+                    "private_key": crate::key::TEST_RSA_KEY,
+                    "client_email": "push@veydan-test.iam.gserviceaccount.com",
+                    "token_uri": format!("{uri}/token"),
+                })
+                .to_string(),
+            )
+            .unwrap();
+            format!(
+                "[log.targets]\nnostr_sdk = \"trace\"\nnostr_relay_pool = \"trace\"\nasync_wsocket = \"trace\"\nrelay = \"trace\"\npipeline = \"trace\"\n\
+                 [apps.\"net.veydan.mobile\".fcm]\nservice_account = \"{}\"\nendpoint = \"{uri}\"\n\
+                 [[relays.allow]]\nurl = \"{relay_url}\"\napi_key_file = \"{}\"\n\
+                 [pipeline]\nthrottle_secs = 1\n",
+                account.display(),
+                dir.join("relay.key").display(),
+            )
+        })
+    });
+    assert_eq!(server.count(&format!("{relay_url} (with a key)")), 1, "{}", server.lines().join("\n"));
+
+    // A phone registers, as the app would.
+    let alice = Keys::generate();
+    let body = serde_json::json!({
+        "app_id": "net.veydan.mobile",
+        "channel": { "provider": "fcm", "token": "token-of-the-phone" },
+        "locale": "en",
+        "relays": [{ "url": relay_url, "dm": true, "groups": true }],
+    })
+    .to_string();
+    let path = "/v1/devices/phone-0001";
+    let answer = reqwest::Client::new()
+        .put(format!("http://127.0.0.1:{}{path}", server.port))
+        .header(
+            "authorization",
+            signed(&alice, "PUT", &format!("http://localhost:{}{path}", server.port), body.as_bytes()),
+        )
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(answer.status(), 200);
+
+    tokio::task::block_in_place(|| server.wait_for("state=\"connected\""));
+    tokio::task::block_in_place(|| server.wait_for("stock taken"));
+
+    let message = EventBuilder::new(Kind::GiftWrap, "sealed")
+        .tags([Tag::public_key(alice.public_key())])
+        .finalize(&Keys::generate())
+        .unwrap();
+    relay.add_event(message.clone()).await.unwrap();
+
+    tokio::task::block_in_place(|| server.wait_for("outcome=\"delivered\""));
+    let pushes: Vec<_> = google
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path().ends_with("messages:send"))
+        .collect();
+    assert_eq!(pushes.len(), 1);
+    let push: serde_json::Value = serde_json::from_slice(&pushes[0].body).unwrap();
+    assert_eq!(push["message"]["data"]["type"], "dm");
+    assert_eq!(push["message"]["data"]["title"], "Direct message");
+    assert_eq!(push["message"]["data"]["event_id"], message.id.to_hex());
+
+    // The way of the event, from the relay to the push, by one number.
+    let trace = push["message"]["data"]["trace"].as_str().unwrap();
+    assert!(server.count(&format!("trace=\"{trace}\"")) + server.count(&format!("trace={trace}")) >= 2);
+
+    let (ok, text) = tokio::task::block_in_place(|| server.ctl(&["relays"]));
+    assert!(ok, "{text}");
+    assert!(text.contains(r#""state": "connected""#), "{text}");
+    assert!(!text.contains(GATE_KEY), "{text}");
+
+    let log = server.lines().join("\n");
+    assert!(!log.contains(GATE_KEY), "the key of the relay is in the log");
+    assert!(!log.contains("token-of-the-phone"), "the token is in the log");
+}
+
+/// The relays of the world are behind TLS, and the relays of the tests are
+/// not. This one is: something that takes a connection and says nothing,
+/// which is enough for the server to begin a TLS handshake.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relay_behind_tls_does_not_take_the_server_down() {
+    use nostr::prelude::*;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let relay_port = listener.local_addr().unwrap().port();
+    let asked = Arc::new(Mutex::new(0u32));
+    let counter = Arc::clone(&asked);
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            *counter.lock().unwrap() += 1;
+            std::thread::sleep(Duration::from_millis(200));
+            drop(stream);
+        }
+    });
+    let relay_url = format!("wss://localhost:{relay_port}");
+
+    let sent = wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({ "name": "m/1" }));
+    let (server, _google) = {
+        // The relay of this test is put on the list of a server that pushes
+        // through the mock.
+        let relay_url = relay_url.clone();
+        let (mut server, google) = server_with_fcm("tls-before", sent).await;
+        // Started again, with the relay on its list.
+        tokio::task::block_in_place(|| {
+            let config = std::fs::read_to_string(server.config()).unwrap();
+            std::fs::write(
+                server.config(),
+                format!("{config}\n[[relays.allow]]\nurl = \"{relay_url}\"\n"),
+            )
+            .unwrap();
+            server.restart();
+        });
+        (server, google)
+    };
+
+    let alice = Keys::generate();
+    let body = serde_json::json!({
+        "app_id": "net.veydan.mobile",
+        "channel": { "provider": "fcm", "token": "token-of-the-phone" },
+        "relays": [{ "url": relay_url, "dm": true, "groups": true }],
+    })
+    .to_string();
+    let path = "/v1/devices/phone-0001";
+    let answer = reqwest::Client::new()
+        .put(format!("http://127.0.0.1:{}{path}", server.port))
+        .header(
+            "authorization",
+            signed(&alice, "PUT", &format!("http://localhost:{}{path}", server.port), body.as_bytes()),
+        )
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(answer.status(), 200);
+
+    tokio::task::block_in_place(|| {
+        server.wait_for(&format!("watching relay={relay_url}"));
+        // Long enough for a handshake to begin, fail, and begin again.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while *asked.lock().unwrap() == 0 {
+            assert!(Instant::now() < deadline, "the server never came to the relay");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    });
+
+    let log = server.lines().join("\n");
+    assert!(!log.contains("panicked"), "{log}");
+    let (ok, text) = tokio::task::block_in_place(|| server.ctl(&["health"]));
+    assert!(ok, "the server is gone: {text}\n{log}");
+    let (_, relays) = tokio::task::block_in_place(|| server.ctl(&["relays"]));
+    assert!(relays.contains(&relay_url), "{relays}");
 }

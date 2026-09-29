@@ -84,6 +84,7 @@ async fn start_with(more_config: &str) -> Server {
         store.clone() as Arc<dyn Store>,
         Arc::new(providers),
         Arc::new(relays),
+        vpush_server::relay::Watch::new(),
     );
     tokio::spawn(async move {
         axum::serve(listener, api::router(api)).await.unwrap();

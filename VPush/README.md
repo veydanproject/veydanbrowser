@@ -6,10 +6,10 @@ wakes their devices when something arrives for them.
 The server never sees message contents. It sees that an encrypted event
 addressed to a user appeared on a relay, and tells the user's device.
 
-**State: 0.0.2.** What works today: configuration, logging that
-is steered while the server runs, the health check, the admin socket, the
-deploy with rollback, delivery through FCM and a command to try it. Relays
-and registration come in the next stages; see [CHANGELOG.md](CHANGELOG.md).
+**State: 0.1.0.** Devices register, relays are watched, and a message on a
+relay becomes a push through FCM. What is ahead: commands of the admin by
+direct message, relays of other operators, UnifiedPush; see
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Layout
 

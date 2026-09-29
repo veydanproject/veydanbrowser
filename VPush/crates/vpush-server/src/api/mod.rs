@@ -22,6 +22,7 @@ use crate::delivery::Providers;
 use crate::relays::RelayPolicy;
 use crate::store::Store;
 use crate::version;
+use crate::relay::Watch;
 
 const REQUEST_ID: &str = "x-request-id";
 
@@ -36,6 +37,8 @@ pub struct Api {
     pub store: Arc<dyn Store>,
     pub providers: Arc<Providers>,
     pub relays: Arc<RelayPolicy>,
+    /// How the relays are doing, and the way to say that what is watched changed.
+    pub watch: Arc<Watch>,
     pub auth: Arc<Nip98>,
     pub tests: Arc<TestLimiter>,
 }
@@ -46,6 +49,7 @@ impl Api {
         store: Arc<dyn Store>,
         providers: Arc<Providers>,
         relays: Arc<RelayPolicy>,
+        watch: Arc<Watch>,
     ) -> Self {
         Self {
             auth: Arc::new(Nip98::new(&config.public_url)),
@@ -54,6 +58,7 @@ impl Api {
             store,
             providers,
             relays,
+            watch,
         }
     }
 }

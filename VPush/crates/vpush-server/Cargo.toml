@@ -27,9 +27,12 @@ rustls = { workspace = true }
 webpki-roots = { workspace = true }
 async-trait = { workspace = true }
 nostr = { workspace = true }
+nostr-sdk = { workspace = true }
+futures-util = { workspace = true }
 sqlx = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
+nostr-sdk = { workspace = true, features = ["local-relay"] }
