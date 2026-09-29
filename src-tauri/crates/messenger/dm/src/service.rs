@@ -103,6 +103,10 @@ impl DmService {
         self.unread_floor.store(at, Ordering::SeqCst);
     }
 
+    pub fn unread_floor(&self) -> i64 {
+        self.unread_floor.load(Ordering::SeqCst)
+    }
+
     pub fn store(&self) -> &Store {
         &self.store
     }
