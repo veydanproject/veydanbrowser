@@ -9,7 +9,7 @@
 
 [workspace]
 resolver = "2"
-members = ["core", "store", "identity", "transport", "ingress", "contacts", "dm", "media", "runtime", "testkit"]
+members = ["core", "http", "store", "identity", "transport", "ingress", "contacts", "dm", "media", "runtime", "testkit"]
 
 [workspace.package]
 version = "0.1.0"
@@ -30,6 +30,7 @@ tempfile = "3"
 nostr-sdk = { version = "0.45", default-features = false, features = ["ring", "rustls-tls-webpki-roots"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+webpki-roots = "1"
 aes-gcm = "0.11"
 sha2 = "0.11"
 hmac = "0.13"
@@ -40,6 +41,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 nostr = { version = "0.45", default-features = false, features = ["std", "nip06", "nip44", "nip49", "nip59", "os-rng"] }
 
 messenger-core = { path = "core" }
+messenger-http = { path = "http" }
 messenger-store = { path = "store" }
 messenger-identity = { path = "identity" }
 messenger-transport = { path = "transport" }
