@@ -38,6 +38,8 @@ pub const MEMBERSHIP_JOINING: &str = "joining";
 pub const MEMBERSHIP_REQUESTED: &str = "requested";
 /// A manager said no.
 pub const MEMBERSHIP_REJECTED: &str = "rejected";
+/// The link I came by was replaced before I got in.
+pub const MEMBERSHIP_STALE: &str = "stale_link";
 pub const MEMBERSHIP_LEFT: &str = "left";
 pub const MEMBERSHIP_REMOVED: &str = "removed";
 pub const MEMBERSHIP_BANNED: &str = "banned";
@@ -544,6 +546,12 @@ impl GroupService {
         .ok_or_else(|| MessengerError::Invalid("group_no_key".into()))?;
 
         let mut op = log.next(&me, self.now().max(before_time(&log) + 1), body);
+        if op.body == OpBody::Join {
+            let epoch = before.link_epoch;
+            let link = self.link_secret(group_id, epoch).await?.ok_or_else(|| MessengerError::Invalid("group_stale_link".into()))?;
+            let mac = link.group_key(group_id, epoch).join_mac(group_id, &me, epoch);
+            op = op.with_proof(crate::op::JoinProof { epoch, mac });
+        }
         let mut secret: Option<Vec<u8>> = None;
         let mut new_key: Option<GroupKey> = None;
         if before.requires_key(&op.body) {
@@ -588,6 +596,13 @@ impl GroupService {
         self.keep_op(&op, &serde_json::to_value(&signed)?).await?;
 
         let mut outcome = Outcome { publish: vec![Self::scoped(group_id, sealed)], ..Default::default() };
+        if let (OpBody::RotateLink { .. }, Some(new)) = (&op.body, &new_key) {
+            // Whoever comes by the new link reads the group from its start.
+            let mut older: Vec<GroupKey> = self.all_keys(group_id).await?.into_iter().filter(|k| k.id() != new.id()).collect();
+            let skip = older.len().saturating_sub(wire::MAX_CHAIN_KEYS);
+            older.drain(..skip);
+            outcome.publish.push(Self::scoped(group_id, wire::seal_chain(group_id, new, &older, op.created_at)?));
+        }
         let membership = match &op.body {
             OpBody::Leave => Some(MEMBERSHIP_LEFT),
             OpBody::Join => Some(MEMBERSHIP_JOINED),
@@ -706,6 +721,10 @@ impl GroupService {
     /// Any operation on the group: remove, ban, role, mute, settings,
     /// transfer, leave, disband, new link.
     pub async fn act(&self, keys: &Keys, group_id: &str, body: OpBody) -> Result<Outcome> {
+        // In a public group the key is the link: there is no other.
+        if body == OpBody::RotateKey && self.need_log(group_id).await?.state().kind == GroupKind::Public {
+            return Err(rejection(Rejection::WrongKind));
+        }
         if matches!(body, OpBody::Create { .. } | OpBody::Join | OpBody::Admit { .. }) {
             return Err(MessengerError::Invalid("group_wrong_action".into()));
         }
@@ -875,6 +894,11 @@ impl GroupService {
         if s.is_member(&me) {
             self.refresh_row(group_id, &me, Some(MEMBERSHIP_JOINED)).await?;
             return Ok(Outcome { events: vec![Self::updated(group_id)], ..Default::default() });
+        }
+        if self.link_secret(group_id, s.link_epoch).await?.is_none() {
+            // The group has a newer link than the one I hold.
+            self.refresh_row(group_id, &me, Some(MEMBERSHIP_STALE)).await?;
+            return Ok(Outcome { events: vec![Self::updated(group_id)], resubscribe: true, ..Default::default() });
         }
         Ok(self.operate(keys, group_id, OpBody::Join).await?.1)
     }

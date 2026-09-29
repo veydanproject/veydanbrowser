@@ -50,6 +50,18 @@ impl GroupKey {
         &self.0
     }
 
+    /// What someone who joins by a link shows: a value only a holder of
+    /// the key of that link can compute, bound to who they are.
+    pub fn join_mac(&self, group_id: &str, author: &messenger_core::PubKey, link_epoch: u32) -> String {
+        let mut h = Sha256::new();
+        h.update(b"veydan.group.join.v1\0");
+        h.update(self.0);
+        h.update(group_id.as_bytes());
+        h.update(author.as_hex().as_bytes());
+        h.update(link_epoch.to_le_bytes());
+        hex::encode(h.finalize())
+    }
+
     pub fn id(&self) -> KeyId {
         KeyId::of(&self.0)
     }

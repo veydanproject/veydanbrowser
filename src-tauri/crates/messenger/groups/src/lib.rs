@@ -20,6 +20,7 @@
 
 pub mod keys;
 pub mod log;
+pub mod media;
 pub mod op;
 pub mod roles;
 pub mod handler;
@@ -32,7 +33,7 @@ pub mod wire;
 
 pub use keys::{GroupKey, GroupLink, LinkSecret};
 pub use log::{Insert, KeyStatus, OpLog};
-pub use op::{GroupKind, KeyId, Op, OpBody, OpId};
+pub use op::{GroupKind, JoinProof, KeyId, Op, OpBody, OpId};
 pub use roles::{permits, Action, Role};
 pub use handler::{GroupDmHandler, GroupHandler, Signal, Signals};
 pub use service::{GroupService, GroupView, InviteView, MemberView, Outcome};

@@ -510,7 +510,7 @@ async fn ban_hides_and_a_new_link_shuts_the_old_one() {
     w.open_link(late, &link).await;
     w.catch_up(late).await;
     let v = w.devices[late].group(&g).await.unwrap();
-    assert_ne!(v.membership, "joined");
+    assert_eq!(v.membership, "stale_link");
     assert!(!w.devices[late].texts(&g).await.contains(&"behind the new link".to_string()));
     assert_eq!(w.devices[alice].group(&g).await.unwrap().members.len(), 2);
 }
@@ -598,4 +598,98 @@ async fn ownership_moves_and_the_group_ends() {
     assert_eq!(w.devices[bob].group(&g).await.unwrap().membership, "disbanded");
     assert_eq!(code(w.try_say(bob, &g, "anyone?").await), "group_not_member");
     let _ = KeyId("".into());
+}
+
+#[tokio::test]
+async fn the_new_link_opens_everything_and_the_old_one_cannot_be_forced() {
+    let mut w = World::new();
+    let alice = w.person().await;
+    let bob = w.person().await;
+    let newcomer = w.person().await;
+    let cheat = w.person().await;
+    let g = w.create(alice, GroupKind::Public, "Square", true).await;
+    let old = w.devices[alice].group(&g).await.unwrap().link.unwrap();
+    w.open_link(bob, &old).await;
+    w.catch_up(bob).await;
+    w.say(bob, &g, "before").await;
+    w.act(alice, &g, OpBody::RotateLink { link_epoch: 1 }).await.unwrap();
+    w.say(alice, &g, "after").await;
+    let new = w.devices[alice].group(&g).await.unwrap().link.unwrap();
+
+    w.open_link(newcomer, &new).await;
+    w.catch_up(newcomer).await;
+    let v = w.devices[newcomer].group(&g).await.unwrap();
+    assert_eq!((v.membership.as_str(), v.members.len(), v.undecrypted), ("joined", 3, 0));
+    assert_eq!(w.devices[newcomer].texts(&g).await, vec!["before", "after"]);
+    w.say(newcomer, &g, "hello").await;
+    assert_eq!(w.devices[bob].texts(&g).await, vec!["before", "after", "hello"]);
+
+    // Someone with the old link who does not play by the rules: a join
+    // that pretends not to know about the new link, and one that claims it.
+    w.open_link(cheat, &old).await;
+    let cheat_keys = w.devices[cheat].keys.clone();
+    let link = GroupLink::parse(&old).unwrap();
+    let old_key = link.secret.unwrap().group_key(&g, 0);
+    let me = me_of(&cheat_keys);
+    let create = w.devices[alice].svc.need_log(&g).await.unwrap().ordered().next().unwrap().clone();
+    let heads = w.devices[alice].svc.need_log(&g).await.unwrap().heads();
+    let forged = [
+        crate::op::Op::new(&g, &me, vec![create.id()], 9_000, OpBody::Join)
+            .with_proof(crate::op::JoinProof { epoch: 0, mac: old_key.join_mac(&g, &me, 0) }),
+        crate::op::Op::new(&g, &me, heads, 9_001, OpBody::Join)
+            .with_proof(crate::op::JoinProof { epoch: 1, mac: old_key.join_mac(&g, &me, 1) }),
+    ];
+    for op in forged {
+        let signed = crate::wire::sign_op(&cheat_keys, &op).unwrap();
+        let sealed = crate::wire::seal_op(&g, &old_key, &signed, vec![]).unwrap();
+        w.run(cheat, Outcome { publish: vec![GroupService::scoped(&g, sealed)], ..Default::default() }).await;
+    }
+    for d in [alice, bob, newcomer] {
+        let v = w.devices[d].group(&g).await.unwrap();
+        assert_eq!(v.members.len(), 3, "device {d}");
+        assert!(!v.members.iter().any(|m| m.pubkey == me.as_hex()));
+    }
+    w.catch_up(cheat).await;
+    assert_eq!(w.devices[cheat].group(&g).await.unwrap().membership, "stale_link");
+}
+
+#[tokio::test]
+async fn joining_too_early_by_an_old_link_ends_as_a_stale_link() {
+    let mut w = World::new();
+    let alice = w.person().await;
+    let carol = w.person().await;
+    let g = w.create(alice, GroupKind::Public, "Square", true).await;
+    let old = w.devices[alice].group(&g).await.unwrap().link.unwrap();
+    w.offline(carol);
+    w.act(alice, &g, OpBody::RotateLink { link_epoch: 1 }).await.unwrap();
+    w.online(carol).await;
+    // The relay answers oldest first this time: carol sees the group as
+    // it was, joins, and only then learns that the link was replaced.
+    w.open_link(carol, &old).await;
+    let history = w.relay.clone();
+    for e in history {
+        let o = w.deliver(carol, &Wire::Group(e), true).await;
+        w.run(carol, o).await;
+    }
+    assert_eq!(w.devices[carol].group(&g).await.unwrap().membership, "stale_link");
+    assert_eq!(w.devices[alice].group(&g).await.unwrap().members.len(), 1);
+    // The banned stay banned however they date their join.
+    let troll = w.person().await;
+    let new = w.devices[alice].group(&g).await.unwrap().link.unwrap();
+    w.open_link(troll, &new).await;
+    w.catch_up(troll).await;
+    w.act(alice, &g, OpBody::Ban { who: w.pk(troll) }).await.unwrap();
+    let keys = w.devices[troll].keys.clone();
+    let me = me_of(&keys);
+    let link = GroupLink::parse(&new).unwrap();
+    let key = link.secret.unwrap().group_key(&g, 1);
+    let log = w.devices[alice].svc.need_log(&g).await.unwrap();
+    let rotate = log.ordered().find(|o| matches!(o.body, OpBody::RotateLink { .. })).unwrap().id();
+    let op = crate::op::Op::new(&g, &me, vec![rotate], 9_000, OpBody::Join)
+        .with_proof(crate::op::JoinProof { epoch: 1, mac: key.join_mac(&g, &me, 1) });
+    let signed = crate::wire::sign_op(&keys, &op).unwrap();
+    let sealed = crate::wire::seal_op(&g, &key, &signed, vec![]).unwrap();
+    w.run(troll, Outcome { publish: vec![GroupService::scoped(&g, sealed)], ..Default::default() }).await;
+    let v = w.devices[alice].group(&g).await.unwrap();
+    assert_eq!((v.members.len(), v.banned.len()), (1, 1));
 }

@@ -212,7 +212,7 @@ impl OpLog {
     }
 
     fn rebuild(&mut self) {
-        let Some((order, rejected, mut state)) = linearize(&self.ops) else { return };
+        let Some((order, rejected, mut state)) = agree(&self.ops) else { return };
         self.key_status = key_status(&self.ops, &order, &rejected, &mut state);
         self.order = order;
         self.rejected = rejected;
@@ -220,8 +220,43 @@ impl OpLog {
     }
 }
 
-/// The agreed order of a set of operations and the state it produces.
-fn linearize(ops: &HashMap<OpId, Op>) -> Option<(Vec<OpId>, HashMap<OpId, Rejection>, GroupState)> {
+/// The order and the state everyone arrives at.
+///
+/// An operation names the part of the log its author knew, and nothing
+/// stops an author from naming less than they know. For a join by link
+/// that matters: named early enough, it would come before the change
+/// of the link it has no key for. So a join counts only if every later
+/// change of the link knew of it; one that happened beside or after a
+/// change of the link does not.
+fn agree(ops: &HashMap<OpId, Op>) -> Option<(Vec<OpId>, HashMap<OpId, Rejection>, GroupState)> {
+    let mut stale: HashSet<OpId> = HashSet::new();
+    loop {
+        let (order, rejected, state) = linearize(ops, &stale)?;
+        let applied = || order.iter().filter(|id| !rejected.contains_key(*id)).filter_map(|id| ops.get(id).map(|o| (id, o)));
+        let changes: Vec<(u32, HashSet<OpId>)> = applied()
+            .filter_map(|(id, o)| match o.body {
+                OpBody::RotateLink { link_epoch } => Some((link_epoch, knowledge(ops, id))),
+                _ => None,
+            })
+            .collect();
+        let found: Vec<OpId> = applied()
+            .filter(|(_, o)| o.body == OpBody::Join)
+            .filter(|(id, o)| {
+                let epoch = o.proof.as_ref().map(|p| p.epoch).unwrap_or(0);
+                changes.iter().any(|(e, known)| *e > epoch && !known.contains(*id))
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if found.is_empty() {
+            return Some((order, rejected, state));
+        }
+        stale.extend(found);
+    }
+}
+
+/// One pass: the order of a set of operations and the state it produces.
+/// `stale` are joins already known not to count.
+fn linearize(ops: &HashMap<OpId, Op>, stale: &HashSet<OpId>) -> Option<(Vec<OpId>, HashMap<OpId, Rejection>, GroupState)> {
     let (root_id, root) = ops.iter().find(|(_, o)| matches!(o.body, OpBody::Create { .. }))?;
     let mut state = GroupState::genesis(root).ok()?;
 
@@ -253,7 +288,9 @@ fn linearize(ops: &HashMap<OpId, Op>) -> Option<(Vec<OpId>, HashMap<OpId, Reject
         let Some(pick) = ready.iter().max_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| b.cmp(a))).cloned() else { break };
         ready.remove(&pick);
         if let Some(op) = ops.get(&pick) {
-            if let Err(r) = state.apply(op) {
+            if stale.contains(&pick) {
+                rejected.insert(pick.clone(), Rejection::StaleLink);
+            } else if let Err(r) = state.apply(op) {
                 rejected.insert(pick.clone(), r);
             }
         }
@@ -355,6 +392,9 @@ mod tests {
         fn make(&mut self, body: OpBody, with_key: Option<u8>) -> Op {
             self.clock += 1;
             let mut op = self.log.next(&self.me, self.clock, body);
+            if op.body == OpBody::Join {
+                op = op.with_proof(crate::op::JoinProof { epoch: self.log.state().link_epoch, mac: "m".into() });
+            }
             if let Some(k) = with_key {
                 op = op.with_key(key(k));
             }

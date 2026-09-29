@@ -99,6 +99,15 @@ pub enum OpBody {
     Disband,
 }
 
+/// Joining a public group by its link: the author shows that they hold
+/// the key of the link that is current.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinProof {
+    pub epoch: u32,
+    /// See `GroupKey::join_mac`.
+    pub mac: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Op {
     pub v: u32,
@@ -111,6 +120,9 @@ pub struct Op {
     /// The key that is current after this operation, when it brings one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<KeyId>,
+    /// `Join` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof: Option<JoinProof>,
     #[serde(flatten)]
     pub body: OpBody,
 }
@@ -119,7 +131,12 @@ impl Op {
     pub fn new(group_id: &str, author: &PubKey, mut parents: Vec<OpId>, created_at: i64, body: OpBody) -> Self {
         parents.sort();
         parents.dedup();
-        Self { v: OP_VERSION, group_id: group_id.to_string(), author: author.clone(), parents, created_at, key: None, body }
+        Self { v: OP_VERSION, group_id: group_id.to_string(), author: author.clone(), parents, created_at, key: None, proof: None, body }
+    }
+
+    pub fn with_proof(mut self, proof: JoinProof) -> Self {
+        self.proof = Some(proof);
+        self
     }
 
     pub fn with_key(mut self, key: KeyId) -> Self {

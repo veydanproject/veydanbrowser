@@ -31,6 +31,8 @@ const HELD: &str = "held:";
 const HELD_TTL_SECS: i64 = 24 * 3600;
 /// Clocks differ: a message may be dated a little before the join.
 const JOIN_SLACK_SECS: i64 = 300;
+/// Keys a device keeps for one group.
+const MAX_KEYS: usize = 512;
 
 struct Item {
     event_id: String,
@@ -97,7 +99,11 @@ fn standing(log: &OpLog, who: &PubKey, at: i64) -> Standing {
 fn departure(log: &OpLog, me: &PubKey) -> &'static str {
     let mut how = MEMBERSHIP_REMOVED;
     for op in log.ordered() {
-        if log.rejection(&op.id()).is_some() {
+        if let Some(r) = log.rejection(&op.id()) {
+            // I came by a link that was replaced meanwhile.
+            if op.body == OpBody::Join && &op.author == me && r == &crate::state::Rejection::StaleLink {
+                how = MEMBERSHIP_STALE;
+            }
             continue;
         }
         match &op.body {
@@ -460,7 +466,13 @@ impl GroupService {
         )
         .await?;
         self.forget_log(&group_id).await;
+        for key in wire::decode_keys(&body.keys) {
+            self.keep_key(&group_id, &key).await?;
+        }
         for (op, signed) in &verified {
+            if self.join_proven(&group_id, op).await? == Some(false) {
+                continue;
+            }
             self.keep_op(op, signed).await?;
         }
         for key in wire::decode_keys(&body.keys) {
@@ -584,8 +596,53 @@ impl GroupService {
                 }
                 Ok(false)
             }
-            Opened::Op { op, signed, envelopes } => self.on_op(keys, group_id, op, signed, envelopes, out).await,
+            Opened::Op { op, signed, envelopes } => {
+                // A join has to show the key of the link that is current.
+                match self.join_proven(group_id, &op).await? {
+                    Some(true) => self.on_op(keys, group_id, op, signed, envelopes, out).await,
+                    Some(false) => Ok(false),
+                    None => {
+                        self.hold(group_id, &format!("{HELD}{}", key.id().0), item).await?;
+                        Ok(false)
+                    }
+                }
+            }
+            Opened::Chain(older) => {
+                let mut new = false;
+                if repo::key_ids(&self.store, group_id).await?.len() < MAX_KEYS {
+                    for k in older {
+                        new |= self.keep_key(group_id, &k).await?;
+                    }
+                }
+                Ok(new)
+            }
         }
+    }
+
+    /// `Some(true)`: not a join, or a join with a good proof. `None`: the
+    /// key of that link is not here yet.
+    pub(crate) async fn join_proven(&self, group_id: &str, op: &Op) -> Result<Option<bool>> {
+        if op.body != OpBody::Join {
+            return Ok(Some(true));
+        }
+        let Some(proof) = &op.proof else { return Ok(Some(false)) };
+        let key = match self.link_secret(group_id, proof.epoch).await? {
+            Some(link) => Some(link.group_key(group_id, proof.epoch)),
+            None => {
+                // Not my link: the log says which key it gave.
+                let Some(log) = self.log(group_id).await? else { return Ok(None) };
+                let id = log.ordered().filter(|o| log.rejection(&o.id()).is_none()).find_map(|o| match &o.body {
+                    OpBody::Create { .. } if proof.epoch == 0 => o.key.clone(),
+                    OpBody::RotateLink { link_epoch } if *link_epoch == proof.epoch => o.key.clone(),
+                    _ => None,
+                });
+                match id {
+                    Some(id) => self.key(group_id, &id).await?,
+                    None => None,
+                }
+            }
+        };
+        Ok(key.map(|k| k.join_mac(group_id, &op.author, proof.epoch) == proof.mac))
     }
 
     /// Try again everything that waited, until nothing more is learned.

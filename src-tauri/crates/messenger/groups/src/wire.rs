@@ -28,6 +28,8 @@ pub const KIND_INNER_MESSAGE: u16 = 9;
 pub const KIND_INNER_OP: u16 = 39100;
 
 pub const PAYLOAD_VERSION: u32 = 1;
+/// Keys one chain event may carry.
+pub const MAX_CHAIN_KEYS: usize = 64;
 pub const INVITE_TTL_SECS: i64 = 7 * 24 * 3600;
 
 fn crypto(e: impl std::fmt::Display) -> MessengerError {
@@ -50,14 +52,20 @@ pub struct SecretEnvelope {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Payload {
     pub v: u32,
-    /// `msg` | `op`
+    /// `msg` | `op` | `chain`
     pub t: String,
-    /// Signed by the real author.
+    /// Signed by the real author. Absent in a `chain`.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub event: serde_json::Value,
     /// Operations that bring a key or a link secret: one envelope per
     /// member who is to have it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub envelopes: Vec<SecretEnvelope>,
+    /// `chain`: the keys that were current before this one (base64), for
+    /// those who came by a newer link. Nothing here is trusted: a key
+    /// only opens events, and what is inside them is signed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
 }
 
 /// What a payload turned out to be, authors verified.
@@ -65,6 +73,7 @@ pub struct Payload {
 pub enum Opened {
     Message(InnerMessage),
     Op { op: Op, signed: serde_json::Value, envelopes: Vec<SecretEnvelope> },
+    Chain(Vec<GroupKey>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,12 +175,24 @@ pub fn seal(group_id: &str, key: &GroupKey, payload: &Payload, created_at: i64) 
 }
 
 pub fn seal_message(group_id: &str, key: &GroupKey, signed: &Event) -> Result<WireEvent> {
-    let payload = Payload { v: PAYLOAD_VERSION, t: "msg".into(), event: serde_json::to_value(signed)?, envelopes: vec![] };
+    let payload = Payload { v: PAYLOAD_VERSION, t: "msg".into(), event: serde_json::to_value(signed)?, envelopes: vec![], keys: vec![] };
     seal(group_id, key, &payload, signed.created_at.as_secs() as i64)
 }
 
+/// Older keys for the holders of a newer one.
+pub fn seal_chain(group_id: &str, key: &GroupKey, older: &[GroupKey], created_at: i64) -> Result<WireEvent> {
+    let payload = Payload {
+        v: PAYLOAD_VERSION,
+        t: "chain".into(),
+        event: serde_json::Value::Null,
+        envelopes: vec![],
+        keys: encode_keys(older),
+    };
+    seal(group_id, key, &payload, created_at)
+}
+
 pub fn seal_op(group_id: &str, key: &GroupKey, signed: &Event, envelopes: Vec<SecretEnvelope>) -> Result<WireEvent> {
-    let payload = Payload { v: PAYLOAD_VERSION, t: "op".into(), event: serde_json::to_value(signed)?, envelopes };
+    let payload = Payload { v: PAYLOAD_VERSION, t: "op".into(), event: serde_json::to_value(signed)?, envelopes, keys: vec![] };
     seal(group_id, key, &payload, signed.created_at.as_secs() as i64)
 }
 
@@ -185,6 +206,7 @@ pub fn open(group_id: &str, key: &GroupKey, ciphertext: &str) -> Result<Opened> 
     match payload.t.as_str() {
         "msg" => Ok(Opened::Message(verify_message(&payload.event, group_id)?)),
         "op" => Ok(Opened::Op { op: verify_op(&payload.event, group_id)?, signed: payload.event, envelopes: payload.envelopes }),
+        "chain" => Ok(Opened::Chain(decode_keys(&payload.keys).into_iter().take(MAX_CHAIN_KEYS).collect())),
         _ => Err(invalid("payload type")),
     }
 }

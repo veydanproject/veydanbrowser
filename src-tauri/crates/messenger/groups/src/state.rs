@@ -71,6 +71,8 @@ pub enum Rejection {
     WrongKind,
     KeyRequired,
     KeyNotAllowed,
+    /// A join without the proof, or by a link that is no longer current.
+    StaleLink,
     Invalid { what: String },
 }
 
@@ -244,6 +246,10 @@ impl GroupState {
             if self.is_member(&op.author) {
                 return Err(Rejection::AlreadyMember);
             }
+            match &op.proof {
+                Some(p) if p.epoch == self.link_epoch && !p.mac.is_empty() => {}
+                _ => return Err(Rejection::StaleLink),
+            }
             if op.key.is_some() {
                 return Err(Rejection::KeyNotAllowed);
             }
@@ -255,6 +261,9 @@ impl GroupState {
             return Ok(());
         }
 
+        if op.proof.is_some() {
+            return Err(invalid("proof"));
+        }
         let actor = self.role_of(&op.author).ok_or(Rejection::AuthorNotMember)?;
         // Only managers choose keys: whoever brings a key knows it.
         if op.key.is_some() && !actor.is_manager() {
@@ -405,7 +414,13 @@ pub(crate) mod tests {
 
     /// An operation on top of "something": parents do not matter to `apply`.
     pub(crate) fn op(author: &PubKey, body: OpBody) -> Op {
-        Op::new(GROUP, author, vec![OpId("p".into())], 200, body)
+        let join = body == OpBody::Join;
+        let op = Op::new(GROUP, author, vec![OpId("p".into())], 200, body);
+        if join {
+            op.with_proof(crate::op::JoinProof { epoch: 0, mac: "m".into() })
+        } else {
+            op
+        }
     }
 
     /// Owner `o`, admin `a`, moderator `m`, member `u`.
