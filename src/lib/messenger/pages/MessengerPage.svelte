@@ -4,92 +4,149 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from '$lib/i18n';
+  import Icon from '$lib/Icon.svelte';
   import { messengerStore } from '../store.svelte';
+  import { chatStore } from '../chats/chatStore.svelte';
   import IdentityOnboarding from '../identity/IdentityOnboarding.svelte';
-  import IdentityCard from '../identity/IdentityCard.svelte';
-  import RelaysPanel from '../relays/RelaysPanel.svelte';
-  import DebugFeed from '../debug/DebugFeed.svelte';
-  import OwnProfileCard from '../contacts/OwnProfileCard.svelte';
+  import ChatList from '../chats/ChatList.svelte';
+  import NewChatDialog from '../chats/NewChatDialog.svelte';
+  import ChatWindow from '../dm/ChatWindow.svelte';
   import ContactsPanel from '../contacts/ContactsPanel.svelte';
+  import SettingsView from './SettingsView.svelte';
+  import type { MessengerChat } from '../api';
 
-  onMount(() => { messengerStore.refresh().catch(() => {}); });
+  type View = 'chat' | 'contacts' | 'settings';
+  let view = $state<View>('chat');
+  let query = $state('');
+  let newChat = $state(false);
 
-  let s = $derived(messengerStore.status);
+  onMount(() => {
+    messengerStore.refresh().catch(() => {});
+    messengerStore.startListeners().catch(() => {});
+  });
+
+  const s = $derived(messengerStore.status);
+  const connected = $derived(s?.runtime?.relays_connected ?? 0);
+  const total = $derived(s?.runtime?.relays_total ?? 0);
+  const netState = $derived(
+    !s?.runtime ? 'off' : s.runtime.silent_mode ? 'silent' : !s.runtime.session_active ? 'locked' : connected > 0 ? 'on' : 'connecting',
+  );
+
+  function openChat(c: MessengerChat) {
+    view = 'chat';
+    chatStore.open(c.id).catch(() => {});
+  }
+
+  function show(v: View) {
+    view = v;
+    if (v !== 'chat') chatStore.close();
+  }
 </script>
 
-<div class="page">
-  <div class="page-header">
-    <div class="page-title-group">
+{#if !s}
+  <div class="page"><div class="empty-state">{$t('loading')}</div></div>
+{:else if !s.compiled}
+  <div class="page"><div class="error-msg">{$t('msg_status_not_compiled')}</div></div>
+{:else if s.error}
+  <div class="page"><div class="error-msg">{$t('msg_status_error', { error: s.error })}</div></div>
+{:else if s.runtime && (!messengerStore.identity || messengerStore.pendingBackup)}
+  <div class="page">
+    <div class="page-header">
       <h1>{$t('msg_title')} <span class="alpha-badge">{$t('msg_alpha_badge')}</span></h1>
-      <p class="page-sub">{$t('msg_intro')}</p>
+    </div>
+    <p class="page-sub">{$t('msg_intro')}</p>
+    <IdentityOnboarding />
+  </div>
+{:else if s.runtime}
+  <div class="page page--fill messenger">
+    <div class="shell">
+      <aside class="rail" class:hidden-narrow={view !== 'chat' || !!chatStore.active}>
+        <div class="rail-head">
+          <span class="rail-title">{$t('msg_title')} <span class="alpha-badge">{$t('msg_alpha_badge')}</span></span>
+          <span class="net {netState}" title={$t(`msg_net_${netState}` as 'msg_net_on', { connected: String(connected), total: String(total) })}></span>
+          <span class="spacer"></span>
+          <button class="icon" class:active={view === 'contacts'} onclick={() => show(view === 'contacts' ? 'chat' : 'contacts')} title={$t('msg_contacts_title')}><Icon name="users" size={16} /></button>
+          <button class="icon" class:active={view === 'settings'} onclick={() => show(view === 'settings' ? 'chat' : 'settings')} title={$t('msg_settings_title')}><Icon name="settings" size={16} /></button>
+          <button class="icon accent" onclick={() => (newChat = true)} title={$t('msg_newchat_title')}><Icon name="edit" size={16} /></button>
+        </div>
+        <div class="search">
+          <Icon name="search" size={14} />
+          <input type="text" bind:value={query} placeholder={$t('msg_chats_search')} spellcheck="false" />
+          {#if query}<button class="icon sm" onclick={() => (query = '')}><Icon name="x" size={12} /></button>{/if}
+        </div>
+        <ChatList {query} onopen={openChat} />
+      </aside>
+
+      <main class="pane" class:hidden-narrow={view === 'chat' && !chatStore.active}>
+        {#if view === 'contacts'}
+          <div class="pane-scroll">
+            <button class="back-narrow btn btn-ghost btn-sm" onclick={() => show('chat')}><Icon name="arrow-left" size={12} />{$t('msg_back')}</button>
+            <ContactsPanel onchat={(pubkey) => { view = 'chat'; chatStore.openPeer(pubkey).catch(() => {}); }} />
+          </div>
+        {:else if view === 'settings'}
+          <div class="pane-scroll">
+            <button class="back-narrow btn btn-ghost btn-sm" onclick={() => show('chat')}><Icon name="arrow-left" size={12} />{$t('msg_back')}</button>
+            <SettingsView />
+          </div>
+        {:else if chatStore.active}
+          <ChatWindow chat={chatStore.active} onback={() => chatStore.close()} />
+        {:else}
+          <div class="welcome">
+            <div class="welcome-icon"><Icon name="message-circle" size={34} /></div>
+            <p>{$t('msg_welcome_title')}</p>
+            <span>{$t('msg_welcome_text')}</span>
+            <button class="btn btn-primary" onclick={() => (newChat = true)}><Icon name="edit" size={14} />{$t('msg_newchat_title')}</button>
+          </div>
+        {/if}
+      </main>
     </div>
   </div>
-
-  {#if !s}
-    <div class="empty-state">{$t('loading')}</div>
-  {:else if !s.compiled}
-    <div class="error-msg">{$t('msg_status_not_compiled')}</div>
-  {:else if s.error}
-    <div class="error-msg">{$t('msg_status_error', { error: s.error })}</div>
-  {:else if s.runtime}
-    <div class="stack">
-      {#if messengerStore.identity}
-        <IdentityCard identity={messengerStore.identity} />
-      {:else}
-        <IdentityOnboarding />
-      {/if}
-
-      {#if messengerStore.identity}
-        <OwnProfileCard />
-        <ContactsPanel />
-      {/if}
-
-      <RelaysPanel />
-
-      <DebugFeed />
-
-      <div class="card status-card">
-        <div class="card-title">{$t('msg_status_title')}</div>
-        <dl class="status-grid">
-          <dt>{$t('msg_status_version')}</dt><dd><code>{s.runtime.version}</code></dd>
-          <dt>{$t('msg_status_schema')}</dt><dd><code>{s.runtime.schema_version}</code></dd>
-          <dt>{$t('msg_status_data_dir')}</dt><dd><code>{s.runtime.data_dir}</code></dd>
-          <dt>{$t('msg_status_secrets')}</dt>
-          <dd>{s.runtime.secrets_unlocked ? $t('msg_status_secrets_unlocked') : $t('msg_status_secrets_locked')}</dd>
-          <dt>{$t('msg_status_identity')}</dt>
-          <dd>{s.runtime.identity_present ? $t('msg_status_identity_present') : $t('msg_status_identity_none')}</dd>
-          <dt>{$t('msg_status_relays')}</dt>
-          <dd>{$t('msg_status_relays_value', { connected: String(s.runtime.relays_connected), total: String(s.runtime.relays_total) })}{s.runtime.silent_mode ? ` · ${$t('msg_relays_silent')}` : ''}</dd>
-          <dt>{$t('msg_status_session')}</dt>
-          <dd>{s.runtime.session_active ? $t('msg_status_session_yes') : $t('msg_status_session_no')}</dd>
-          <dt>{$t('msg_status_ingress')}</dt>
-          <dd>{$t('msg_status_ingress_value', { received: String(s.runtime.ingress.received), dm: String(s.runtime.ingress.dm), dup: String(s.runtime.ingress.duplicates), ignored: String(s.runtime.ingress.ignored) })}</dd>
-          <dt>{$t('msg_status_outbox')}</dt>
-          <dd>{String(s.runtime.outbox_pending)}</dd>
-        </dl>
-      </div>
-    </div>
-  {/if}
-</div>
+  <NewChatDialog bind:open={newChat} onopened={() => (view = 'chat')} />
+{/if}
 
 <style>
-  .page-title-group { display: flex; flex-direction: column; gap: 6px; }
   .alpha-badge {
-    display: inline-block; vertical-align: middle; margin-left: 8px;
+    display: inline-block; vertical-align: middle; margin-left: 6px;
     font-size: var(--fs-2xs); font-weight: var(--fw-bold); text-transform: uppercase; letter-spacing: 0.6px;
-    padding: 3px 8px; border-radius: var(--radius-sm);
+    padding: 2px 7px; border-radius: var(--radius-sm);
     background: var(--accent-tint); color: var(--accent-text-2);
   }
-  .stack { display: flex; flex-direction: column; gap: var(--sp-4); }
-  .status-card { max-width: 640px; }
-  .status-grid {
-    display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-2) var(--sp-4);
-    margin: 0; font-size: var(--fs-sm);
+  .messenger { max-width: none; }
+  .shell {
+    flex: 1; min-height: 0; display: grid; grid-template-columns: 340px minmax(0, 1fr);
+    border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--surface);
   }
-  .status-grid dt { color: var(--text-3); }
-  .status-grid dd { margin: 0; color: var(--text-body); word-break: break-all; }
-  code {
-    font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-body);
-    background: var(--surface-2); padding: 3px 8px; border-radius: 7px;
+  .rail { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); background: var(--surface); }
+  .rail-head { display: flex; align-items: center; gap: 4px; padding: var(--sp-3) var(--sp-3) var(--sp-2) var(--sp-4); min-height: 56px; }
+  .rail-title { font-weight: var(--fw-extrabold); font-size: var(--fs-md); letter-spacing: -0.3px; }
+  .spacer { flex: 1; }
+  .net { width: 8px; height: 8px; border-radius: 50%; margin-left: 8px; background: var(--text-3); flex-shrink: 0; }
+  .net.on { background: var(--success); box-shadow: 0 0 0 3px var(--success-bg); }
+  .net.connecting { background: var(--warn-text); animation: pulse 1.4s ease-in-out infinite; }
+  .net.silent, .net.locked { background: var(--text-3); }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  .icon { border: none; background: none; color: var(--text-2); cursor: pointer; display: inline-flex; padding: 7px; border-radius: var(--radius-sm); }
+  .icon:hover { color: var(--text); background: var(--surface-3); }
+  .icon.active { color: var(--accent-text-2); background: var(--accent-tint); }
+  .icon.accent { color: var(--accent-text-2); }
+  .icon.sm { padding: 3px; }
+  .search {
+    display: flex; align-items: center; gap: 8px; margin: 0 var(--sp-3) var(--sp-2); padding: 0 10px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--text-3);
+  }
+  .search:focus-within { border-color: var(--accent-border); }
+  .search input { flex: 1; min-width: 0; border: none; background: none; outline: none; font: inherit; font-size: var(--fs-sm); color: var(--text); padding: 7px 0; }
+  .pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .pane-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
+  .back-narrow { display: none; align-self: flex-start; }
+  .welcome { margin: auto; display: flex; flex-direction: column; align-items: center; gap: var(--sp-3); text-align: center; padding: var(--sp-6); color: var(--text-3); }
+  .welcome-icon { width: 72px; height: 72px; border-radius: 50%; background: var(--accent-tint); color: var(--accent-text-2); display: flex; align-items: center; justify-content: center; }
+  .welcome p { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--text); }
+  .welcome span { font-size: var(--fs-sm); max-width: 360px; line-height: 1.5; color: var(--text-2); }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: minmax(0, 1fr); }
+    .hidden-narrow { display: none; }
+    .back-narrow { display: inline-flex; }
   }
 </style>

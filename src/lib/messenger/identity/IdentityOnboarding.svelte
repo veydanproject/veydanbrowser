@@ -17,7 +17,9 @@
   // Create
   let password = $state('');
   let password2 = $state('');
-  let created = $state<{ npub: string; ncryptsec: string } | null>(null);
+  // Lives in the store: creating the key flips the page to the chat shell,
+  // and the one-time backup must survive that.
+  const created = $derived(messengerStore.pendingBackup);
 
   // Import
   let importKind = $state<IdentityImportKind>('nsec');
@@ -32,8 +34,7 @@
     if (password !== password2) { error = $t('msg_id_err_password_mismatch'); return; }
     busy = true;
     try {
-      const res = await messengerStore.createIdentity(password);
-      created = { npub: res.identity.npub, ncryptsec: res.ncryptsec };
+      await messengerStore.createIdentity(password);
       password = ''; password2 = '';
     } catch (e) { error = messengerError(e); }
     finally { busy = false; }
@@ -63,7 +64,7 @@
   {/if}
 
   {#if created}
-    <BackupReveal npub={created.npub} ncryptsec={created.ncryptsec} onDone={() => (created = null)} />
+    <BackupReveal npub={created.npub} ncryptsec={created.ncryptsec} onDone={() => messengerStore.ackBackup()} />
   {:else if mode === 'choose'}
     <div class="card-title">{$t('msg_id_welcome_title')}</div>
     <p class="muted">{$t('msg_id_welcome_text')}</p>

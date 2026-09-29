@@ -24,7 +24,8 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use messenger_core::{MessengerConfig, MessengerError, SecretStore};
 use messenger_core::PubKey;
 use messenger_runtime::{
-    ContactPatch, ContactView, CreatedIdentity, Identity, ManifestInfo, MessengerRuntime, ProfileView, RelayView,
+    ChatView, ContactPatch, ContactView, CreatedIdentity, Identity, ManifestInfo, MessageView, MessengerRuntime,
+    ProfileView, RelayView,
     RuntimeStatus,
 };
 use serde::Deserialize;
@@ -456,12 +457,94 @@ pub async fn messenger_contacts_set_followed(
     state.messenger.runtime()?.contact_set_followed(&parse_pubkey(&pubkey)?, followed).await.map_err(map_err)
 }
 
-// ─── DM (stage 3 building block) ────────────────────────────────────────────
+// ─── Chats / DM ─────────────────────────────────────────────────────────────
 
-/// Send a text DM to an npub/hex key. Returns the outbox local id.
 #[tauri::command]
-pub async fn messenger_dm_send_text(to: String, text: String, state: tauri::State<'_, AppState>) -> CmdResult<String> {
-    state.messenger.runtime()?.send_text_dm(&to, &text).await.map_err(map_err)
+pub async fn messenger_chats_list(
+    include_archived: Option<bool>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<ChatView>> {
+    state.messenger.runtime()?.dm().list_chats(include_archived.unwrap_or(false)).await.map_err(map_err)
+}
+
+/// Open (creating if needed) the chat with `peer` (npub or hex).
+#[tauri::command]
+pub async fn messenger_chat_open(peer: String, state: tauri::State<'_, AppState>) -> CmdResult<ChatView> {
+    state.messenger.runtime()?.chat_open(&peer).await.map_err(map_err)
+}
+
+/// One page of visible messages, oldest first, strictly older than `before`.
+#[tauri::command]
+pub async fn messenger_chat_messages(
+    chat_id: String,
+    before: Option<i64>,
+    limit: Option<i64>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<MessageView>> {
+    state.messenger.runtime()?.dm().messages(&chat_id, before, limit.unwrap_or(50)).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_chat_mark_read(chat_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.dm().mark_read(&chat_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_chat_set_pinned(
+    chat_id: String,
+    pinned: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    state.messenger.runtime()?.dm().set_pinned(&chat_id, pinned).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_chat_set_archived(
+    chat_id: String,
+    archived: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    state.messenger.runtime()?.dm().set_archived(&chat_id, archived).await.map_err(map_err)
+}
+
+/// Removes the chat and its messages from this device only.
+#[tauri::command]
+pub async fn messenger_chat_delete(chat_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.dm().delete_chat(&chat_id).await.map_err(map_err)
+}
+
+/// Send a text DM to an npub/hex key; returns the stored message.
+#[tauri::command]
+pub async fn messenger_dm_send_text(
+    to: String,
+    text: String,
+    reply_to: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<MessageView> {
+    state.messenger.runtime()?.dm_send_text(&to, &text, reply_to.as_deref()).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_dm_edit(
+    message_id: String,
+    text: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<MessageView> {
+    state.messenger.runtime()?.dm_edit(&message_id, &text).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_dm_delete(
+    message_id: String,
+    for_everyone: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    state.messenger.runtime()?.dm_delete(&message_id, for_everyone).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_dm_retry(message_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.dm_retry(&message_id).await.map_err(map_err)
 }
 
 #[tauri::command]

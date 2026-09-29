@@ -16,6 +16,7 @@ import {
   type MessengerStatus,
   type MessengerUiEvent,
 } from './api';
+import { chatStore } from './chats/chatStore.svelte';
 
 export interface FeedEntry extends MessengerUiEvent {
   at: number;
@@ -35,6 +36,8 @@ class MessengerStore {
   feed = $state<FeedEntry[]>([]);
   contacts = $state<MessengerContact[]>([]);
   ownProfile = $state<MessengerProfile | null>(null);
+  /** One-time encrypted backup of a freshly created key, until the user confirms it is saved. */
+  pendingBackup = $state<{ npub: string; ncryptsec: string } | null>(null);
   loaded = $state(false);
   loading = $state(false);
   private _promise: Promise<void> | null = null;
@@ -78,12 +81,14 @@ class MessengerStore {
         this.manifest = manifest;
         this.contacts = contacts;
         this.ownProfile = ownProfile;
+        if (identity) chatStore.loadChats().catch(() => {});
       } else {
         this.identity = null;
         this.relays = [];
         this.manifest = null;
         this.contacts = [];
         this.ownProfile = null;
+        chatStore.reset();
       }
       this.loaded = true;
     } finally {
@@ -101,7 +106,8 @@ class MessengerStore {
       }),
       await listen<MessengerUiEvent>(RUNTIME_EVENT, (e) => {
         this.feed = [{ ...e.payload, at: Date.now() }, ...this.feed].slice(0, FEED_LIMIT);
-        if (e.payload.name === 'inbound.dm') messengerApi.status().then((s) => (this.status = s)).catch(() => {});
+        chatStore.handleEvent(e.payload);
+        if (e.payload.name === 'dm.message') messengerApi.status().then((s) => (this.status = s)).catch(() => {});
         if (e.payload.name === 'profile.updated' || e.payload.name === 'follows.updated') {
           this.refreshContacts().catch(() => {});
         }
@@ -155,8 +161,8 @@ class MessengerStore {
     this.feed = [];
   }
 
-  sendTextDm(to: string, text: string) {
-    return messengerApi.dm.sendText(to, text);
+  async sendTextDm(to: string, text: string) {
+    return (await messengerApi.dm.sendText(to, text)).id;
   }
 
   async refreshRelays() {
@@ -197,9 +203,14 @@ class MessengerStore {
 
   async createIdentity(password: string) {
     const created = await messengerApi.identity.create(password);
+    this.pendingBackup = { npub: created.identity.npub, ncryptsec: created.ncryptsec };
     this.identity = created.identity;
     await this.refresh();
     return created;
+  }
+
+  ackBackup() {
+    this.pendingBackup = null;
   }
 
   async importIdentity(kind: IdentityImportKind, secret: string, password?: string) {

@@ -86,6 +86,54 @@ export function profileLabel(p: MessengerProfile | null): string {
   return p.display_name?.trim() || p.name?.trim() || p.nip05 || '';
 }
 
+
+export type ChatMode =
+  | 'full_chat' | 'first_contact' | 'request_sent' | 'request_received' | 'request_declined'
+  | 'request_declined_by_me' | 'request_revoked_by_peer' | 'removed_by_peer' | 'both_removed'
+  | 'mutual_reconnect' | 'blocked' | 'blocked_by_peer';
+
+export interface MessengerChat {
+  id: string;
+  kind: 'dm' | string;
+  peer_pubkey: string | null;
+  peer_npub: string | null;
+  title: string;
+  picture: string | null;
+  is_contact: boolean;
+  is_muted: boolean;
+  unread: number;
+  last_message_at: number | null;
+  last_preview: string | null;
+  pinned: boolean;
+  archived: boolean;
+  mode: ChatMode;
+  can_send: boolean;
+}
+
+export interface MessengerReplyPreview {
+  id: string;
+  sender_pubkey: string;
+  text: string | null;
+}
+
+export type MessageStatus = 'queued' | 'sent' | 'failed' | 'received';
+
+export interface MessengerMessage {
+  id: string;
+  chat_id: string;
+  direction: 'in' | 'out';
+  status: MessageStatus;
+  content_type: string;
+  text: string | null;
+  sender_pubkey: string;
+  reply_to: MessengerReplyPreview | null;
+  created_at: number;
+  edited_at: number | null;
+  deleted: boolean;
+  failure_reason: string | null;
+  media: Record<string, unknown> | null;
+}
+
 /** Runtime UI event as forwarded by the host. */
 export interface MessengerUiEvent {
   name: string;
@@ -168,6 +216,24 @@ const emptyProfile = (pubkey: string): MessengerProfile => ({
   website: null, nip05: null, lud16: null, nip05_verified: false, event_created_at: 0, fetched_at: 0,
 });
 
+let mockChats: MessengerChat[] = [];
+const mockMessages: Record<string, MessengerMessage[]> = {};
+function mockChat(peer: string): MessengerChat {
+  const hex = peer.startsWith('npub') ? 'ef'.repeat(32) : peer;
+  const id = `dm:${hex}`;
+  let c = mockChats.find((x) => x.id === id);
+  if (!c) {
+    const contact = mockContacts.find((x) => x.pubkey === hex);
+    c = { id, kind: 'dm', peer_pubkey: hex, peer_npub: `npub1${hex.slice(0, 58)}`, title: contact ? contactLabel(contact) : `npub1${hex.slice(0, 7)}…`, picture: null, is_contact: !!contact, is_muted: false, unread: 0, last_message_at: null, last_preview: null, pinned: false, archived: false, mode: 'full_chat', can_send: true };
+    mockChats = [c, ...mockChats];
+    mockMessages[id] = [];
+  }
+  return c;
+}
+function mockFind(id: string): MessengerMessage | undefined {
+  return Object.values(mockMessages).flat().find((m) => m.id === id);
+}
+
 const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_status: () => ({
     compiled: true,
@@ -189,7 +255,29 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
     },
     error: null,
   }),
-  messenger_dm_send_text: () => `local-${Date.now().toString(16)}`,
+  messenger_chats_list: () => mockChats,
+  messenger_chat_open: (a) => mockChat(String(a?.peer)),
+  messenger_chat_messages: (a) => {
+    const all = mockMessages[String(a?.chatId)] ?? [];
+    const before = (a?.before as number | null) ?? Number.MAX_SAFE_INTEGER;
+    return all.filter((m) => m.created_at < before).slice(-((a?.limit as number) ?? 50));
+  },
+  messenger_chat_mark_read: (a) => { mockChats = mockChats.map((c) => c.id === a?.chatId ? { ...c, unread: 0 } : c); },
+  messenger_chat_set_pinned: (a) => { mockChats = mockChats.map((c) => c.id === a?.chatId ? { ...c, pinned: Boolean(a?.pinned) } : c); },
+  messenger_chat_set_archived: (a) => { mockChats = mockChats.map((c) => c.id === a?.chatId ? { ...c, archived: Boolean(a?.archived) } : c); },
+  messenger_chat_delete: (a) => { mockChats = mockChats.filter((c) => c.id !== a?.chatId); },
+  messenger_dm_send_text: (a) => {
+    const c = mockChat(String(a?.to));
+    const now = Math.floor(Date.now() / 1000);
+    const target = a?.replyTo ? mockFind(String(a.replyTo)) : undefined;
+    const m: MessengerMessage = { id: `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`, chat_id: c.id, direction: 'out', status: 'sent', content_type: 'text', text: String(a?.text), sender_pubkey: 'ab'.repeat(32), reply_to: target ? { id: target.id, sender_pubkey: target.sender_pubkey, text: target.text } : null, created_at: now, edited_at: null, deleted: false, failure_reason: null, media: null };
+    mockMessages[c.id] = [...(mockMessages[c.id] ?? []), m];
+    mockChats = mockChats.map((x) => x.id === c.id ? { ...x, last_message_at: now, last_preview: m.text } : x);
+    return m;
+  },
+  messenger_dm_edit: (a) => { const m = mockFind(String(a?.messageId)); if (m) { m.text = String(a?.text); m.edited_at = Math.floor(Date.now() / 1000); } return m; },
+  messenger_dm_delete: (a) => { const m = mockFind(String(a?.messageId)); if (m) { m.deleted = true; m.text = null; } },
+  messenger_dm_retry: () => undefined,
   messenger_profile_get: () => null,
   messenger_profile_request: () => undefined,
   messenger_profile_own_get: () => mockOwnProfile,
@@ -284,8 +372,23 @@ export const messengerApi = {
     setRegion: (region: string) => invoke<void>('messenger_manifest_set_region', { region }),
   },
 
+  chats: {
+    list: (includeArchived = false) => invoke<MessengerChat[]>('messenger_chats_list', { includeArchived }),
+    open: (peer: string) => invoke<MessengerChat>('messenger_chat_open', { peer }),
+    messages: (chatId: string, before?: number, limit = 50) =>
+      invoke<MessengerMessage[]>('messenger_chat_messages', { chatId, before: before ?? null, limit }),
+    markRead: (chatId: string) => invoke<void>('messenger_chat_mark_read', { chatId }),
+    setPinned: (chatId: string, pinned: boolean) => invoke<void>('messenger_chat_set_pinned', { chatId, pinned }),
+    setArchived: (chatId: string, archived: boolean) => invoke<void>('messenger_chat_set_archived', { chatId, archived }),
+    delete: (chatId: string) => invoke<void>('messenger_chat_delete', { chatId }),
+  },
+
   dm: {
-    sendText: (to: string, text: string) => invoke<string>('messenger_dm_send_text', { to, text }),
+    sendText: (to: string, text: string, replyTo?: string) =>
+      invoke<MessengerMessage>('messenger_dm_send_text', { to, text, replyTo: replyTo ?? null }),
+    edit: (messageId: string, text: string) => invoke<MessengerMessage>('messenger_dm_edit', { messageId, text }),
+    delete: (messageId: string, forEveryone: boolean) => invoke<void>('messenger_dm_delete', { messageId, forEveryone }),
+    retry: (messageId: string) => invoke<void>('messenger_dm_retry', { messageId }),
   },
 
   profiles: {

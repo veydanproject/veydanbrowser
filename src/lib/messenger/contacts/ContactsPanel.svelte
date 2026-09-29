@@ -8,6 +8,9 @@
   import { contactLabel, messengerError, type MessengerContact } from '../api';
   import Avatar from './Avatar.svelte';
 
+  interface Props { onchat?: (pubkey: string) => void }
+  let { onchat }: Props = $props();
+
   let key = $state('');
   let nickname = $state('');
   let busy = $state(false);
@@ -93,7 +96,12 @@
                 </label>
               </div>
               <div class="actions">
-                <button class="btn btn-primary btn-sm" disabled={busy}
+                {#if onchat}
+                  <button class="btn btn-primary btn-sm" disabled={busy} onclick={() => onchat(c.pubkey)}>
+                    <Icon name="message-circle" size={12} />{$t('msg_contacts_write')}
+                  </button>
+                {/if}
+                <button class="btn btn-ghost btn-sm" disabled={busy}
                   onclick={() => run(() => messengerStore.updateContact(c.pubkey, { nickname: editNick.trim() || null, note: editNote.trim() || null }))}>
                   {$t('msg_contacts_save')}
                 </button>
@@ -128,7 +136,7 @@
 </div>
 
 <style>
-  .contacts { max-width: 640px; display: flex; flex-direction: column; gap: var(--sp-3); }
+  .contacts { max-width: 680px; width: 100%; margin-inline: auto; display: flex; flex-direction: column; gap: var(--sp-3); }
   .card-title { display: flex; align-items: center; gap: var(--sp-2); }
   .muted { color: var(--text-2); font-size: var(--fs-sm); margin: 0; }
   .small { font-size: var(--fs-xs); }
