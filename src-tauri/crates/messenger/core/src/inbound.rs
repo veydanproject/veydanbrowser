@@ -73,7 +73,8 @@ pub struct GroupInbound {
     pub sender: PubKey,
     pub created_at: Timestamp,
     pub kind: u16,
-    pub key_version: Option<u32>,
+    /// Which group key encrypts the content (tag `k`).
+    pub key_id: Option<String>,
     pub ciphertext: String,
     pub reply_to: Option<EventId>,
 }
