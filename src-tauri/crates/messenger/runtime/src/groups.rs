@@ -474,3 +474,21 @@ impl MessengerRuntime {
         Ok(self.dm.message(message_id).await?.is_some_and(|m| m.chat_id.starts_with("group:")))
     }
 }
+
+impl MessengerRuntime {
+    /// The link of a group as a QR code (SVG), for those who may share it.
+    pub async fn group_link_qr(&self, group_id: &str) -> Result<String> {
+        let link = self.group_get(group_id).await?.link.ok_or_else(|| MessengerError::Invalid("group_not_permitted".into()))?;
+        messenger_groups::qr::link_svg(&link)
+    }
+}
+
+impl MessengerRuntime {
+    /// Remove a chat from this device. A group has to be left first.
+    pub async fn chat_delete(&self, chat_id: &str) -> Result<()> {
+        match chat_id.strip_prefix("group:") {
+            Some(group) => self.group_forget(group).await,
+            None => self.dm.delete_chat(chat_id).await,
+        }
+    }
+}
