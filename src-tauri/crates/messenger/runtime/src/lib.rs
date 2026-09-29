@@ -13,6 +13,7 @@ pub mod media;
 
 /// Region used when the stored one cannot be read.
 pub(crate) const REGION_FALLBACK: &str = "default";
+pub mod groups;
 pub mod relays;
 pub mod session;
 
@@ -36,9 +37,10 @@ pub use messenger_dm::{Action as DmAction, ChatView, MessageView, RelationView};
 pub use media::Recording;
 pub use messenger_media::{MediaKind, MediaServerInput, MediaServerView, TransferView};
 
-pub use messenger_contacts::book::ContactPatch;
+pub use messenger_contacts::book::{parse_key, ContactPatch};
 pub use messenger_contacts::{ContactView, ProfileInput, ProfileView};
 pub use messenger_identity::{CreatedIdentity, Identity};
+pub use messenger_groups::{GroupKind, GroupView, InviteView, MemberView, OpBody as GroupOp, Role as GroupRole};
 pub use relays::{ManifestInfo, RelayService, RelayView};
 
 /// Facts for the host's status screen. Never contains secrets.
@@ -81,6 +83,8 @@ pub struct MessengerRuntime {
     nip05: Nip05Service,
     dm: DmService,
     media: MediaService,
+    group_driver: groups::GroupsDriver,
+    group_signals: tokio::task::JoinHandle<()>,
     outbox: Outbox,
     dispatcher: Arc<Dispatcher>,
     ui: broadcast::Sender<UiEvent>,
@@ -102,15 +106,26 @@ impl MessengerRuntime {
         let contacts = ContactService::new(store.clone(), profiles.clone());
         let nip05 = Nip05Service::new(Arc::new(ReqwestFetcher::new()));
         let dm = DmService::new(store.clone(), contacts.clone(), profiles.clone(), Arc::new(SystemClock));
+        let group_service =
+            messenger_groups::GroupService::new(store.clone(), secrets.clone(), Arc::new(SystemClock), dm.clone());
+        let (signals, signals_rx) = tokio::sync::mpsc::unbounded_channel();
         let dispatcher = Arc::new(
             Dispatcher::new()
-                .with_dm(Arc::new(DmHandler::new(dm.clone())))
+                .with_dm(Arc::new(messenger_groups::GroupDmHandler::new(
+                    group_service.clone(),
+                    signals.clone(),
+                    Arc::new(DmHandler::new(dm.clone())),
+                )))
+                .with_group(Arc::new(messenger_groups::GroupHandler::new(group_service.clone(), signals)))
                 .with_meta(Arc::new(Fanout::new(vec![
                     Arc::new(MetaHandler::new(profiles.clone(), contacts.clone())),
                     Arc::new(DmRoutesHandler::new(store.clone())),
                 ]))),
         );
         let (ui, _) = broadcast::channel(256);
+        let group_driver =
+            groups::GroupsDriver::new(group_service, store.clone(), relays.clone(), outbox.clone(), ui.clone());
+        let group_signals = tokio::spawn(group_driver.clone().run(signals_rx));
         let rt = Self {
             config,
             store,
@@ -122,6 +137,8 @@ impl MessengerRuntime {
             nip05,
             dm,
             media,
+            group_driver,
+            group_signals,
             outbox,
             dispatcher,
             ui,
@@ -200,9 +217,11 @@ impl MessengerRuntime {
             self.dm.clone(),
         )
         .await?;
+        self.group_driver.groups.set_signer(Some(keys_for_dm.clone()));
         self.dm.set_signer(Some(keys_for_dm));
         *self.session.lock().await = Some(session);
         self.resubscribe_meta().await?;
+        self.group_driver.session_started().await;
         if let Err(e) = self.publish_dm_relays(false).await {
             eprintln!("messenger: inbox relay list not published: {e}");
         }
@@ -332,9 +351,12 @@ impl MessengerRuntime {
         Ok(self.dm.message(&p.message.id).await?.unwrap_or(p.message))
     }
 
-    /// Send a text DM to `to` (hex or npub).
+    /// Send a text to `to`: a person (hex or npub) or a group (`group:<id>`).
     pub async fn dm_send_text(&self, to: &str, text: &str, reply_to: Option<&str>) -> Result<MessageView> {
         let keys = self.session_keys().await?;
+        if let Some(group) = to.strip_prefix("group:") {
+            return self.group_send_text(group, text, reply_to).await;
+        }
         let peer = messenger_contacts::book::parse_key(to)
             .map_err(|_| MessengerError::Invalid("recipient must be an npub or 64-hex public key".into()))?;
         let first = self.dm.chat(&messenger_store::chats::dm_chat_id(peer.as_hex())).await?.is_none();
@@ -348,6 +370,9 @@ impl MessengerRuntime {
 
     pub async fn dm_edit(&self, message_id: &str, text: &str) -> Result<MessageView> {
         let keys = self.session_keys().await?;
+        if self.is_group_message(message_id).await? {
+            return self.group_edit(message_id, text).await;
+        }
         let prepared = self.dm.prepare_edit(&keys, message_id, text).await?;
         self.publish_prepared(prepared).await
     }
@@ -355,6 +380,9 @@ impl MessengerRuntime {
     /// `for_everyone` retracts our own message at the peer too; otherwise
     /// the message is only hidden on this device.
     pub async fn dm_delete(&self, message_id: &str, for_everyone: bool) -> Result<()> {
+        if for_everyone && self.is_group_message(message_id).await? {
+            return self.group_delete(message_id).await;
+        }
         if for_everyone {
             let keys = self.session_keys().await?;
             let prepared = self.dm.prepare_delete(&keys, message_id).await?;
@@ -516,6 +544,7 @@ impl MessengerRuntime {
 
     async fn stop_session(&self) {
         self.dm.set_signer(None);
+        self.group_driver.groups.set_signer(None);
         if let Some(s) = self.session.lock().await.take() {
             s.stop();
         }
@@ -576,6 +605,7 @@ impl MessengerRuntime {
     /// Stop background work and close the database. Idempotent.
     pub async fn shutdown(&self) {
         self.stop_session().await;
+        self.group_signals.abort();
         self.relays.shutdown().await;
         self.store.close().await;
     }
