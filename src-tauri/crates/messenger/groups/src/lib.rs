@@ -22,6 +22,7 @@ pub mod keys;
 pub mod log;
 pub mod media;
 pub mod op;
+pub mod qr;
 pub mod roles;
 pub mod handler;
 pub mod inbound;

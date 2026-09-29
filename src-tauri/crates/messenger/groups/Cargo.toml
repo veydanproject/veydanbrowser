@@ -24,6 +24,7 @@ aes-gcm.workspace = true
 base64.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 getrandom.workspace = true
+qrcode.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
