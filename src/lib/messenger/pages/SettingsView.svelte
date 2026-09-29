@@ -7,6 +7,7 @@
   import IdentityCard from '../identity/IdentityCard.svelte';
   import OwnProfileCard from '../contacts/OwnProfileCard.svelte';
   import RelaysPanel from '../relays/RelaysPanel.svelte';
+  import MediaServersPanel from '../media/MediaServersPanel.svelte';
   import DebugFeed from '../debug/DebugFeed.svelte';
 
   type Tab = 'profile' | 'network' | 'diagnostics';
@@ -29,6 +30,7 @@
     {#if messengerStore.identity}<IdentityCard identity={messengerStore.identity} />{/if}
   {:else if tab === 'network'}
     <RelaysPanel />
+    <MediaServersPanel />
   {:else if s?.runtime}
     <div class="card status-card">
       <div class="card-title">{$t('msg_status_title')}</div>

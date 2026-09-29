@@ -116,7 +116,7 @@ export interface MessengerReplyPreview {
   text: string | null;
 }
 
-export type MessageStatus = 'queued' | 'sent' | 'failed' | 'received';
+export type MessageStatus = 'queued' | 'sent' | 'failed' | 'received' | 'uploading' | 'paused';
 
 export interface MessengerMessage {
   id: string;
@@ -150,6 +150,93 @@ export interface MessengerRelation {
 /** Stable refusal code inside an error (`dm_waiting_approval`, …), if any. */
 export function dmErrorCode(e: unknown): string | null {
   const m = /\bdm_[a-z_]+\b/.exec(messengerError(e));
+  return m ? m[0] : null;
+}
+
+
+export type MediaKind = 'image' | 'video' | 'audio' | 'file';
+
+/** Attachment fields of a message as the UI needs them. */
+export interface MessengerMedia {
+  name: string;
+  mime: string;
+  size: number;
+  kind: MediaKind;
+  /** Present when the file is on this device. */
+  local_path?: string;
+  transfer_id?: string;
+}
+
+export function mediaOf(m: MessengerMessage): MessengerMedia | null {
+  const f = m.media;
+  if (!f || typeof f.name !== 'string') return null;
+  return {
+    name: f.name,
+    mime: typeof f.mime === 'string' ? f.mime : 'application/octet-stream',
+    size: typeof f.size === 'number' ? f.size : 0,
+    kind: (['image', 'video', 'audio', 'file'] as const).includes(f.kind as MediaKind) ? (f.kind as MediaKind) : 'file',
+    local_path: typeof f.local_path === 'string' ? f.local_path : undefined,
+    transfer_id: typeof f.transfer_id === 'string' ? f.transfer_id : undefined,
+  };
+}
+
+export type TransferStatus = 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled';
+
+export interface MessengerTransfer {
+  id: string;
+  direction: 'up' | 'down';
+  message_id: string | null;
+  chat_id: string | null;
+  file_name: string;
+  mime: string;
+  size: number;
+  status: TransferStatus;
+  done_bytes: number;
+  attempts: number;
+  failure_reason: string | null;
+  local_path: string | null;
+}
+
+/** Payload of the `transfer.progress` runtime event. */
+export interface MessengerTransferProgress {
+  transfer_id: string;
+  message_id: string | null;
+  chat_id: string | null;
+  direction: 'up' | 'down';
+  status: TransferStatus;
+  done_bytes: number;
+  total_bytes: number;
+  failure_reason: string | null;
+  local_path: string | null;
+}
+
+export interface MessengerMediaServer {
+  id: string;
+  kind: 's3' | 'blossom';
+  url: string;
+  bucket: string | null;
+  region: string | null;
+  access_key: string | null;
+  has_secret: boolean;
+  priority: number;
+  enabled: boolean;
+  source: 'manifest' | 'user';
+  public_base: string;
+}
+
+export interface MessengerMediaServerInput {
+  id?: string | null;
+  kind: 's3' | 'blossom';
+  url: string;
+  bucket?: string | null;
+  region?: string | null;
+  access_key?: string | null;
+  secret_key?: string | null;
+}
+
+/** Stable failure code inside an error (`err.rate_limited`, …), if any. */
+export function mediaErrorCode(e: unknown): string | null {
+  const m = /\berr\.[a-z_]+\b/.exec(typeof e === 'string' ? e : messengerError(e));
   return m ? m[0] : null;
 }
 
@@ -236,6 +323,9 @@ const emptyProfile = (pubkey: string): MessengerProfile => ({
 });
 
 let mockChats: MessengerChat[] = [];
+let mockMediaServers: MessengerMediaServer[] = [
+  { id: 'veydan-node-1-s3', kind: 's3', url: 'https://node-1.veydan.net:9000', bucket: 'veydan-media', region: 'us-east-1', access_key: null, has_secret: false, priority: 10, enabled: true, source: 'manifest', public_base: 'https://node-1.veydan.net:9000/veydan-media' },
+];
 const mockMessages: Record<string, MessengerMessage[]> = {};
 function mockChat(peer: string): MessengerChat {
   const hex = peer.startsWith('npub') ? 'ef'.repeat(32) : peer;
@@ -297,6 +387,36 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_dm_edit: (a) => { const m = mockFind(String(a?.messageId)); if (m) { m.text = String(a?.text); m.edited_at = Math.floor(Date.now() / 1000); } return m; },
   messenger_dm_delete: (a) => { const m = mockFind(String(a?.messageId)); if (m) { m.deleted = true; m.text = null; } },
   messenger_dm_retry: () => undefined,
+  messenger_media_servers: () => mockMediaServers,
+  messenger_media_server_put: (a) => {
+    const i = (a?.input ?? {}) as MessengerMediaServerInput;
+    const id = i.id ?? `${i.kind}-${mockMediaServers.length + 1}`;
+    const s: MessengerMediaServer = { id, kind: i.kind, url: i.url, bucket: i.bucket ?? null, region: i.region ?? (i.kind === 's3' ? 'us-east-1' : null), access_key: i.access_key ?? null, has_secret: !!i.secret_key, priority: 10, enabled: true, source: 'user', public_base: i.kind === 's3' ? `${i.url}/${i.bucket}` : i.url };
+    mockMediaServers = [...mockMediaServers.filter((x) => x.id !== id), s];
+    return s;
+  },
+  messenger_media_server_remove: (a) => { mockMediaServers = mockMediaServers.filter((x) => x.id !== a?.id); },
+  messenger_media_server_set_enabled: (a) => { mockMediaServers = mockMediaServers.map((x) => (x.id === a?.id ? { ...x, enabled: Boolean(a?.enabled) } : x)); },
+  messenger_media_server_check: () => undefined,
+  messenger_dm_send_file: (a) => {
+    const c = mockChat(String(a?.to));
+    const now = Math.floor(Date.now() / 1000);
+    const name = String(a?.path).split(/[\\/]/).pop() ?? 'file';
+    const ext = name.split('.').pop()?.toLowerCase() ?? '';
+    const kind = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext) ? 'image' : ['mp4', 'webm'].includes(ext) ? 'video' : ['mp3', 'ogg', 'wav'].includes(ext) ? 'audio' : 'file';
+    const m: MessengerMessage = { id: `local:${Date.now().toString(16)}`, chat_id: c.id, direction: 'out', status: 'sent', content_type: 'media', text: (a?.caption as string) ?? null, sender_pubkey: 'ab'.repeat(32), reply_to: null, created_at: now, edited_at: null, deleted: false, failure_reason: null, media: { name, mime: 'application/octet-stream', size: 1_234_567, kind, local_path: String(a?.path) } };
+    mockMessages[c.id] = [...(mockMessages[c.id] ?? []), m];
+    mockChats = mockChats.map((x) => (x.id === c.id ? { ...x, last_message_at: now, last_preview: `📎 ${name}` } : x));
+    return m;
+  },
+  messenger_media_download: () => null,
+  messenger_media_transfer: () => null,
+  messenger_media_pause: () => undefined,
+  messenger_media_resume: () => undefined,
+  messenger_media_cancel: () => undefined,
+  messenger_media_save_as: () => undefined,
+  messenger_media_data_url: () => null,
+  messenger_media_local_path: () => null,
   messenger_dm_relation: (a) => {
     const c = mockChat(String(a?.peer));
     return { peer_pubkey: c.peer_pubkey, mode: c.mode, my_contact: 'approved', blocked: c.mode === 'blocked', peer_signal: 'approved', was_ever_mutual: true, can_send: c.can_send };
@@ -432,6 +552,24 @@ export const messengerApi = {
     blocked: () => invoke<string[]>('messenger_dm_blocked'),
   },
 
+  media: {
+    servers: () => invoke<MessengerMediaServer[]>('messenger_media_servers'),
+    putServer: (input: MessengerMediaServerInput) => invoke<MessengerMediaServer>('messenger_media_server_put', { input }),
+    removeServer: (id: string) => invoke<void>('messenger_media_server_remove', { id }),
+    setServerEnabled: (id: string, enabled: boolean) => invoke<void>('messenger_media_server_set_enabled', { id, enabled }),
+    checkServer: (id: string) => invoke<void>('messenger_media_server_check', { id }),
+    sendFile: (to: string, path: string, caption?: string) =>
+      invoke<MessengerMessage>('messenger_dm_send_file', { to, path, caption: caption?.trim() || null }),
+    download: (messageId: string, manual: boolean) => invoke<string | null>('messenger_media_download', { messageId, manual }),
+    transfer: (messageId: string) => invoke<MessengerTransfer | null>('messenger_media_transfer', { messageId }),
+    pause: (transferId: string) => invoke<void>('messenger_media_pause', { transferId }),
+    resume: (transferId: string) => invoke<void>('messenger_media_resume', { transferId }),
+    cancel: (transferId: string) => invoke<void>('messenger_media_cancel', { transferId }),
+    saveAs: (messageId: string, dest: string) => invoke<void>('messenger_media_save_as', { messageId, dest }),
+    dataUrl: (messageId: string) => invoke<string | null>('messenger_media_data_url', { messageId }),
+    localPath: (messageId: string) => invoke<string | null>('messenger_media_local_path', { messageId }),
+  },
+
   profiles: {
     get: (pubkey: string) => invoke<MessengerProfile | null>('messenger_profile_get', { pubkey }),
     request: (pubkey: string) => invoke<void>('messenger_profile_request', { pubkey }),
@@ -460,3 +598,4 @@ export const messengerApi = {
     delete: () => invoke<void>('messenger_identity_delete'),
   },
 };
+export const isTauriHost = isTauri;

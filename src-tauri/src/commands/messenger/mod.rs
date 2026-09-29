@@ -25,7 +25,7 @@ use messenger_core::{MessengerConfig, MessengerError, SecretStore};
 use messenger_core::PubKey;
 use messenger_runtime::{
     ChatView, ContactPatch, ContactView, CreatedIdentity, DmAction, Identity, ManifestInfo, MessageView,
-    MessengerRuntime, RelationView,
+    MediaServerInput, MediaServerView, MessengerRuntime, RelationView, TransferView,
     ProfileView, RelayView,
     RuntimeStatus,
 };
@@ -581,6 +581,123 @@ pub async fn messenger_dm_action(
 #[tauri::command]
 pub async fn messenger_dm_blocked(state: tauri::State<'_, AppState>) -> CmdResult<Vec<String>> {
     state.messenger.runtime()?.dm_blocked().await.map_err(map_err)
+}
+
+// ─── Media ──────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn messenger_media_servers(state: tauri::State<'_, AppState>) -> CmdResult<Vec<MediaServerView>> {
+    state.messenger.runtime()?.media_servers().await.map_err(map_err)
+}
+
+/// Add or update a blob server. The S3 secret goes to the vault and never
+/// comes back to the UI.
+#[tauri::command]
+pub async fn messenger_media_server_put(
+    input: MediaServerInput,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<MediaServerView> {
+    state.messenger.runtime()?.media_server_put(input).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_media_server_remove(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.media_server_remove(&id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_media_server_set_enabled(
+    id: String,
+    enabled: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    state.messenger.runtime()?.media_server_set_enabled(&id, enabled).await.map_err(map_err)
+}
+
+/// Checks credentials, prepares the bucket, writes and reads a probe.
+#[tauri::command]
+pub async fn messenger_media_server_check(id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.media_server_check(&id).await.map_err(map_err)
+}
+
+/// Attach a local file; returns the placeholder message immediately.
+#[tauri::command]
+pub async fn messenger_dm_send_file(
+    to: String,
+    path: String,
+    caption: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<MessageView> {
+    state
+        .messenger
+        .runtime()?
+        .dm_send_file(&to, Path::new(&path), caption.as_deref())
+        .await
+        .map_err(map_err)
+}
+
+/// Path of the attachment once it is on this device; `null` when an
+/// automatic download decided not to start.
+#[tauri::command]
+pub async fn messenger_media_download(
+    message_id: String,
+    manual: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let p = state.messenger.runtime()?.media_download(&message_id, manual).await.map_err(map_err)?;
+    Ok(p.map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn messenger_media_transfer(
+    message_id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Option<TransferView>> {
+    state.messenger.runtime()?.media_transfer(&message_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_media_pause(transfer_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.media_pause(&transfer_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_media_resume(transfer_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.media_resume(&transfer_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_media_cancel(transfer_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.media_cancel(&transfer_id).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_media_save_as(
+    message_id: String,
+    dest: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    state.messenger.runtime()?.media_save_as(&message_id, Path::new(&dest)).await.map_err(map_err)
+}
+
+/// Inline preview (`data:` url) for images, audio and video that are on
+/// this device and small enough; `null` otherwise.
+#[tauri::command]
+pub async fn messenger_media_data_url(
+    message_id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    state.messenger.runtime()?.media_data_url(&message_id).await.map_err(map_err)
+}
+
+/// Local path of the attachment if present (to open or reveal it).
+#[tauri::command]
+pub async fn messenger_media_local_path(
+    message_id: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Option<String>> {
+    let p = state.messenger.runtime()?.media_local_path(&message_id).await.map_err(map_err)?;
+    Ok(p.map(|p| p.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]

@@ -10,10 +10,12 @@
   import MessageBubble from './MessageBubble.svelte';
   import Composer from './Composer.svelte';
   import RelationBanner from './RelationBanner.svelte';
+  import MediaBubble from '../media/MediaBubble.svelte';
+  import AttachButton from '../media/AttachButton.svelte';
   import { chatStore } from '../chats/chatStore.svelte';
   import { messengerStore } from '../store.svelte';
   import { dayKey, dayLabel } from '../shared/time';
-  import { dmErrorCode, messengerError, type DmAction, type MessengerChat, type MessengerMessage } from '../api';
+  import { dmErrorCode, mediaErrorCode, messengerError, type DmAction, type MessengerChat, type MessengerMessage } from '../api';
 
   interface Props {
     chat: MessengerChat;
@@ -69,7 +71,9 @@
   /** Relationship refusals arrive as stable codes; everything else as text. */
   function explain(e: unknown): string {
     const code = dmErrorCode(e);
-    return code ? $t(`msg_err_${code}` as "msg_err_dm_blocked", { name: chat.title }) : messengerError(e);
+    if (code) return $t(`msg_err_${code}` as "msg_err_dm_blocked", { name: chat.title });
+    const media = mediaErrorCode(e);
+    return media ? $t(`msg_media_${media.replace(".", "_")}` as "msg_media_err_network") : messengerError(e);
   }
 
   async function act(a: DmAction) {
@@ -125,6 +129,15 @@
     }
   }
 
+  async function attach(paths: string[]) {
+    error = "";
+    atBottom = true;
+    for (const p of paths) {
+      try { await chatStore.sendFile(p); }
+      catch (e) { error = explain(e); break; }
+    }
+  }
+
   function openMenu(e: MouseEvent, m: MessengerMessage) {
     e.preventDefault();
     menu = { open: true, x: e.clientX, y: e.clientY, m };
@@ -174,6 +187,14 @@
   });
 </script>
 
+{#snippet attachment(m: MessengerMessage)}
+  <MediaBubble message={m} />
+{/snippet}
+
+{#snippet composerTools()}
+  <AttachButton disabled={!sessionActive || chat.mode !== "full_chat" || !!editing} onfiles={attach} />
+{/snippet}
+
 <section class="window">
   <header class="head">
     {#if onback}<button class="icon back" onclick={onback} title={$t('msg_back')}><Icon name="arrow-left" size={16} /></button>{/if}
@@ -210,7 +231,7 @@
           <div class="system"><span>{$t(`msg_sys_${r.m.text}` as 'msg_sys_request_sent', { name: chat.title })}</span></div>
         {:else}
           <MessageBubble message={r.m} first={r.first} peerTitle={chat.title} highlighted={highlighted === r.m.id}
-            onmenu={openMenu} onreplyclick={jumpTo} onretry={(m) => guard(() => chatStore.retry(m.id))} />
+            onmenu={openMenu} onreplyclick={jumpTo} onretry={(m) => guard(() => chatStore.retry(m.id))}  media={attachment} />
         {/if}
       {/each}
     {/if}
@@ -226,7 +247,7 @@
 
   {#if chat.can_send}
     <Composer {replyTo} {editing} peerTitle={chat.title} disabled={!sessionActive}
-      oncancel={() => { replyTo = null; editing = null; }} onsend={send} />
+      oncancel={() => { replyTo = null; editing = null; }} onsend={send} tools={composerTools} />
   {:else if footer}
     {@render footer()}
   {:else}

@@ -23,7 +23,9 @@
   let { message: m, first, peerTitle, highlighted = false, onmenu, onreplyclick, onretry, media }: Props = $props();
 
   const out = $derived(m.direction === 'out');
-  const statusIcon = $derived(m.status === 'sent' ? 'check' : m.status === 'failed' ? 'alert-triangle' : 'clock');
+  const statusIcon = $derived(
+    m.status === 'sent' ? 'check' : m.status === 'failed' ? 'alert-triangle' : m.status === 'uploading' ? 'upload' : 'clock',
+  );
   const statusTitle = $derived($t(`msg_status_${m.status}` as 'msg_status_sent'));
 </script>
 
@@ -56,7 +58,7 @@
       {/if}
     </span>
   </div>
-  {#if m.status === 'failed' && out}
+  {#if m.status === 'failed' && out && !m.id.startsWith('local:')}
     <button class="retry" onclick={() => onretry(m)} title={m.failure_reason ?? ''}>
       <Icon name="refresh-cw" size={12} />{$t('msg_message_retry')}
     </button>

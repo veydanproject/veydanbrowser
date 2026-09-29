@@ -133,6 +133,16 @@ class ChatStore {
     return m;
   }
 
+  /** Attach a local file; the placeholder appears at once. */
+  async sendFile(path: string, caption?: string) {
+    const chat = this.active;
+    if (!chat?.peer_pubkey) throw new Error('no chat');
+    const m = await messengerApi.media.sendFile(chat.peer_pubkey, path, caption);
+    if (this.activeId === chat.id) this.upsert(m);
+    this.scheduleChatsRefresh();
+    return m;
+  }
+
   async edit(messageId: string, text: string) {
     const m = await messengerApi.dm.edit(messageId, text);
     this.upsert(m);

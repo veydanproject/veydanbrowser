@@ -17,6 +17,7 @@ import {
   type MessengerUiEvent,
 } from './api';
 import { chatStore } from './chats/chatStore.svelte';
+import { transferStore } from './media/transferStore.svelte';
 
 export interface FeedEntry extends MessengerUiEvent {
   at: number;
@@ -103,16 +104,30 @@ class MessengerStore {
     this._unlisten.push(
       await listen<MessengerRelay[]>(RELAY_STATUS_EVENT, (e) => {
         this.relays = e.payload;
+        this.scheduleStatusRefresh();
       }),
       await listen<MessengerUiEvent>(RUNTIME_EVENT, (e) => {
-        this.feed = [{ ...e.payload, at: Date.now() }, ...this.feed].slice(0, FEED_LIMIT);
         chatStore.handleEvent(e.payload);
-        if (e.payload.name === 'dm.message') messengerApi.status().then((s) => (this.status = s)).catch(() => {});
+        transferStore.handleEvent(e.payload);
+        if (e.payload.name === 'transfer.progress') return;
+        this.feed = [{ ...e.payload, at: Date.now() }, ...this.feed].slice(0, FEED_LIMIT);
+        if (e.payload.name === 'dm.message' || e.payload.name === 'history.synced') this.scheduleStatusRefresh();
         if (e.payload.name === 'profile.updated' || e.payload.name === 'follows.updated') {
           this.refreshContacts().catch(() => {});
         }
       }),
     );
+  }
+
+  private _statusTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Status for the header dot and diagnostics; bursts collapse into one call. */
+  scheduleStatusRefresh() {
+    if (this._statusTimer) return;
+    this._statusTimer = setTimeout(() => {
+      this._statusTimer = null;
+      messengerApi.status().then((s) => (this.status = s)).catch(() => {});
+    }, 1000);
   }
 
   async refreshContacts() {
