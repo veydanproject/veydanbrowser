@@ -25,6 +25,7 @@ pub mod outbox;
 pub mod profiles;
 pub mod relays;
 pub mod settings;
+pub mod shared;
 
 /// Unix seconds now; the store stamps rows itself.
 pub(crate) fn now() -> i64 {

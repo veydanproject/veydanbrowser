@@ -11,8 +11,8 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
   import Icon from '$lib/Icon.svelte';
-  import { cardOf, ICONS } from './cards';
-  import ExternalCard from './cards/ExternalCard.svelte';
+  import { ICONS } from './cards';
+  import LinkCard from './LinkCard.svelte';
   import { linkActions } from './actions';
   import { linkStore } from './linkStore.svelte';
   import { linksOf, tokenize } from './tokenize';
@@ -56,21 +56,7 @@
 
 {#if links.length}
   <div class="cards">
-    {#each links as l (l.text)}
-      <div class="link" class:pending={l.type === 'internal' && !linkStore.view(l.link)}>
-        {#if l.type === 'external'}
-          <ExternalCard url={l.url} />
-        {:else}
-          {@const view = linkStore.view(l.link)}
-          {#if view}
-            {@const Card = cardOf(view)}
-            <Card {view} text={l.text} />
-          {:else}
-            <span class="wait"><Icon name="loader" size={14} />{l.text}</span>
-          {/if}
-        {/if}
-      </div>
-    {/each}
+    {#each links as l (l.text)}<LinkCard link={l} />{/each}
   </div>
 {/if}
 
@@ -83,14 +69,6 @@
     font-weight: var(--fw-semibold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .cards { display: flex; flex-direction: column; gap: 6px; width: min(320px, 100%); min-width: min(260px, 100%); }
-  .link {
-    padding: var(--sp-3); border-radius: var(--radius-md); border: 1px solid var(--border);
-    background: var(--surface); color: var(--text); min-width: 0;
-  }
-  .link.pending { padding: var(--sp-2) var(--sp-3); }
-  .wait { display: flex; align-items: center; gap: 6px; font-size: var(--fs-2xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .wait :global(svg) { flex-shrink: 0; animation: spin 1.1s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
   /* Touch: a long press opens the menu, so it must not start a selection. */
   @media (pointer: coarse) { .text { user-select: none; -webkit-user-select: none; } }
 </style>

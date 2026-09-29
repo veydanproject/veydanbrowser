@@ -15,6 +15,7 @@ use messenger_core::{
 };
 use messenger_store::chats::{self, ChatRow};
 use messenger_store::messages::{self as repo, MessageRow, NewMessage};
+use messenger_store::shared::{self, Counts, Section};
 use messenger_store::{dm_routes, Store};
 use nostr::key::Keys;
 use nostr::nips::nip19::ToBech32;
@@ -207,6 +208,21 @@ impl DmService {
             out.push(self.message_view(r).await?);
         }
         Ok(out)
+    }
+
+    /// What a chat has shared in one section, newest first.
+    pub async fn shared(&self, chat_id: &str, section: Section, before: Option<i64>, limit: i64) -> Result<Vec<MessageView>> {
+        let rows = shared::list(&self.store, chat_id, section, before, limit.clamp(1, 500)).await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(self.message_view(r).await?);
+        }
+        Ok(out)
+    }
+
+    /// How many messages each section of a chat holds.
+    pub async fn shared_counts(&self, chat_id: &str) -> Result<Counts> {
+        shared::counts(&self.store, chat_id).await
     }
 
     pub async fn message(&self, id: &str) -> Result<Option<MessageView>> {

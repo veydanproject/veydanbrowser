@@ -4,17 +4,19 @@
 //! TypeScript types of what the runtime hands to the UI, written from the
 //! Rust types themselves so the two cannot drift apart.
 //!
-//! The file lives with the UI (`src/lib/messenger/generated/`). A test
-//! compares it with what the types say now and fails when it is stale;
+//! The files live with the UI (`src/lib/messenger/generated/`). A test
+//! compares them with what the types say now and fails when one is stale;
 //! `make msg-types` (or `UPDATE_TS_BINDINGS=1 cargo test -p
-//! messenger-runtime bindings`) writes it again.
+//! messenger-runtime bindings`) writes them again.
 
 use crate::links::{GroupMembership, LinkGroupKind, LinkView};
+use crate::shared::{SharedCounts, SharedSection};
 use messenger_preview::Preview;
 use ts_rs::{Config, TS};
 
 /// Relative to this crate.
 pub const LINKS_FILE: &str = "../../../../src/lib/messenger/generated/links.ts";
+pub const SHARED_FILE: &str = "../../../../src/lib/messenger/generated/shared.ts";
 
 const HEADER: &str = "// SPDX-FileCopyrightText: 2026 Veydan Project
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
@@ -38,6 +40,20 @@ pub fn links_ts() -> String {
     out
 }
 
+/// What a chat has shared, as the panel about a chat reads it.
+pub fn shared_ts() -> String {
+    let cfg = Config::new();
+    let mut out = String::from(HEADER);
+    out += &export::<SharedSection>(&cfg, "A section of what a chat has shared: pictures and videos, files, links, voice and round videos.");
+    out += &export::<SharedCounts>(&cfg, "How many messages each section holds. Links are counted by message.");
+    out
+}
+
+/// Every generated file and what it should hold.
+pub fn files() -> [(&'static str, String); 2] {
+    [(LINKS_FILE, links_ts()), (SHARED_FILE, shared_ts())]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,15 +61,16 @@ mod tests {
 
     #[test]
     fn bindings_are_current() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(LINKS_FILE);
-        let want = links_ts();
-        if std::env::var_os("UPDATE_TS_BINDINGS").is_some() {
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, &want).unwrap();
-            return;
+        for (file, want) in files() {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+            if std::env::var_os("UPDATE_TS_BINDINGS").is_some() {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, &want).unwrap();
+                continue;
+            }
+            let have = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(have == want, "{} is stale: run `make msg-types`", path.display());
         }
-        let have = std::fs::read_to_string(&path).unwrap_or_default();
-        assert!(have == want, "{} is stale: run `make msg-types`", path.display());
     }
 
     #[test]

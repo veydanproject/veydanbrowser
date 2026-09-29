@@ -13,6 +13,7 @@
   import type { MenuEntry } from '$lib/components/ui/ContextMenu.svelte';
   import ChatWindow from '../dm/ChatWindow.svelte';
   import GroupInfo from './GroupInfo.svelte';
+  import WithInfo from '../shared/WithInfo.svelte';
   import { groupStore } from './groupStore.svelte';
   import { nameStore } from './names.svelte';
   import { groupLine } from './lines';
@@ -128,24 +129,20 @@
   </div>
 {/snippet}
 
-<div class="wrap" class:with-info={info}>
-  <div class="main">
-    <ChatWindow chat={view} {onback} {subtitle} {actions} {banner} {footer} {author} {systemText} chatEntries={entries}
-      canModerate={moderate} {explainError} ontitle={() => (info = !info)} />
-  </div>
-  {#if info && group}
-    <aside class="side">
-      <GroupInfo {group} onclose={() => (info = false)} onforgotten={() => { info = false; chatStore.close(); chatStore.loadChats().catch(() => {}); onback?.(); }} />
-    </aside>
+{#snippet window()}
+  <ChatWindow chat={view} {onback} {subtitle} {actions} {banner} {footer} {author} {systemText} chatEntries={entries}
+    canModerate={moderate} {explainError} ontitle={() => (info = !info)} />
+{/snippet}
+
+{#snippet panel()}
+  {#if group}
+    <GroupInfo {group} onclose={() => (info = false)} onforgotten={() => { info = false; chatStore.close(); chatStore.loadChats().catch(() => {}); onback?.(); }} />
   {/if}
-</div>
+{/snippet}
+
+<WithInfo open={info && !!group} chat={window} info={panel} />
 
 <style>
-  .wrap { display: grid; grid-template-columns: minmax(0, 1fr); height: 100%; min-height: 0; position: relative; }
-  .wrap.with-info { grid-template-columns: minmax(0, 1fr) 340px; }
-  .main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-  .main > :global(*) { flex: 1; min-height: 0; }
-  .side { min-height: 0; border-left: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; }
   .sub-line { display: inline-flex; align-items: center; gap: 4px; }
   .icon { border: none; background: none; color: var(--text-2); cursor: pointer; display: inline-flex; padding: 6px; border-radius: var(--radius-sm); }
   .icon:hover { color: var(--text); background: var(--surface-3); }
@@ -164,9 +161,4 @@
   }
   .closed span { display: inline-flex; align-items: center; gap: 6px; }
   @media (pointer: coarse) { .icon { padding: 10px; } }
-  @media (max-width: 1100px) {
-    /* No room for two columns: the panel covers the conversation. */
-    .wrap.with-info { grid-template-columns: minmax(0, 1fr); }
-    .side { position: absolute; inset: 0; border-left: none; z-index: 5; }
-  }
 </style>

@@ -19,6 +19,7 @@ pub mod links;
 pub mod preview;
 pub mod relays;
 pub mod session;
+pub mod shared;
 
 use messenger_core::outbound::WireEvent;
 use messenger_core::traits::{RelayState, SystemClock, UiEvent};
@@ -47,6 +48,7 @@ pub use messenger_groups::{GroupKind, GroupView, InviteView, KeyView as GroupKey
 pub use links::LinkView;
 pub use messenger_preview::Preview as LinkPreview;
 pub use relays::{ManifestInfo, RelayService, RelayView};
+pub use shared::{SharedCounts, SharedSection};
 
 /// Facts for the host's status screen. Never contains secrets.
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -8,7 +8,7 @@
   import { t } from '$lib/i18n';
   import { messengerStore } from '../store.svelte';
   import { chatStore } from '../chats/chatStore.svelte';
-  import ChatWindow from '../dm/ChatWindow.svelte';
+  import DmChat from '../dm/DmChat.svelte';
   import GroupChat from "../groups/GroupChat.svelte";
   import MobileFrame from './MobileFrame.svelte';
   import { BASE, chatHref } from './routes';
@@ -55,7 +55,7 @@
     {#if chatStore.active.kind === "group"}
       <GroupChat chat={chatStore.active} onback={back} />
     {:else}
-      <ChatWindow chat={chatStore.active} onback={back} />
+      <DmChat chat={chatStore.active} onback={back} />
     {/if}
   </MobileFrame>
 {:else}

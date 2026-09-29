@@ -33,7 +33,7 @@ use std::time::Duration;
 fn usage() -> ! {
     eprintln!(
         "usage: messenger-cli [--data-dir DIR] <keygen [--password PW] | import <nsec|ncryptsec> <secret> [--password PW] \
-         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer>>"
+         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer>>"
     );
     std::process::exit(2)
 }
@@ -172,6 +172,22 @@ async fn main() {
                     if m.edited_at.is_some() && !m.deleted { " (edited)" } else { "" },
                     format_args!("  #{}", &m.id[..8.min(m.id.len())]),
                 );
+            }
+        }
+        "shared" => {
+            if args.is_empty() {
+                usage();
+            }
+            let chat_id = if args[0].starts_with("group:") { args[0].clone() } else { rt.chat_open(&args[0]).await.unwrap_or_else(die).id };
+            let c = rt.shared_counts(&chat_id).await.unwrap_or_else(die);
+            println!("visual={} files={} links={} voice={}", c.visual, c.files, c.links, c.voice);
+            if let Some(word) = args.get(1) {
+                let section: messenger_runtime::SharedSection =
+                    serde_json::from_value(serde_json::Value::String(word.clone())).unwrap_or_else(|_| usage());
+                for m in rt.shared(&chat_id, section, None, 200).await.unwrap_or_else(die) {
+                    let media = m.media.as_ref().map(|v| format!("[{} {}] ", v["kind"].as_str().unwrap_or("?"), v["name"].as_str().unwrap_or(""))).unwrap_or_default();
+                    println!("{} {}{}  #{}", m.created_at, media, m.text.unwrap_or_default(), &m.id[..8.min(m.id.len())]);
+                }
             }
         }
         "edit" => {

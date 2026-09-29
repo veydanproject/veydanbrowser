@@ -28,7 +28,7 @@ use messenger_runtime::{
     LinkPreview, LinkView, ManifestInfo, MessageView,
     MediaKind, MediaServerInput, MediaServerView, MessengerRuntime, Recording, RelationView, TransferView,
     ProfileView, RelayView,
-    RuntimeStatus,
+    RuntimeStatus, SharedCounts, SharedSection,
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -487,6 +487,24 @@ pub async fn messenger_chat_messages(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<Vec<MessageView>> {
     state.messenger.runtime()?.dm().messages(&chat_id, before, limit.unwrap_or(50)).await.map_err(map_err)
+}
+
+/// How many messages each section of what a chat has shared holds.
+#[tauri::command]
+pub async fn messenger_chat_shared_counts(chat_id: String, state: tauri::State<'_, AppState>) -> CmdResult<SharedCounts> {
+    state.messenger.runtime()?.shared_counts(&chat_id).await.map_err(map_err)
+}
+
+/// One page of a section of what a chat has shared, newest first, strictly older than `before`.
+#[tauri::command]
+pub async fn messenger_chat_shared(
+    chat_id: String,
+    section: SharedSection,
+    before: Option<i64>,
+    limit: Option<i64>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<Vec<MessageView>> {
+    state.messenger.runtime()?.shared(&chat_id, section, before, limit.unwrap_or(60)).await.map_err(map_err)
 }
 
 #[tauri::command]

@@ -11,7 +11,7 @@
   import IdentityOnboarding from '../identity/IdentityOnboarding.svelte';
   import ChatList from '../chats/ChatList.svelte';
   import NewChatDialog from '../chats/NewChatDialog.svelte';
-  import ChatWindow from '../dm/ChatWindow.svelte';
+  import DmChat from '../dm/DmChat.svelte';
   import GroupChat from "../groups/GroupChat.svelte";
   import NewGroupDialog from "../groups/NewGroupDialog.svelte";
   import InvitesBar from "../groups/InvitesBar.svelte";
@@ -99,7 +99,7 @@
         {:else if chatStore.active?.kind === "group"}
           <GroupChat chat={chatStore.active} onback={() => chatStore.close()} />
         {:else if chatStore.active}
-          <ChatWindow chat={chatStore.active} onback={() => chatStore.close()} />
+          <DmChat chat={chatStore.active} onback={() => chatStore.close()} />
         {:else}
           <div class="welcome">
             <div class="welcome-icon"><Icon name="message-circle" size={34} /></div>

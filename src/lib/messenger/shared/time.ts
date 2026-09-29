@@ -21,6 +21,16 @@ export function listStamp(unix: number | null, now = new Date()): string {
   return d.toLocaleDateString([], { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
+/** `29 Sep 2026, 14:05`: a moment worth its date. */
+export function stamp(unix: number): string {
+  return new Date(unix * 1000).toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/** `September 2026`: a heading over what was sent that month. */
+export function monthTitle(unix: number): string {
+  return new Date(unix * 1000).toLocaleDateString([], { month: 'long', year: 'numeric' });
+}
+
 /** Day key for separators. */
 export function dayKey(unix: number): string {
   const d = new Date(unix * 1000);

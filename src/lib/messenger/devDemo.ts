@@ -162,6 +162,10 @@ export function buildDemo(): DemoData {
     msg(tm, daria, now - day * 3 + 500, 'Всем привет!'),
     sys(tm, now - 7000, 'group_muted', alice, daria),
     msg(tm, boris, now - 900, 'Схема ключей', { content_type: 'media', media: { name: 'keys.png', mime: 'image/png', size: 311_204, kind: 'image' } }),
+    msg(tm, alice, now - day * 2, null, { content_type: 'media', media: { name: 'board.jpg', mime: 'image/jpeg', size: 1_204_000, kind: 'image' } }),
+    msg(tm, daria, now - day * 2 + 60, null, { content_type: 'media', media: { name: 'sketch.png', mime: 'image/png', size: 402_000, kind: 'image' } }),
+    msg(tm, boris, now - day * 2 + 120, 'Спецификация: https://github.com/nostr-protocol/nips/blob/master/29.md'),
+    msg(tm, daria, now - day * 2 + 200, null, { content_type: 'media', media: { name: 'voice.weba', mime: 'audio/webm', size: 31_000, kind: 'voice', duration_ms: 9_200, waveform: [40, 120, 200, 160, 90, 60, 140, 220, 180, 100] } }),
     msg(tm, ME, now - 400, 'Принято, смотрю.'),
   );
   messages[tm].sort((x, y) => x.created_at - y.created_at);

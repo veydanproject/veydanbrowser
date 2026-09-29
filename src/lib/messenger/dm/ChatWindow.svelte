@@ -39,13 +39,15 @@
     systemText?: (m: MessengerMessage) => string | null;
     /** Entries of the chat menu that replace the relationship ones. */
     chatEntries?: MenuEntry[];
+    /** Entries of the chat menu put before all others. */
+    leadEntries?: MenuEntry[];
     /** May this message of someone else be removed for everyone? */
     canModerate?: (m: MessengerMessage) => boolean;
     /** Explains refusals this window does not know. */
     explainError?: (e: unknown) => string | null;
     ontitle?: () => void;
   }
-  let { chat, onback, actions, banner, footer, subtitle, author, systemText, chatEntries, canModerate, explainError, ontitle }: Props = $props();
+  let { chat, onback, actions, banner, footer, subtitle, author, systemText, chatEntries, leadEntries, canModerate, explainError, ontitle }: Props = $props();
   const isGroup = $derived(chat.kind === "group");
   const canAttach = $derived(chat.mode === "full_chat" || chat.mode === "group");
 
@@ -135,7 +137,7 @@
   }
 
   const chatItems = $derived.by((): MenuEntry[] => {
-    const list: MenuEntry[] = [];
+    const list: MenuEntry[] = [...(leadEntries ?? [])];
     if (chatEntries) list.push(...chatEntries);
     else if (chat.mode === "blocked") list.push({ label: $t("msg_rel_cta_unblock"), icon: "lock-open", onselect: () => act("unblock") });
     else {

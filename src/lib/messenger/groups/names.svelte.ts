@@ -30,6 +30,16 @@ class NameStore {
     return profileLabel(p ?? null) || shortKey(pubkey);
   }
 
+  /** What they say about themselves; `null` until it is known. */
+  profile(pubkey: string): MessengerProfile | null {
+    if (this.isMe(pubkey)) return messengerStore.ownProfile ?? null;
+    const c = messengerStore.contacts.find((x) => x.pubkey === pubkey);
+    if (c?.profile) return c.profile;
+    const p = this.profiles[pubkey];
+    if (p === undefined) this.ask(pubkey);
+    return p ?? null;
+  }
+
   picture(pubkey: string): string | null {
     if (this.isMe(pubkey)) return messengerStore.ownProfile?.picture ?? null;
     const c = messengerStore.contacts.find((x) => x.pubkey === pubkey);

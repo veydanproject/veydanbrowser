@@ -7,8 +7,7 @@
 -->
 <script lang="ts">
   import { get } from 'svelte/store';
-  import { t, locale, type TranslationKey } from '$lib/i18n';
-  import { formatEpochDate, formatTime } from '$lib/utils';
+  import { t, type TranslationKey } from '$lib/i18n';
   import { groupError } from './errors';
   import Icon from '$lib/Icon.svelte';
   import ContextMenu, { type MenuEntry } from '$lib/components/ui/ContextMenu.svelte';
@@ -16,13 +15,16 @@
   import GroupLink from './GroupLink.svelte';
   import MessageContent from '../content/MessageContent.svelte';
   import InvitePicker from './InvitePicker.svelte';
+  import SharedMedia from '../content/shared/SharedMedia.svelte';
+  import SharedList from '../content/shared/SharedList.svelte';
   import { groupStore } from './groupStore.svelte';
   import { nameStore, shortKey } from './names.svelte';
   import { canMute, canRemove, isManager, isOwner, rolesFor } from './permissions';
   import { chatStore } from '../chats/chatStore.svelte';
   import { confirmStore } from '../shared/confirm.svelte';
   import { longpress } from '../shared/longpress';
-  import { type GroupAction, type MessengerGroup, type MessengerGroupKey, type MessengerGroupMember } from '../api';
+  import { stamp } from '../shared/time';
+  import { type GroupAction, type MessengerGroup, type MessengerGroupKey, type MessengerGroupMember, type SharedSection } from '../api';
 
   const tr = (key: string, params?: Record<string, string>) => get(t)(key as "msg_you", params);
 
@@ -40,6 +42,8 @@
   let name = $state('');
   let about = $state('');
   let history = $state(true);
+  /** A section of what the group has shared, shown in place of the panel. */
+  let section = $state<SharedSection | null>(null);
   let menu = $state<{ open: boolean; x: number; y: number; m: MessengerGroupMember | null }>({ open: false, x: 0, y: 0, m: null });
 
   const joined = $derived(group.membership === 'joined');
@@ -114,7 +118,7 @@
 
   const items = $derived(menu.m ? entriesFor(menu.m) : []);
 
-  const when = (unix: number) => `${formatEpochDate(unix, $locale)}, ${formatTime(new Date(unix * 1000).toISOString(), $locale)}`;
+  const when = stamp;
 
   /** A key younger than this is still reaching everyone. */
   const FRESH_SECS = 24 * 3600;
@@ -148,6 +152,9 @@
 </script>
 
 <div class="panel">
+  {#if section}
+  <SharedList chatId={`group:${group.id}`} {section} onback={() => (section = null)} />
+  {:else}
   <header class="head">
     <span class="head-title">{$t('msg_group_info')}</span>
     <button class="icon" onclick={onclose} title={$t('msg_back')}><Icon name="x" size={16} /></button>
@@ -234,6 +241,8 @@
 
     {#if joined}<GroupLink {group} />{/if}
 
+    <SharedMedia chatId={`group:${group.id}`} onopen={(s) => (section = s)} />
+
     <section class="block">
       <div class="label-row">
         <span class="label">{$t('msg_group_members')} · {group.members.length}</span>
@@ -285,6 +294,7 @@
       {/if}
     </section>
   </div>
+  {/if}
 </div>
 
 <InvitePicker bind:open={inviting} {group} />

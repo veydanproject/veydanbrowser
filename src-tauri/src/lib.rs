@@ -485,6 +485,10 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_messages,
             #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_shared_counts,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_shared,
+            #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_mark_read,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_set_pinned,
@@ -1088,6 +1092,10 @@ fn run_desktop() {
             commands::messenger::messenger_chat_open,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_messages,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_shared_counts,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_shared,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_mark_read,
             #[cfg(feature = "messenger")]

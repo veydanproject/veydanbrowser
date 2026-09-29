@@ -7,6 +7,7 @@
 
 // Types the runtime writes for itself (`make msg-types`); never by hand.
 export type { GroupMembership, LinkGroupKind, LinkPreview, LinkView } from './generated/links';
+export type { SharedCounts, SharedSection } from './generated/shared';
 
 export interface MessengerIngressCounters {
   received: number;
@@ -433,6 +434,8 @@ const NOT_COMPILED: MessengerStatus = { compiled: false, enabled: false, runtime
 import { buildDemo, demoEnabled } from './devDemo';
 import type { ExternalUrl, InternalLinkText } from './content/types';
 import type { GroupMembership, LinkPreview, LinkView } from './generated/links';
+import type { SharedCounts, SharedSection } from './generated/shared';
+import { inSection } from './content/shared/sections';
 
 const demo = !isTauri && demoEnabled() ? buildDemo() : null;
 let mockIdentity: MessengerIdentity | null = demo?.identity ?? null;
@@ -535,6 +538,17 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
     const all = mockMessages[String(a?.chatId)] ?? [];
     const before = (a?.before as number | null) ?? Number.MAX_SAFE_INTEGER;
     return all.filter((m) => m.created_at < before).slice(-((a?.limit as number) ?? 50));
+  },
+  messenger_chat_shared_counts: (a): SharedCounts => {
+    const all = mockMessages[String(a?.chatId)] ?? [];
+    const n = (s: SharedSection) => all.filter((m) => inSection(m, s)).length;
+    return { visual: n('visual'), files: n('files'), links: n('links'), voice: n('voice') };
+  },
+  messenger_chat_shared: (a) => {
+    const all = mockMessages[String(a?.chatId)] ?? [];
+    const before = (a?.before as number | null) ?? Number.MAX_SAFE_INTEGER;
+    return all.filter((m) => m.created_at < before && inSection(m, a?.section as SharedSection))
+      .reverse().slice(0, (a?.limit as number) ?? 60);
   },
   messenger_chat_mark_read: (a) => { mockChats = mockChats.map((c) => c.id === a?.chatId ? { ...c, unread: 0 } : c); },
   messenger_chat_set_pinned: (a) => { mockChats = mockChats.map((c) => c.id === a?.chatId ? { ...c, pinned: Boolean(a?.pinned) } : c); },
@@ -816,6 +830,11 @@ export const messengerApi = {
     open: (peer: string) => invoke<MessengerChat>('messenger_chat_open', { peer }),
     messages: (chatId: string, before?: number, limit = 50) =>
       invoke<MessengerMessage[]>('messenger_chat_messages', { chatId, before: before ?? null, limit }),
+    /** How many messages each section of what the chat has shared holds. */
+    sharedCounts: (chatId: string) => invoke<SharedCounts>('messenger_chat_shared_counts', { chatId }),
+    /** One page of a section, newest first, strictly older than `before`. */
+    shared: (chatId: string, section: SharedSection, before?: number, limit = 60) =>
+      invoke<MessengerMessage[]>('messenger_chat_shared', { chatId, section, before: before ?? null, limit }),
     markRead: (chatId: string) => invoke<void>('messenger_chat_mark_read', { chatId }),
     setPinned: (chatId: string, pinned: boolean) => invoke<void>('messenger_chat_set_pinned', { chatId, pinned }),
     setArchived: (chatId: string, archived: boolean) => invoke<void>('messenger_chat_set_archived', { chatId, archived }),
