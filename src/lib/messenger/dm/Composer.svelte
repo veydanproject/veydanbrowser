@@ -27,12 +27,13 @@
   const drafts: Map<string, string> = ((globalThis as Record<string, unknown>).__msgDrafts ??= new Map()) as Map<string, string>;
   const MAX_BYTES = 32 * 1024;
   let text = $state('');
-  let busy = $state(false);
   let el = $state<HTMLTextAreaElement | null>(null);
 
   const bytes = $derived(new TextEncoder().encode(text).length);
   const tooLong = $derived(bytes > MAX_BYTES);
-  const canSend = $derived(!disabled && !busy && text.trim().length > 0 && !tooLong);
+  // Not gated on a send in flight: the next message can be typed and sent
+  // while the previous one is still on its way (order is kept by the chat).
+  const canSend = $derived(!disabled && text.trim().length > 0 && !tooLong);
 
   // Entering edit mode loads the message text; leaving it clears the field.
   let lastEditing: string | null = null;
@@ -73,22 +74,30 @@
     queueMicrotask(() => { el!.selectionStart = el!.selectionEnd = a + s.length; resize(); el!.focus(); });
   }
 
+  // The field is cleared at once and never loses focus, so the keyboard
+  // stays open between messages. A failed send puts the text back.
   async function submit() {
     if (!canSend) return;
     const value = text.trim();
-    busy = true;
+    const wasEditing = !!editing;
+    text = '';
+    queueMicrotask(resize);
     try {
       await onsend(value);
-      text = '';
+    } catch {
+      if (!text && !wasEditing) text = value;
       queueMicrotask(resize);
-    } finally {
-      busy = false;
-      queueMicrotask(() => el?.focus());
     }
   }
 
+  /** Buttons next to the field act without taking the focus from it. */
+  const keepFocus = (e: Event) => e.preventDefault();
+
+  // On a phone Enter is a new line; sending is the button.
+  const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+
   function onkeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !touch) { e.preventDefault(); submit(); }
     else if (e.key === 'Escape' && (replyTo || editing)) { e.preventDefault(); oncancel(); }
     else if (e.key === "ArrowUp" && !text && !editing && oneditlast) { e.preventDefault(); oneditlast(); }
   }
@@ -102,7 +111,7 @@
         <span class="ctx-title">{editing ? $t('msg_composer_editing') : $t('msg_composer_reply_to', { name: replyTo!.direction === 'out' ? $t('msg_you') : peerTitle })}</span>
         <span class="ctx-text">{(editing ?? replyTo)!.text ?? ''}</span>
       </span>
-      <button class="icon" onclick={oncancel} title={$t('msg_back')}><Icon name="x" size={14} /></button>
+      <button class="icon" onpointerdown={keepFocus} onmousedown={keepFocus} onclick={oncancel} title={$t('msg_back')}><Icon name="x" size={14} /></button>
     </div>
   {/if}
   <div class="row">
@@ -112,7 +121,8 @@
       placeholder={placeholder ?? $t('msg_composer_placeholder')}
       oninput={resize} {onkeydown}
     ></textarea>
-    <button class="send" disabled={!canSend} onclick={submit} title={$t('msg_composer_send')}>
+    <button class="send" class:off={!canSend} aria-disabled={!canSend} tabindex="-1"
+      onpointerdown={keepFocus} onmousedown={keepFocus} onclick={submit} title={$t('msg_composer_send')}>
       <Icon name={editing ? 'check' : 'send'} size={16} />
     </button>
   </div>
@@ -138,8 +148,8 @@
     background: var(--accent-grad); color: #fff; display: inline-flex; align-items: center; justify-content: center;
     transition: filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
   }
-  .send:hover:not(:disabled) { filter: brightness(1.1); }
-  .send:disabled { opacity: 0.35; cursor: default; }
+  .send:hover:not(.off) { filter: brightness(1.1); }
+  .send.off { opacity: 0.35; cursor: default; }
   .icon { border: none; background: none; color: var(--text-3); cursor: pointer; display: inline-flex; padding: 4px; border-radius: var(--radius-sm); }
   .icon:hover { color: var(--text); background: var(--surface-3); }
   .warn { font-size: var(--fs-2xs); color: var(--danger-text); }

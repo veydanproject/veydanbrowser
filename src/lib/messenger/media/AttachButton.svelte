@@ -26,7 +26,7 @@
   }
 </script>
 
-<button class="attach" {disabled} onclick={pick} title={$t('msg_media_attach')}>
+<button class="attach" {disabled} tabindex="-1" onpointerdown={(e) => e.preventDefault()} onmousedown={(e) => e.preventDefault()} onclick={pick} title={$t('msg_media_attach')}>
   <Icon name="paperclip" size={17} />
 </button>
 
