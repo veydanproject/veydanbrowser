@@ -24,8 +24,8 @@ pub struct ReqwestFetcher {
 
 impl ReqwestFetcher {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
+        let client = messenger_http::builder(Duration::from_secs(5), Duration::from_secs(10))
+            .expect("tls configuration")
             .redirect(reqwest::redirect::Policy::none())
             .user_agent("veydan-messenger")
             .build()

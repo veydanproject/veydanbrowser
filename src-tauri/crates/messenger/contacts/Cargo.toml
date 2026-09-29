@@ -13,6 +13,7 @@ publish.workspace = true
 [dependencies]
 messenger-core.workspace = true
 messenger-store.workspace = true
+messenger-http.workspace = true
 nostr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
