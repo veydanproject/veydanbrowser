@@ -33,7 +33,8 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
 pub use messenger_dm::{Action as DmAction, ChatView, MessageView, RelationView};
-pub use messenger_media::{MediaServerInput, MediaServerView, TransferView};
+pub use media::Recording;
+pub use messenger_media::{MediaKind, MediaServerInput, MediaServerView, TransferView};
 
 pub use messenger_contacts::book::ContactPatch;
 pub use messenger_contacts::{ContactView, ProfileInput, ProfileView};

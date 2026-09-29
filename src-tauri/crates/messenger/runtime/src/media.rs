@@ -26,6 +26,31 @@ pub const AUTO_DOWNLOAD_BYTES: u64 = SMALL_BYTES;
 /// Largest file handed to the UI inline (previews).
 pub const MAX_INLINE_BYTES: u64 = 24 * 1024 * 1024;
 
+/// Largest recording accepted from the UI in one call.
+pub const MAX_RECORDING_BYTES: u64 = 64 * 1024 * 1024;
+
+/// A voice message or a video circle as the UI hands it over.
+pub struct Recording {
+    pub kind: MediaKind,
+    /// As the recorder reported it; codec parameters are dropped.
+    pub mime: String,
+    pub duration_ms: Option<u64>,
+    pub waveform: Option<Vec<u8>>,
+    pub bytes: Vec<u8>,
+}
+
+struct AttachmentMeta {
+    kind: MediaKind,
+    mime: String,
+    duration_ms: Option<u64>,
+    waveform: Option<Vec<u8>>,
+}
+
+/// `audio/webm;codecs=opus` → `audio/webm`.
+fn base_mime(mime: &str) -> String {
+    mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase()
+}
+
 struct UiSink(broadcast::Sender<UiEvent>);
 
 impl ProgressSink for UiSink {
@@ -63,6 +88,21 @@ impl UploadJob {
                 // The caption lives on the placeholder row.
                 let caption = self.dm.message(&placeholder).await.ok().flatten().and_then(|m| m.text);
                 descriptor.caption = caption;
+                // What the app knew before the upload (a recording's kind,
+                // length and outline) is on the placeholder too.
+                if let Some(ph) = self.dm.message(&placeholder).await.ok().flatten().and_then(|m| m.media) {
+                    if let Some(k) = ph.get("kind").and_then(|v| v.as_str()).and_then(MediaKind::parse) {
+                        descriptor.kind = k;
+                    }
+                    if let Some(m) = ph.get("mime").and_then(|v| v.as_str()) {
+                        descriptor.mime = m.to_string();
+                    }
+                    descriptor.duration_ms = ph.get("duration_ms").and_then(|v| v.as_u64());
+                    descriptor.waveform = ph
+                        .get("waveform")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x.min(255) as u8).collect());
+                }
                 let envelope = descriptor.to_envelope();
                 let mut local = serde_json::to_value(&descriptor).unwrap_or_else(|_| serde_json::json!({}));
                 local["local_path"] = serde_json::Value::String(local_path);
@@ -187,6 +227,57 @@ impl MessengerRuntime {
     /// Attach a file to the chat with `to`. Returns the placeholder
     /// message at once; the upload continues in the background.
     pub async fn dm_send_file(&self, to: &str, path: &Path, caption: Option<&str>) -> Result<MessageView> {
+        self.send_attachment(to, path, caption, None).await
+    }
+
+    /// Send something recorded in the app (voice message, video circle).
+    /// The bytes are written to the messenger folder and sent from there.
+    pub async fn dm_send_recording(&self, to: &str, rec: Recording, caption: Option<&str>) -> Result<MessageView> {
+        if rec.bytes.is_empty() {
+            return Err(MessengerError::Invalid("the recording is empty".into()));
+        }
+        if rec.bytes.len() as u64 > MAX_RECORDING_BYTES {
+            return Err(MessengerError::Invalid("err.file_too_large".into()));
+        }
+        if !matches!(rec.kind, MediaKind::Voice | MediaKind::Circle) {
+            return Err(MessengerError::Invalid("a recording is a voice message or a circle".into()));
+        }
+        let mime = base_mime(&rec.mime);
+        let ok = match rec.kind {
+            MediaKind::Voice => matches!(mime.as_str(), "audio/webm" | "audio/ogg" | "audio/mp4"),
+            _ => matches!(mime.as_str(), "video/webm" | "video/mp4"),
+        };
+        if !ok {
+            return Err(MessengerError::Invalid(format!("unsupported recording type {mime}")));
+        }
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let ext = match mime.as_str() {
+            "audio/webm" => "weba",
+            "audio/ogg" => "ogg",
+            "audio/mp4" => "m4a",
+            "video/mp4" => "mp4",
+            _ => "webm",
+        };
+        let dir = self.config.data_dir().join("outgoing").join(format!("{stamp:x}"));
+        tokio::fs::create_dir_all(&dir).await?;
+        let path = dir.join(format!("{}.{ext}", rec.kind.as_str()));
+        tokio::fs::write(&path, &rec.bytes).await?;
+        let waveform = rec.waveform.map(|w| w.into_iter().take(messenger_media::descriptor::MAX_WAVEFORM).collect::<Vec<u8>>());
+        let meta = AttachmentMeta { kind: rec.kind, mime, duration_ms: rec.duration_ms, waveform };
+        let result = self.send_attachment(to, &path, caption, Some(meta)).await;
+        if result.is_err() {
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+        }
+        result
+    }
+
+    async fn send_attachment(
+        &self,
+        to: &str,
+        path: &Path,
+        caption: Option<&str>,
+        meta_override: Option<AttachmentMeta>,
+    ) -> Result<MessageView> {
         let keys = self.session_keys().await?;
         let peer = messenger_contacts::book::parse_key(to)?;
         // Refuse early: no server, no upload.
@@ -195,14 +286,23 @@ impl MessengerRuntime {
         let name = messenger_media::descriptor::safe_name(
             &path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
         );
-        let mime = messenger_media::descriptor::mime_for(&name);
-        let fields = serde_json::json!({
+        let mut fields = serde_json::json!({
             "name": name,
-            "mime": mime,
+            "mime": messenger_media::descriptor::mime_for(&name),
             "size": meta.len(),
-            "kind": MediaKind::from_mime(mime).as_str(),
+            "kind": MediaKind::from_mime(messenger_media::descriptor::mime_for(&name)).as_str(),
             "local_path": path.to_string_lossy(),
         });
+        if let Some(m) = meta_override {
+            fields["kind"] = m.kind.as_str().into();
+            fields["mime"] = m.mime.into();
+            if let Some(d) = m.duration_ms {
+                fields["duration_ms"] = d.into();
+            }
+            if let Some(w) = m.waveform {
+                fields["waveform"] = serde_json::json!(w);
+            }
+        }
         let placeholder = self.dm.media_placeholder(&keys, &peer, fields, caption).await?;
         let transfer = match self.media.queue_upload(path, &placeholder.chat_id, &placeholder.id).await {
             Ok(t) => t,
@@ -356,11 +456,12 @@ impl MessengerRuntime {
             .and_then(|v| v.as_str())
             .unwrap_or("application/octet-stream")
             .to_string();
+        let mime = base_mime(&mime);
         // Only types a webview renders passively; never html or svg.
         let safe = matches!(
             mime.as_str(),
             "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif" | "image/bmp"
-                | "video/mp4" | "video/webm" | "audio/mpeg" | "audio/ogg" | "audio/wav" | "audio/mp4" | "audio/flac"
+                | "video/mp4" | "video/webm" | "audio/mpeg" | "audio/ogg" | "audio/wav" | "audio/mp4" | "audio/flac" | "audio/webm"
         );
         if !safe {
             return Ok(None);
