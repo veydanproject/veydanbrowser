@@ -65,6 +65,7 @@ impl ProgressSink for UiSink {
 /// Everything an upload task needs, detached from the runtime's lifetime.
 #[derive(Clone)]
 struct UploadJob {
+    groups: messenger_groups::GroupService,
     dm: DmService,
     media: MediaService,
     outbox: Outbox,
@@ -78,6 +79,41 @@ impl UploadJob {
             name: messenger_dm::UI_EVENT_DM_UPDATED.into(),
             payload: serde_json::json!({ "chat_id": chat_id, "message_id": message_id }),
         });
+    }
+
+    /// The blob is stored and the chat is a group: the message goes out
+    /// under the group key.
+    async fn finish_in_group(
+        &self,
+        transfer_id: &str,
+        placeholder: &str,
+        chat_id: &str,
+        envelope: messenger_core::Envelope,
+        local: serde_json::Value,
+    ) {
+        let group_id = chat_id.trim_start_matches("group:").to_string();
+        let lock = self.groups.lock_of(&group_id).await;
+        let finished = {
+            let _guard = lock.lock().await;
+            self.groups.media_finish(&self.keys, placeholder, envelope, local).await
+        };
+        match finished {
+            Ok((message, out)) => {
+                let _ = messenger_store::media::set_result(self.dm.store(), transfer_id, None, None, Some(&message.id)).await;
+                if let Ok(local_id) = self.outbox.enqueue(out).await {
+                    let _ = self.dm.attach_outbox(&message.id, &local_id).await;
+                }
+                self.outbox.kick();
+                self.updated(chat_id, &message.id);
+            }
+            Err(e) => {
+                let _ = self.ui.send(UiEvent {
+                    name: "error".into(),
+                    payload: serde_json::json!({ "family": "media", "error": e.to_string() }),
+                });
+                self.updated(chat_id, placeholder);
+            }
+        }
     }
 
     async fn run(self, transfer_id: String, placeholder: String, chat_id: String, local_path: String) {
@@ -107,6 +143,10 @@ impl UploadJob {
                 let mut local = serde_json::to_value(&descriptor).unwrap_or_else(|_| serde_json::json!({}));
                 local["local_path"] = serde_json::Value::String(local_path);
                 local["transfer_id"] = serde_json::Value::String(transfer_id.clone());
+                if chat_id.starts_with("group:") {
+                    self.finish_in_group(&transfer_id, &placeholder, &chat_id, envelope, local).await;
+                    return;
+                }
                 match self.dm.media_finish(&self.keys, &placeholder, envelope, local).await {
                     Ok(p) => {
                         let message_id = p.message.id.clone();
@@ -216,6 +256,7 @@ impl MessengerRuntime {
 
     fn upload_job(&self, keys: Keys) -> UploadJob {
         UploadJob {
+            groups: self.group_driver.groups.clone(),
             dm: self.dm.clone(),
             media: self.media.clone(),
             outbox: self.outbox.clone(),
@@ -224,7 +265,7 @@ impl MessengerRuntime {
         }
     }
 
-    /// Attach a file to the chat with `to`. Returns the placeholder
+    /// Attach a file to the chat with `to` (a person, or `group:<id>`). Returns the placeholder
     /// message at once; the upload continues in the background.
     pub async fn dm_send_file(&self, to: &str, path: &Path, caption: Option<&str>) -> Result<MessageView> {
         self.send_attachment(to, path, caption, None).await
@@ -279,7 +320,11 @@ impl MessengerRuntime {
         meta_override: Option<AttachmentMeta>,
     ) -> Result<MessageView> {
         let keys = self.session_keys().await?;
-        let peer = messenger_contacts::book::parse_key(to)?;
+        let group = to.strip_prefix("group:").map(String::from);
+        let peer = match &group {
+            Some(_) => None,
+            None => Some(messenger_contacts::book::parse_key(to)?),
+        };
         // Refuse early: no server, no upload.
         self.media.upload_backend(&keys).await?;
         let meta = tokio::fs::metadata(path).await.map_err(|_| MessengerError::Io("err.file_not_found".into()))?;
@@ -303,7 +348,11 @@ impl MessengerRuntime {
                 fields["waveform"] = serde_json::json!(w);
             }
         }
-        let placeholder = self.dm.media_placeholder(&keys, &peer, fields, caption).await?;
+        let placeholder = match (&group, &peer) {
+            (Some(g), _) => self.groups().media_placeholder(&keys, g, fields, caption).await?,
+            (None, Some(peer)) => self.dm.media_placeholder(&keys, peer, fields, caption).await?,
+            (None, None) => return Err(MessengerError::Invalid("no recipient".into())),
+        };
         let transfer = match self.media.queue_upload(path, &placeholder.chat_id, &placeholder.id).await {
             Ok(t) => t,
             Err(e) => {
