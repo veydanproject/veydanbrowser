@@ -135,7 +135,7 @@ pub async fn last_created_at(store: &Store, chat_id: &str) -> Result<Option<i64>
 /// visible message before approval").
 pub async fn count_visible_incoming(store: &Store, chat_id: &str) -> Result<i64> {
     sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM msg_messages WHERE chat_id = ? AND direction = 'in' AND is_hidden = 0 AND deleted_at IS NULL",
+        "SELECT COUNT(*) FROM msg_messages WHERE chat_id = ? AND direction = 'in' AND is_hidden = 0 AND content_type != 'system'",
     )
     .bind(chat_id)
     .fetch_one(store.pool())
@@ -243,6 +243,17 @@ pub async fn count_all(store: &Store) -> Result<i64> {
         .map_err(storage)
 }
 
+/// Visible messages we sent in this chat (system rows excluded).
+pub async fn count_visible_outgoing(store: &Store, chat_id: &str) -> Result<i64> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM msg_messages WHERE chat_id = ? AND direction = 'out' AND is_hidden = 0 AND content_type != 'system'",
+    )
+    .bind(chat_id)
+    .fetch_one(store.pool())
+    .await
+    .map_err(storage)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,7 +306,8 @@ mod tests {
         mark_deleted(&s, "3", 100).await.unwrap();
         let m = get(&s, "3").await.unwrap().unwrap();
         assert!(m.text.is_none() && m.deleted_at == Some(100));
-        assert_eq!(count_visible_incoming(&s, "c").await.unwrap(), 4, "tombstones do not count");
+        assert_eq!(count_visible_incoming(&s, "c").await.unwrap(), 5, "a retracted request still was a request");
+        assert_eq!(count_visible_outgoing(&s, "c").await.unwrap(), 0);
     }
 
     #[tokio::test]

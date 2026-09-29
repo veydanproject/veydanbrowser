@@ -97,9 +97,9 @@ pub async fn touch(store: &Store, id: &str, at: i64, preview: Option<&str>, bump
 pub async fn recompute_last(store: &Store, id: &str) -> Result<()> {
     sqlx::query(
         "UPDATE msg_chats SET
-           last_message_at = (SELECT MAX(created_at) FROM msg_messages WHERE chat_id = ? AND is_hidden = 0),
+           last_message_at = (SELECT MAX(created_at) FROM msg_messages WHERE chat_id = ? AND is_hidden = 0 AND content_type != 'system'),
            last_preview = (SELECT CASE WHEN deleted_at IS NULL THEN text ELSE NULL END FROM msg_messages
-                           WHERE chat_id = ? AND is_hidden = 0 ORDER BY created_at DESC LIMIT 1),
+                           WHERE chat_id = ? AND is_hidden = 0 AND content_type != 'system' ORDER BY created_at DESC LIMIT 1),
            updated_at = ?
          WHERE id = ?",
     )
