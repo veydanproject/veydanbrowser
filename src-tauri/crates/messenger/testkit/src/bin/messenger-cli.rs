@@ -17,6 +17,8 @@
 //! messenger-cli [--data-dir DIR] history <npub|hex>
 //! messenger-cli [--data-dir DIR] edit <message-id> <text…>
 //! messenger-cli [--data-dir DIR] delete <message-id>
+//! messenger-cli [--data-dir DIR] relation <npub|hex>
+//! messenger-cli [--data-dir DIR] request|accept|decline|block|unblock|remove <npub|hex>
 //! ```
 //!
 //! Secrets live in `<data-dir>/secrets.json` in plaintext: development only.
@@ -31,7 +33,7 @@ use std::time::Duration;
 fn usage() -> ! {
     eprintln!(
         "usage: messenger-cli [--data-dir DIR] <keygen [--password PW] | import <nsec|ncryptsec> <secret> [--password PW] \
-         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | edit <id> <text…> | delete <id>>"
+         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer>>"
     );
     std::process::exit(2)
 }
@@ -209,6 +211,33 @@ async fn main() {
                 let op = r.outbound_json.chars().take(60).collect::<String>();
                 println!("{} attempts={} error={} {}", r.state, r.attempts, r.last_error.unwrap_or_default(), op);
             }
+        }
+        "relation" => {
+            if args.is_empty() {
+                usage();
+            }
+            let r = rt.dm_relation(&args[0]).await.unwrap_or_else(die);
+            println!(
+                "mode={} my_contact={} blocked={} peer_signal={} mutual={} can_send={}",
+                r.mode, r.my_contact, r.blocked, r.peer_signal, r.was_ever_mutual, r.can_send
+            );
+        }
+        "request" | "accept" | "decline" | "block" | "unblock" | "remove" => {
+            if args.is_empty() {
+                usage();
+            }
+            let action = match cmd.as_str() {
+                "request" => messenger_runtime::DmAction::Request,
+                "accept" => messenger_runtime::DmAction::Accept,
+                "decline" => messenger_runtime::DmAction::Decline,
+                "block" => messenger_runtime::DmAction::Block,
+                "unblock" => messenger_runtime::DmAction::Unblock,
+                _ => messenger_runtime::DmAction::Remove,
+            };
+            wait_connect(&rt).await;
+            let r = rt.dm_act(&args[0], action).await.unwrap_or_else(die);
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            println!("mode={} can_send={}", r.mode, r.can_send);
         }
         _ => usage(),
     }
