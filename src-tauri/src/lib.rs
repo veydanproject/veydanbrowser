@@ -497,6 +497,12 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_retry,
             #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_relation,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_action,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_blocked,
+            #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_get,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_request,
@@ -1009,6 +1015,12 @@ fn run_desktop() {
             commands::messenger::messenger_dm_delete,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_retry,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_relation,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_action,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_blocked,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_get,
             #[cfg(feature = "messenger")]
