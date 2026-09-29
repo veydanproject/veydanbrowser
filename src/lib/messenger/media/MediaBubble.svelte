@@ -13,6 +13,9 @@
   import { isTauriHost, mediaErrorCode, mediaOf, messengerApi, messengerError, type MessengerMessage } from '../api';
   import { bytes, percent } from '../shared/format';
   import { transferStore } from './transferStore.svelte';
+  import VoicePlayer from './VoicePlayer.svelte';
+  import { viewer } from './viewer.svelte';
+  import { playback } from './playback.svelte';
 
   interface Props { message: MessengerMessage }
   let { message: m }: Props = $props();
@@ -40,7 +43,25 @@
 
   const progress = $derived(live ? percent(live.done_bytes, live.total_bytes) : 0);
   const transferId = $derived(live?.transfer_id ?? media?.transfer_id ?? null);
-  const previewable = $derived(!!media && media.kind !== 'file' && media.size <= 24 * 1024 * 1024 && !previewFailed);
+  const previewable = $derived(!!media && media.kind !== "file" && media.size <= 24 * 1024 * 1024 && !previewFailed);
+  const moving = $derived(phase === "uploading" || phase === "downloading");
+
+  let circle = $state<HTMLVideoElement | null>(null);
+  let circlePlaying = $state(false);
+  $effect(() => { if (playback.current !== m.id && circlePlaying) circle?.pause(); });
+
+  function toggleCircle() {
+    if (!circle) return;
+    if (circlePlaying) { circle.pause(); return; }
+    playback.current = m.id;
+    circle.currentTime = circle.ended ? 0 : circle.currentTime;
+    circle.play().catch(() => {});
+  }
+
+  function view() {
+    if (!media || !src) return;
+    if (media.kind === "image" || media.kind === "video") viewer.open({ messageId: m.id, kind: media.kind, src, name: media.name });
+  }
 
   function explain(e: unknown): string {
     const code = mediaErrorCode(e);
@@ -104,18 +125,29 @@
 </script>
 
 {#if media}
-  <div class="media {media.kind}" class:out>
-    {#if phase === 'here' && src && media.kind === 'image'}
-      <button class="thumb" onclick={open} title={$t('msg_media_open')}>
+  <div class="media kind-{media.kind}" class:out>
+    {#if media.kind === "voice"}
+      <VoicePlayer id={m.id} {src} durationMs={media.duration_ms ?? 0} waveform={media.waveform ?? []} {out} busy={busy || moving}
+        onneed={() => download(true)} />
+    {:else if media.kind === "circle" && phase === "here" && src}
+      <button class="circle" onclick={toggleCircle} aria-label={circlePlaying ? $t("msg_media_pause") : $t("msg_voice_play")}>
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video bind:this={circle} {src} playsinline preload="metadata"
+          onplay={() => (circlePlaying = true)} onpause={() => (circlePlaying = false)} onended={() => (circlePlaying = false)}></video>
+        {#if !circlePlaying}<span class="circle-play"><Icon name="play" size={26} /></span>{/if}
+      </button>
+    {:else if phase === "here" && src && media.kind === "image"}
+      <button class="thumb" onclick={view} title={$t("msg_media_open")}>
         <img {src} alt={media.name} onerror={() => { previewFailed = true; src = null; }} />
       </button>
     {:else if phase === 'here' && src && media.kind === 'video'}
       <!-- svelte-ignore a11y_media_has_caption -->
-      <video class="player" {src} controls preload="metadata"></video>
+      <video class="player" {src} controls preload="metadata" playsinline></video>
     {:else if phase === 'here' && src && media.kind === 'audio'}
       <audio class="audio" {src} controls preload="metadata"></audio>
     {/if}
 
+    {#if media.kind !== "voice" && !(media.kind === "circle" && phase === "here" && src)}
     <div class="file-row">
       <span class="ico" class:spin={phase === 'uploading' || phase === 'downloading'}>
         {#if phase === 'uploading' || phase === 'downloading'}<Icon name="loader" size={18} />
@@ -124,6 +156,7 @@
         {:else if media.kind === 'image'}<Icon name="image" size={18} />
         {:else if media.kind === 'video'}<Icon name="video" size={18} />
         {:else if media.kind === 'audio'}<Icon name="mic" size={18} />
+        {:else if media.kind === "circle"}<Icon name="video" size={18} />
         {:else}<Icon name="file" size={18} />{/if}
       </span>
       <span class="info">
@@ -154,6 +187,7 @@
         {/if}
       </span>
     </div>
+    {/if}
 
     {#if phase === 'uploading' || phase === 'downloading' || phase === 'upload_paused' || phase === 'download_paused'}
       <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={progress}>
@@ -166,8 +200,12 @@
 
 <style>
   .media { display: flex; flex-direction: column; gap: 6px; min-width: 240px; max-width: 360px; }
+  .media.kind-circle, .media.kind-voice { min-width: 0; }
   .thumb { border: none; padding: 0; background: none; cursor: zoom-in; border-radius: 10px; overflow: hidden; display: block; }
   .thumb img { display: block; max-width: 100%; max-height: 320px; object-fit: contain; border-radius: 10px; background: var(--surface-3); }
+  .circle { position: relative; width: 220px; height: 220px; border: none; padding: 0; border-radius: 50%; overflow: hidden; background: #000; cursor: pointer; }
+  .circle video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .circle-play { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; background: rgba(0, 0, 0, 0.28); }
   .player { max-width: 100%; max-height: 320px; border-radius: 10px; background: #000; }
   .audio { width: 100%; height: 36px; }
   .file-row { display: flex; align-items: center; gap: var(--sp-2); }

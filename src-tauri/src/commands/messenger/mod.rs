@@ -25,7 +25,7 @@ use messenger_core::{MessengerConfig, MessengerError, SecretStore};
 use messenger_core::PubKey;
 use messenger_runtime::{
     ChatView, ContactPatch, ContactView, CreatedIdentity, DmAction, Identity, ManifestInfo, MessageView,
-    MediaServerInput, MediaServerView, MessengerRuntime, RelationView, TransferView,
+    MediaKind, MediaServerInput, MediaServerView, MessengerRuntime, Recording, RelationView, TransferView,
     ProfileView, RelayView,
     RuntimeStatus,
 };
@@ -827,6 +827,48 @@ fn open_external(app: &tauri::AppHandle, target: &str, is_path: bool) -> CmdResu
 #[cfg(not(desktop))]
 fn open_external(_app: &tauri::AppHandle, _target: &str, _is_path: bool) -> CmdResult<()> {
     Err(AppError::Other("not available on this platform".into()))
+}
+
+/// What the recorder in the UI produced. Bytes travel as base64: mobile
+/// IPC has no raw bodies, and recordings are small.
+#[derive(Deserialize)]
+pub struct RecordingInput {
+    /// `voice` | `circle`
+    pub kind: String,
+    pub mime: String,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub waveform: Option<Vec<u8>>,
+    pub data_base64: String,
+}
+
+/// Send a voice message or a video circle recorded in the app.
+#[tauri::command]
+pub async fn messenger_dm_send_recording(
+    to: String,
+    recording: RecordingInput,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<MessageView> {
+    let kind = MediaKind::parse(&recording.kind).ok_or_else(|| AppError::Other("unknown recording kind".into()))?;
+    let bytes = B64
+        .decode(recording.data_base64.as_bytes())
+        .map_err(|_| AppError::Other("recording is not base64".into()))?;
+    let rec = Recording {
+        kind,
+        mime: recording.mime,
+        duration_ms: recording.duration_ms,
+        waveform: recording.waveform,
+        bytes,
+    };
+    state.messenger.runtime()?.dm_send_recording(&to, rec, None).await.map_err(map_err)
+}
+
+/// Let the webview answer microphone and camera requests (WebKitGTK denies
+/// them unless the app does; other webviews ask the user themselves).
+#[tauri::command]
+pub fn messenger_media_grant_access(window: tauri::WebviewWindow) -> CmdResult<()> {
+    crate::commands::media::media_grant_access(window).map_err(AppError::Other)
 }
 
 #[tauri::command]

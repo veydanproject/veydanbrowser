@@ -12,6 +12,8 @@
   import RelationBanner from './RelationBanner.svelte';
   import MediaBubble from '../media/MediaBubble.svelte';
   import AttachButton from '../media/AttachButton.svelte';
+  import MediaViewer from '../media/MediaViewer.svelte';
+  import type { MessengerRecording } from '../api';
   import { chatStore } from '../chats/chatStore.svelte';
   import { messengerStore } from '../store.svelte';
   import { dayKey, dayLabel } from '../shared/time';
@@ -132,6 +134,13 @@
       error = explain(e);
       throw e;
     }
+  }
+
+  async function record(rec: MessengerRecording) {
+    error = "";
+    atBottom = true;
+    try { await chatStore.sendRecording(rec); }
+    catch (e) { error = explain(e); throw e; }
   }
 
   function editLast() {
@@ -256,7 +265,7 @@
   {#if error}<div class="error-line">{error}</div>{/if}
 
   {#if chat.can_send}
-    <Composer {replyTo} {editing} peerTitle={chat.title} disabled={!sessionActive} draftKey={chat.id} oneditlast={editLast}
+    <Composer {replyTo} {editing} peerTitle={chat.title} disabled={!sessionActive} draftKey={chat.id} oneditlast={editLast} onrecording={record} canRecord={chat.mode === 'full_chat'}
       oncancel={() => { replyTo = null; editing = null; }} onsend={send} tools={composerTools} />
   {:else if footer}
     {@render footer()}
@@ -265,6 +274,7 @@
   {/if}
 </section>
 
+<MediaViewer />
 <ContextMenu bind:open={menu.open} x={menu.x} y={menu.y} {items} onclose={() => (menu.open = false)} />
 <ContextMenu bind:open={chatMenu.open} x={chatMenu.x} y={chatMenu.y} items={chatItems} onclose={() => (chatMenu.open = false)} />
 

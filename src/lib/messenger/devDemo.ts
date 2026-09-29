@@ -77,6 +77,7 @@ export function buildDemo(): DemoData {
     msg(a, alice, now - day - 6900, 'Смотрю.'),
     msg(a, alice, now - 5400, 'Макет экрана', { content_type: 'media', media: { name: 'chat-list-v3.png', mime: 'image/png', size: 842_113, kind: 'image' } }),
     msg(a, ME, now - 5000, null, { content_type: 'media', media: { name: 'Техническое задание (черновик).pdf', mime: 'application/pdf', size: 2_412_004, kind: 'file', local_path: '/home/dev/spec.pdf' } }),
+    msg(a, alice, now - 2400, null, { content_type: 'media', media: { name: 'voice.weba', mime: 'audio/webm', size: 48_200, kind: 'voice', duration_ms: 17_400, waveform: [20, 60, 120, 200, 240, 180, 90, 140, 220, 255, 190, 110, 60, 40, 90, 170, 230, 210, 150, 80, 50, 100, 180, 240, 200, 130, 70, 40, 60, 120, 190, 230, 170, 100, 60, 90, 150, 210, 180, 120, 70, 40, 30, 60, 110, 160, 120, 60] } }),
     msg(a, ME, now - 1800, 'Отлично выглядит. Беру в работу 👍'),
     msg(a, ME, now - 600, 'Это сообщение не ушло: реле было недоступно.', { status: 'failed', failure_reason: 'no relay accepted' }),
     msg(a, ME, now - 60, 'А это ждёт отправки.', { status: 'queued' }),

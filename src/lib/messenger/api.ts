@@ -154,7 +154,7 @@ export function dmErrorCode(e: unknown): string | null {
 }
 
 
-export type MediaKind = 'image' | 'video' | 'audio' | 'file';
+export type MediaKind = 'image' | 'video' | 'audio' | 'file' | 'voice' | 'circle';
 
 /** Attachment fields of a message as the UI needs them. */
 export interface MessengerMedia {
@@ -165,6 +165,9 @@ export interface MessengerMedia {
   /** Present when the file is on this device. */
   local_path?: string;
   transfer_id?: string;
+  /** Recordings: length and loudness outline (0..255 per bar). */
+  duration_ms?: number;
+  waveform?: number[];
 }
 
 export function mediaOf(m: MessengerMessage): MessengerMedia | null {
@@ -174,9 +177,11 @@ export function mediaOf(m: MessengerMessage): MessengerMedia | null {
     name: f.name,
     mime: typeof f.mime === 'string' ? f.mime : 'application/octet-stream',
     size: typeof f.size === 'number' ? f.size : 0,
-    kind: (['image', 'video', 'audio', 'file'] as const).includes(f.kind as MediaKind) ? (f.kind as MediaKind) : 'file',
+    kind: (["image", "video", "audio", "file", "voice", "circle"] as const).includes(f.kind as MediaKind) ? (f.kind as MediaKind) : "file",
     local_path: typeof f.local_path === 'string' ? f.local_path : undefined,
     transfer_id: typeof f.transfer_id === 'string' ? f.transfer_id : undefined,
+    duration_ms: typeof f.duration_ms === "number" ? f.duration_ms : undefined,
+    waveform: Array.isArray(f.waveform) ? (f.waveform as unknown[]).filter((x): x is number => typeof x === "number") : undefined,
   };
 }
 
@@ -222,6 +227,23 @@ export interface MessengerMediaServer {
   enabled: boolean;
   source: 'manifest' | 'user';
   public_base: string;
+}
+
+/** A voice message or a video circle as the recorder produced it. */
+export interface MessengerRecording {
+  kind: "voice" | "circle";
+  mime: string;
+  duration_ms: number;
+  waveform?: number[];
+  blob: Blob;
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) bin += String.fromCharCode(...bytes.subarray(i, i + step));
+  return btoa(bin);
 }
 
 export interface MessengerMediaServerInput {
@@ -412,13 +434,22 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
     mockChats = mockChats.map((x) => (x.id === c.id ? { ...x, last_message_at: now, last_preview: `📎 ${name}` } : x));
     return m;
   },
+  messenger_media_grant_access: () => undefined,
+  messenger_dm_send_recording: (a) => {
+    const c = mockChat(String(a?.to));
+    const r = (a?.recording ?? {}) as { kind: MediaKind; mime: string; duration_ms: number; waveform: number[] | null; data_base64: string };
+    const now = Math.floor(Date.now() / 1000);
+    const m: MessengerMessage = { id: `local:${Date.now().toString(16)}`, chat_id: c.id, direction: "out", status: "sent", content_type: "media", text: null, sender_pubkey: "ab".repeat(32), reply_to: null, created_at: now, edited_at: null, deleted: false, failure_reason: null, media: { name: `${r.kind}.webm`, mime: r.mime, size: Math.round((r.data_base64.length * 3) / 4), kind: r.kind, duration_ms: r.duration_ms, waveform: r.waveform ?? undefined, local_path: "/dev/mock", mock_data: `data:${r.mime.split(";")[0]};base64,${r.data_base64}` } };
+    mockMessages[c.id] = [...(mockMessages[c.id] ?? []), m];
+    return m;
+  },
   messenger_media_download: () => null,
   messenger_media_transfer: () => null,
   messenger_media_pause: () => undefined,
   messenger_media_resume: () => undefined,
   messenger_media_cancel: () => undefined,
   messenger_media_save_as: () => undefined,
-  messenger_media_data_url: () => null,
+  messenger_media_data_url: (a) => (mockFind(String(a?.messageId))?.media?.mock_data as string | undefined) ?? null,
   messenger_media_local_path: () => null,
   messenger_media_open: () => undefined,
   messenger_open_url: (a) => { window.open(String(a?.url), '_blank', 'noopener'); },
@@ -565,6 +596,16 @@ export const messengerApi = {
     removeServer: (id: string) => invoke<void>('messenger_media_server_remove', { id }),
     setServerEnabled: (id: string, enabled: boolean) => invoke<void>('messenger_media_server_set_enabled', { id, enabled }),
     checkServer: (id: string) => invoke<void>('messenger_media_server_check', { id }),
+    sendRecording: async (to: string, rec: MessengerRecording) =>
+      invoke<MessengerMessage>('messenger_dm_send_recording', {
+        to,
+        recording: {
+          kind: rec.kind, mime: rec.mime, duration_ms: Math.round(rec.duration_ms),
+          waveform: rec.waveform ?? null, data_base64: await blobToBase64(rec.blob),
+        },
+      }),
+    /** Must run before the first `getUserMedia` (desktop webviews deny otherwise). */
+    grantAccess: () => invoke<void>('messenger_media_grant_access'),
     sendFile: (to: string, path: string, caption?: string) =>
       invoke<MessengerMessage>('messenger_dm_send_file', { to, path, caption: caption?.trim() || null }),
     download: (messageId: string, manual: boolean) => invoke<string | null>('messenger_media_download', { messageId, manual }),

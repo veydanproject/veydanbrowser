@@ -4,7 +4,14 @@
 // Chat list and the open conversation. Fed by runtime events that the
 // module store forwards here; knows nothing about identity or relays.
 
-import { messengerApi, type DmAction, type MessengerChat, type MessengerMessage, type MessengerUiEvent } from '../api';
+import {
+  messengerApi,
+  type DmAction,
+  type MessengerChat,
+  type MessengerMessage,
+  type MessengerRecording,
+  type MessengerUiEvent,
+} from '../api';
 
 const PAGE = 50;
 
@@ -139,6 +146,15 @@ class ChatStore {
     const chat = this.active;
     if (!chat?.peer_pubkey) throw new Error('no chat');
     const m = await messengerApi.media.sendFile(chat.peer_pubkey, path, caption);
+    if (this.activeId === chat.id) this.upsert(m);
+    this.scheduleChatsRefresh();
+    return m;
+  }
+
+  async sendRecording(rec: MessengerRecording) {
+    const chat = this.active;
+    if (!chat?.peer_pubkey) throw new Error('no chat');
+    const m = await messengerApi.media.sendRecording(chat.peer_pubkey, rec);
     if (this.activeId === chat.id) this.upsert(m);
     this.scheduleChatsRefresh();
     return m;
