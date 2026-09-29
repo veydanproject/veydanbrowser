@@ -241,31 +241,54 @@ impl RelayPool {
         Ok(forwarded)
     }
 
+    /// Connect urls of the relays that are connected and accept writes.
+    async fn connected_write_targets(&self) -> Result<Vec<String>> {
+        let configured = self.configured();
+        let targets: Vec<String> = self
+            .client
+            .relays()
+            .await
+            .iter()
+            .filter(|(_, relay)| relay.status() == nostr_sdk::relay::RelayStatus::Connected)
+            .filter(|(url, _)| {
+                let core = to_core_url(url);
+                configured.iter().find(|c| c.url == core).map(|c| c.write).unwrap_or(true)
+            })
+            .map(|(url, _)| url.to_string())
+            .collect();
+        if targets.is_empty() {
+            return Err(MessengerError::Transport("no relay connected".into()));
+        }
+        Ok(targets)
+    }
+
     /// Deliver to a peer: their inbox relays when we know them (relays of
     /// ours are used directly, foreign ones through a short-lived
     /// connection), otherwise every write relay of ours.
     async fn publish_to_inbox(&self, ev: &Event, hints: &[RelayUrl]) -> Result<Ack> {
-        let pool_urls: HashSet<String> = self
+        // Pool relays by their core url: how to address them, and whether
+        // they are connected right now.
+        let pool: std::collections::HashMap<String, (String, bool)> = self
             .client
             .relays()
             .await
-            .keys()
-            .map(|u| to_core_url(u).as_str().to_string())
+            .iter()
+            .map(|(url, relay)| {
+                let connected = relay.status() == nostr_sdk::relay::RelayStatus::Connected;
+                (to_core_url(url).as_str().to_string(), (url.to_string(), connected))
+            })
             .collect();
-        let configured = self.configured();
         let mut targets: Vec<String> = Vec::new();
         let mut ephemeral: Vec<String> = Vec::new();
         for h in hints {
-            if pool_urls.contains(h.as_str()) {
-                // Address the relay by its connect url (may carry the key).
-                let connect = configured
-                    .iter()
-                    .find(|c| c.url.as_str() == h.as_str())
-                    .map(|c| c.connect_url())
-                    .unwrap_or_else(|| h.as_str().to_string());
-                targets.push(connect);
-            } else if ephemeral.len() < MAX_EPHEMERAL_RELAYS {
-                ephemeral.push(h.as_str().to_string());
+            match pool.get(h.as_str()) {
+                // Relays that are not connected right now are left out:
+                // waiting for them would hold the message back for their
+                // whole timeout. The outbox retries when nothing accepted.
+                Some((address, true)) => targets.push(address.clone()),
+                Some(_) => {}
+                None if ephemeral.len() < MAX_EPHEMERAL_RELAYS => ephemeral.push(h.as_str().to_string()),
+                None => {}
             }
         }
         for url in &ephemeral {
@@ -275,11 +298,16 @@ impl RelayPool {
                 targets.push(url.clone());
             }
         }
-        let res = if targets.is_empty() {
-            self.client.send_event(ev).await
-        } else {
-            self.client.send_event(ev).to(targets).await
-        };
+        if targets.is_empty() {
+            targets = self.connected_write_targets().await.unwrap_or_default();
+        }
+        if targets.is_empty() {
+            for url in &ephemeral {
+                let _ = self.client.remove_relay(url.as_str()).await;
+            }
+            return Err(MessengerError::Transport("no relay connected".into()));
+        }
+        let res = self.client.send_event(ev).to(targets).await;
         for url in &ephemeral {
             let _ = self.client.remove_relay(url.as_str()).await;
         }
@@ -336,9 +364,11 @@ impl Transport for RelayPool {
         match out {
             Outbound::PublishOwn { event } | Outbound::PublishScoped { event, .. } => {
                 let ev = Self::parse_event(&event.json)?;
+                let targets = self.connected_write_targets().await?;
                 let res = self
                     .client
                     .send_event(&ev)
+                    .to(targets)
                     .await
                     .map_err(|e| MessengerError::Transport(e.to_string()))?;
                 Ok(ack_from(&res))
