@@ -434,6 +434,217 @@ async fn main() {
             }
             println!("waveform: {} values", m.get("waveform").and_then(|w| w.as_array()).map(|a| a.len()).unwrap_or(0));
         }
+        "groups" => {
+            for g in rt.group_list().await.unwrap_or_else(die) {
+                println!(
+                    "{}  {:<7} {:<10} role={:<9} members={} undecrypted={}  {}",
+                    &g.id[..12],
+                    g.kind,
+                    g.membership,
+                    g.my_role.unwrap_or_else(|| "-".into()),
+                    g.members.len(),
+                    g.undecrypted,
+                    g.name
+                );
+            }
+        }
+        "group" => {
+            if args.is_empty() {
+                usage();
+            }
+            let id = group_id(&rt, &args[0]).await;
+            let g = rt.group_get(&id).await.unwrap_or_else(die);
+            println!("id: {}\nname: {}\nkind: {}\nmembership: {}\ncan_post: {}\nhistory_for_new: {}", g.id, g.name, g.kind, g.membership, g.can_post, g.history_for_new);
+            for m in &g.members {
+                println!("member {} {}{}{}", m.pubkey, m.role, if m.muted { " muted" } else { "" }, if m.is_me { " (me)" } else { "" });
+            }
+            for b in &g.banned {
+                println!("banned {b}");
+            }
+            for r in &g.requests {
+                println!("request {r}");
+            }
+            println!("link: {}", g.link.unwrap_or_else(|| "-".into()));
+        }
+        "group-create" => {
+            if args.len() < 2 {
+                usage();
+            }
+            let kind = match args.remove(0).as_str() {
+                "public" => messenger_runtime::GroupKind::Public,
+                "private" => messenger_runtime::GroupKind::Private,
+                _ => usage(),
+            };
+            let history = !take_switch(&mut args, "--no-history");
+            wait_connect(&rt).await;
+            let g = rt.group_create(kind, &args.join(" "), "", history).await.unwrap_or_else(die);
+            flush(&rt).await;
+            println!("{}", g.id);
+        }
+        "group-invite" => {
+            if args.len() < 2 {
+                usage();
+            }
+            let id = group_id(&rt, &args[0]).await;
+            settle(&rt, 3).await;
+            let i = rt.group_invite(&id, &args[1]).await.unwrap_or_else(die);
+            flush(&rt).await;
+            println!("invited {} ({})", i.peer, i.invite_id);
+        }
+        "group-invites" => {
+            settle(&rt, 4).await;
+            for d in ["in", "out"] {
+                for i in rt.group_invites(d).await.unwrap_or_else(die) {
+                    println!("{} {} {} group={} peer={} | {}", d, i.invite_id, i.status, &i.group_id[..12], &i.peer[..12], i.name);
+                }
+            }
+        }
+        "group-accept" | "group-decline" => {
+            if args.is_empty() {
+                usage();
+            }
+            settle(&rt, 4).await;
+            let all = rt.group_invites("in").await.unwrap_or_else(die);
+            let Some(inv) = all.into_iter().find(|i| i.invite_id.starts_with(&args[0]) || i.group_id.starts_with(&args[0])) else {
+                eprintln!("error: no such invitation");
+                std::process::exit(1)
+            };
+            rt.group_answer_invite(&inv.invite_id, cmd == "group-accept").await.unwrap_or_else(die);
+            flush(&rt).await;
+            // The welcome comes back as soon as the inviter is online.
+            let secs: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3);
+            tokio::time::sleep(Duration::from_secs(secs)).await;
+            println!("{} {}", if cmd == "group-accept" { "accepted" } else { "declined" }, inv.group_id);
+        }
+        "group-join" => {
+            if args.is_empty() {
+                usage();
+            }
+            wait_connect(&rt).await;
+            let g = rt.group_open_link(&args[0], &args[1..].join(" ")).await.unwrap_or_else(die);
+            flush(&rt).await;
+            tokio::time::sleep(Duration::from_secs(8)).await;
+            flush(&rt).await;
+            let g = rt.group_get(&g.id).await.unwrap_or_else(die);
+            println!("{} {} members={}", g.id, g.membership, g.members.len());
+        }
+        "group-approve" | "group-reject" => {
+            if args.len() < 2 {
+                usage();
+            }
+            let id = group_id(&rt, &args[0]).await;
+            settle(&rt, 4).await;
+            let g = rt.group_answer_request(&id, &args[1], cmd == "group-approve").await.unwrap_or_else(die);
+            flush(&rt).await;
+            println!("members={} requests={}", g.members.len(), g.requests.len());
+        }
+        "group-send" => {
+            if args.len() < 2 {
+                usage();
+            }
+            let id = group_id(&rt, &args.remove(0)).await;
+            settle(&rt, 3).await;
+            let m = rt.group_send_text(&id, &args.join(" "), None).await.unwrap_or_else(die);
+            flush(&rt).await;
+            println!("queued {}", m.id);
+        }
+        "group-edit" => {
+            if args.len() < 2 {
+                usage();
+            }
+            let id = full_id(&rt, &args.remove(0)).await;
+            settle(&rt, 3).await;
+            let m = rt.group_edit(&id, &args.join(" ")).await.unwrap_or_else(die);
+            flush(&rt).await;
+            println!("edited {} -> {}", m.id, m.text.unwrap_or_default());
+        }
+        "group-delete" => {
+            if args.is_empty() {
+                usage();
+            }
+            let id = full_id(&rt, &args[0]).await;
+            settle(&rt, 3).await;
+            rt.group_delete(&id).await.unwrap_or_else(die);
+            flush(&rt).await;
+            println!("deleted {id}");
+        }
+        "group-history" => {
+            if args.is_empty() {
+                usage();
+            }
+            let id = group_id(&rt, &args[0]).await;
+            let secs: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            if secs > 0 {
+                settle(&rt, secs).await;
+            }
+            let mut list = rt.dm().messages(&format!("group:{id}"), None, 500).await.unwrap_or_else(die);
+            list.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+            for m in list {
+                println!(
+                    "{} {} {:<8} {}: {}{}  #{}",
+                    m.created_at,
+                    if m.direction == "out" { "->" } else { "<-" },
+                    m.status,
+                    &m.sender_pubkey[..8],
+                    if m.deleted { "(deleted)".to_string() } else if m.content_type == "system" { format!("* {}", m.text.clone().unwrap_or_default()) } else { m.text.clone().unwrap_or_else(|| format!("[{}]", m.content_type)) },
+                    if m.edited_at.is_some() && !m.deleted { " (edited)" } else { "" },
+                    &m.id[..8.min(m.id.len())],
+                );
+            }
+        }
+        "group-remove" | "group-ban" | "group-unban" | "group-mute" | "group-unmute" | "group-transfer" | "group-role" => {
+            if args.len() < 2 {
+                usage();
+            }
+            let id = group_id(&rt, &args[0]).await;
+            let who = messenger_runtime::parse_key(&args[1]).unwrap_or_else(die);
+            let body = match cmd.as_str() {
+                "group-remove" => messenger_runtime::GroupOp::Remove { who },
+                "group-ban" => messenger_runtime::GroupOp::Ban { who },
+                "group-unban" => messenger_runtime::GroupOp::Unban { who },
+                "group-mute" => messenger_runtime::GroupOp::SetMuted { who, muted: true },
+                "group-unmute" => messenger_runtime::GroupOp::SetMuted { who, muted: false },
+                "group-transfer" => messenger_runtime::GroupOp::TransferOwnership { to: who },
+                _ => {
+                    let role = args.get(2).and_then(|r| messenger_runtime::GroupRole::parse(r)).unwrap_or_else(|| usage());
+                    messenger_runtime::GroupOp::SetRole { who, role }
+                }
+            };
+            settle(&rt, 3).await;
+            let g = rt.group_act(&id, body).await.unwrap_or_else(die);
+            flush(&rt).await;
+            println!("ok members={}", g.members.len());
+        }
+        "group-leave" | "group-disband" | "group-rename" | "group-link-rotate" => {
+            if args.is_empty() {
+                usage();
+            }
+            let id = group_id(&rt, &args[0]).await;
+            settle(&rt, 3).await;
+            let g = match cmd.as_str() {
+                "group-leave" => rt.group_act(&id, messenger_runtime::GroupOp::Leave).await,
+                "group-disband" => rt.group_act(&id, messenger_runtime::GroupOp::Disband).await,
+                "group-link-rotate" => rt.group_rotate_link(&id).await,
+                _ => {
+                    rt.group_act(
+                        &id,
+                        messenger_runtime::GroupOp::EditSettings { name: Some(args[1..].join(" ")), about: None, picture: None, history_for_new: None },
+                    )
+                    .await
+                }
+            }
+            .unwrap_or_else(die);
+            flush(&rt).await;
+            println!("ok {} {}", g.membership, g.link.unwrap_or_default());
+        }
+        "group-forget" => {
+            if args.is_empty() {
+                usage();
+            }
+            let id = group_id(&rt, &args[0]).await;
+            rt.group_forget(&id).await.unwrap_or_else(die);
+            println!("forgotten {id}");
+        }
         _ => usage(),
     }
     rt.shutdown().await;
@@ -482,4 +693,32 @@ async fn flush(rt: &MessengerRuntime) {
         }
     }
     eprintln!("warning: some events are still queued");
+}
+
+fn take_switch(args: &mut Vec<String>, name: &str) -> bool {
+    match args.iter().position(|a| a == name) {
+        Some(i) => {
+            args.remove(i);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Accept the first characters of a group id.
+async fn group_id(rt: &MessengerRuntime, short: &str) -> String {
+    for g in messenger_store::groups::list(rt.store()).await.unwrap_or_else(die) {
+        if g.id.starts_with(short) {
+            return g.id;
+        }
+    }
+    eprintln!("error: no group starts with {short}");
+    std::process::exit(1)
+}
+
+/// Stay online long enough to hear what happened meanwhile: a command
+/// that changes a group should know the group as it is now.
+async fn settle(rt: &MessengerRuntime, secs: u64) {
+    wait_connect(rt).await;
+    tokio::time::sleep(Duration::from_secs(secs)).await;
 }
