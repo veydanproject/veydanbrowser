@@ -319,7 +319,8 @@ mod tests {
     async fn init_applies_embedded_manifest_once_and_upgrades_older_installs() {
         let store = Store::open_in_memory().await.unwrap();
         let svc = RelayService::init(store.clone(), None).await.unwrap();
-        assert_eq!(svc.manifest_serial().await.unwrap(), Some(2));
+        let embedded = Manifest::parse_content(EMBEDDED_MANIFEST_JSON).unwrap().serial;
+        assert_eq!(svc.manifest_serial().await.unwrap(), Some(embedded));
         let n = svc.list().await.unwrap().len();
         assert!(n >= 1);
         let again = RelayService::init(store.clone(), None).await.unwrap();
@@ -330,7 +331,7 @@ mod tests {
         // An install that applied an older manifest gets the embedded one on start.
         settings::set(&store, KEY_SERIAL, "1").await.unwrap();
         let upgraded = RelayService::init(store.clone(), None).await.unwrap();
-        assert_eq!(upgraded.manifest_serial().await.unwrap(), Some(2));
+        assert_eq!(upgraded.manifest_serial().await.unwrap(), Some(embedded));
         upgraded.shutdown().await;
 
         // A newer (remotely applied) manifest is not rolled back by the embedded one.

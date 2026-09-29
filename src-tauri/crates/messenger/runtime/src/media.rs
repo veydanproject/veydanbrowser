@@ -1,0 +1,375 @@
+// SPDX-FileCopyrightText: 2026 Veydan Project
+// SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
+
+//! Attachments: glue between the DM module (message rows), the media
+//! module (blobs and transfers) and the outbox. Uploads run in background
+//! tasks; progress reaches the host as `transfer.progress` events.
+
+use crate::relays::RelayService;
+use crate::{MessengerRuntime, REGION_FALLBACK};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use messenger_core::traits::UiEvent;
+use messenger_core::{MessengerError, PubKey, Result};
+use messenger_dm::{DmService, MessageView};
+use messenger_ingress::Outbox;
+use messenger_media::service::SMALL_BYTES;
+use messenger_media::{MediaDescriptor, MediaKind, MediaServerInput, MediaServerView, MediaService, Progress, ProgressSink, TransferView};
+use messenger_store::media::{DIR_DOWN, DIR_UP};
+use messenger_transport::{Manifest, EMBEDDED_MANIFEST_JSON};
+use nostr::key::Keys;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tokio::sync::broadcast;
+
+pub const UI_EVENT_TRANSFER: &str = "transfer.progress";
+/// Received files up to this size are fetched without asking.
+pub const AUTO_DOWNLOAD_BYTES: u64 = SMALL_BYTES;
+/// Largest file handed to the UI inline (previews).
+pub const MAX_INLINE_BYTES: u64 = 24 * 1024 * 1024;
+
+struct UiSink(broadcast::Sender<UiEvent>);
+
+impl ProgressSink for UiSink {
+    fn progress(&self, p: Progress) {
+        let _ = self.0.send(UiEvent {
+            name: UI_EVENT_TRANSFER.into(),
+            payload: serde_json::to_value(&p).unwrap_or(serde_json::Value::Null),
+        });
+    }
+}
+
+/// Everything an upload task needs, detached from the runtime's lifetime.
+#[derive(Clone)]
+struct UploadJob {
+    dm: DmService,
+    media: MediaService,
+    outbox: Outbox,
+    relays: Arc<RelayService>,
+    ui: broadcast::Sender<UiEvent>,
+    keys: Keys,
+}
+
+impl UploadJob {
+    fn updated(&self, chat_id: &str, message_id: &str) {
+        let _ = self.ui.send(UiEvent {
+            name: messenger_dm::UI_EVENT_DM_UPDATED.into(),
+            payload: serde_json::json!({ "chat_id": chat_id, "message_id": message_id }),
+        });
+    }
+
+    async fn run(self, transfer_id: String, placeholder: String, chat_id: String, local_path: String) {
+        let sink = UiSink(self.ui.clone());
+        let outcome = self.media.run_upload(&transfer_id, &self.keys, None, &sink).await;
+        match outcome {
+            Ok(Some(mut descriptor)) => {
+                // The caption lives on the placeholder row.
+                let caption = self.dm.message(&placeholder).await.ok().flatten().and_then(|m| m.text);
+                descriptor.caption = caption;
+                let envelope = descriptor.to_envelope();
+                let mut local = serde_json::to_value(&descriptor).unwrap_or_else(|_| serde_json::json!({}));
+                local["local_path"] = serde_json::Value::String(local_path);
+                local["transfer_id"] = serde_json::Value::String(transfer_id.clone());
+                match self.dm.media_finish(&self.keys, &placeholder, envelope, local).await {
+                    Ok(p) => {
+                        let message_id = p.message.id.clone();
+                        let _ = messenger_store::media::set_result(self.dm.store(), &transfer_id, None, None, Some(&message_id)).await;
+                        if let Ok(local_id) = self.outbox.enqueue(p.to_peer).await {
+                            let _ = self.dm.attach_outbox(&p.tracking_id, &local_id).await;
+                        }
+                        if let Some(own) = p.to_self {
+                            let _ = self.outbox.enqueue(own).await;
+                        }
+                        let pool = self.relays.pool().await;
+                        let _ = self.outbox.pump(pool.as_ref()).await;
+                        if let Ok(events) = self.dm.sync_statuses().await {
+                            for ev in events {
+                                let _ = self.ui.send(ev);
+                            }
+                        }
+                        self.updated(&chat_id, &message_id);
+                    }
+                    Err(e) => {
+                        let _ = self.ui.send(UiEvent {
+                            name: "error".into(),
+                            payload: serde_json::json!({ "family": "media", "error": e.to_string() }),
+                        });
+                        self.updated(&chat_id, &placeholder);
+                    }
+                }
+            }
+            Ok(None) => {
+                // Paused or cancelled; the transfer row says which.
+                let cancelled = matches!(
+                    self.media.transfer(&transfer_id).await,
+                    Ok(Some(t)) if t.status == "cancelled"
+                );
+                if cancelled {
+                    let _ = self.dm.media_discard(&placeholder).await;
+                } else {
+                    let _ = self.dm.media_set_status(&placeholder, "paused", None).await;
+                }
+                self.updated(&chat_id, &placeholder);
+            }
+            Err(e) => {
+                let reason = self
+                    .media
+                    .transfer(&transfer_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|t| t.failure_reason)
+                    .unwrap_or_else(|| e.to_string());
+                let _ = self.dm.media_set_status(&placeholder, "failed", Some(&reason)).await;
+                self.updated(&chat_id, &placeholder);
+            }
+        }
+    }
+}
+
+impl MessengerRuntime {
+    pub fn media(&self) -> &MediaService {
+        &self.media
+    }
+
+    /// Media servers of the embedded manifest for the current region.
+    /// Credentials are never in a manifest; the user adds them.
+    pub(crate) async fn seed_media_servers(&self) -> Result<()> {
+        let manifest = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
+        let region = self.relays.region().await.unwrap_or_else(|_| REGION_FALLBACK.into());
+        for (i, m) in manifest.media_for_region(&region).into_iter().enumerate() {
+            self.media
+                .put_server(MediaServerInput {
+                    id: Some(m.id.clone()),
+                    kind: m.kind.clone(),
+                    url: m.url.clone(),
+                    bucket: m.bucket.clone(),
+                    region: m.s3_region.clone(),
+                    access_key: None,
+                    secret_key: None,
+                    priority: Some(10 + i as i64),
+                    source: Some("manifest".into()),
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn media_servers(&self) -> Result<Vec<MediaServerView>> {
+        self.media.servers().await
+    }
+
+    pub async fn media_server_put(&self, input: MediaServerInput) -> Result<MediaServerView> {
+        self.media.put_server(input).await
+    }
+
+    pub async fn media_server_remove(&self, id: &str) -> Result<()> {
+        self.media.remove_server(id).await
+    }
+
+    pub async fn media_server_set_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        self.media.set_server_enabled(id, enabled).await
+    }
+
+    /// Verify credentials, create the bucket if needed, write and read a
+    /// probe blob.
+    pub async fn media_server_check(&self, id: &str) -> Result<()> {
+        let keys = self.session_keys().await?;
+        self.media.check_server(id, &keys).await
+    }
+
+    fn upload_job(&self, keys: Keys) -> UploadJob {
+        UploadJob {
+            dm: self.dm.clone(),
+            media: self.media.clone(),
+            outbox: self.outbox.clone(),
+            relays: self.relays.clone(),
+            ui: self.ui.clone(),
+            keys,
+        }
+    }
+
+    /// Attach a file to the chat with `to`. Returns the placeholder
+    /// message at once; the upload continues in the background.
+    pub async fn dm_send_file(&self, to: &str, path: &Path, caption: Option<&str>) -> Result<MessageView> {
+        let keys = self.session_keys().await?;
+        let peer = messenger_contacts::book::parse_key(to)?;
+        // Refuse early: no server, no upload.
+        self.media.upload_backend(&keys).await?;
+        let meta = tokio::fs::metadata(path).await.map_err(|_| MessengerError::Io("err.file_not_found".into()))?;
+        let name = messenger_media::descriptor::safe_name(
+            &path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        );
+        let mime = messenger_media::descriptor::mime_for(&name);
+        let fields = serde_json::json!({
+            "name": name,
+            "mime": mime,
+            "size": meta.len(),
+            "kind": MediaKind::from_mime(mime).as_str(),
+            "local_path": path.to_string_lossy(),
+        });
+        let placeholder = self.dm.media_placeholder(&keys, &peer, fields, caption).await?;
+        let transfer = match self.media.queue_upload(path, &placeholder.chat_id, &placeholder.id).await {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = self.dm.media_discard(&placeholder.id).await;
+                return Err(e);
+            }
+        };
+        let mut fields = placeholder.media.clone().unwrap_or_else(|| serde_json::json!({}));
+        fields["transfer_id"] = serde_json::Value::String(transfer.id.clone());
+        messenger_store::messages::set_media_json(&self.store, &placeholder.id, &fields.to_string()).await?;
+
+        let job = self.upload_job(keys);
+        let (tid, pid, cid, lp) =
+            (transfer.id, placeholder.id.clone(), placeholder.chat_id.clone(), path.to_string_lossy().into_owned());
+        tokio::spawn(job.run(tid, pid, cid, lp));
+        Ok(self.dm.message(&placeholder.id).await?.unwrap_or(placeholder))
+    }
+
+    async fn descriptor_of(&self, message_id: &str) -> Result<(MessageView, MediaDescriptor)> {
+        let m = self.dm.message(message_id).await?.ok_or_else(|| MessengerError::Invalid("unknown message".into()))?;
+        let fields = m.media.clone().ok_or_else(|| MessengerError::Invalid("the message has no attachment".into()))?;
+        let d = MediaDescriptor::from_fields(&fields)?;
+        Ok((m, d))
+    }
+
+    /// Path of the attachment on this device, if it is here: the original
+    /// file for what we sent, the cache for what we received.
+    pub async fn media_local_path(&self, message_id: &str) -> Result<Option<PathBuf>> {
+        let Some(m) = self.dm.message(message_id).await? else { return Ok(None) };
+        let Some(fields) = m.media else { return Ok(None) };
+        if let Some(p) = fields.get("local_path").and_then(|v| v.as_str()) {
+            if tokio::fs::metadata(p).await.map(|x| x.is_file()).unwrap_or(false) {
+                return Ok(Some(PathBuf::from(p)));
+            }
+        }
+        match MediaDescriptor::from_fields(&fields) {
+            Ok(d) => Ok(self.media.cached(&d).await),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Fetch the attachment of a message. `manual = false` is the
+    /// automatic path: it respects the size limit, earlier failures and a
+    /// previous cancel, and answers `None` when it decides not to start.
+    pub async fn media_download(&self, message_id: &str, manual: bool) -> Result<Option<PathBuf>> {
+        if let Some(p) = self.media_local_path(message_id).await? {
+            return Ok(Some(p));
+        }
+        let (m, d) = self.descriptor_of(message_id).await?;
+        if !manual {
+            if d.size > AUTO_DOWNLOAD_BYTES || !self.media.may_auto_download(message_id).await? {
+                return Ok(None);
+            }
+            // Nothing is fetched on behalf of someone I block.
+            if let Some(peer) = m.chat_id.strip_prefix("dm:").and_then(PubKey::parse) {
+                if self.dm.is_blocked(&peer).await? {
+                    return Ok(None);
+                }
+            }
+        }
+        let sink = UiSink(self.ui.clone());
+        let path = self.media.run_download(message_id, &m.chat_id, &d, manual, &sink).await?;
+        if let Some(p) = &path {
+            self.dm.media_set_local_path(message_id, &p.to_string_lossy()).await?;
+            let _ = self.ui.send(UiEvent {
+                name: messenger_dm::UI_EVENT_DM_UPDATED.into(),
+                payload: serde_json::json!({ "chat_id": m.chat_id, "message_id": message_id }),
+            });
+        }
+        Ok(path)
+    }
+
+    /// The transfer of a message (upload for ours, download for theirs).
+    pub async fn media_transfer(&self, message_id: &str) -> Result<Option<TransferView>> {
+        match self.media.transfer_for_message(message_id, DIR_UP).await? {
+            Some(t) => Ok(Some(t)),
+            None => self.media.transfer_for_message(message_id, DIR_DOWN).await,
+        }
+    }
+
+    pub async fn media_pause(&self, transfer_id: &str) -> Result<()> {
+        self.media.pause(transfer_id);
+        Ok(())
+    }
+
+    pub async fn media_cancel(&self, transfer_id: &str) -> Result<()> {
+        let t = self.media.transfer(transfer_id).await?;
+        self.media.cancel(transfer_id).await?;
+        // An upload that is not running has nobody to clean up after it.
+        if let Some(t) = t {
+            if t.direction == DIR_UP && t.status != "running" && t.status != "queued" {
+                if let Some(mid) = &t.message_id {
+                    if mid.starts_with("local:") {
+                        self.dm.media_discard(mid).await?;
+                        let _ = self.ui.send(UiEvent {
+                            name: messenger_dm::UI_EVENT_DM_UPDATED.into(),
+                            payload: serde_json::json!({ "chat_id": t.chat_id, "message_id": mid }),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Continue a paused or failed transfer.
+    pub async fn media_resume(&self, transfer_id: &str) -> Result<()> {
+        let t = self.media.transfer(transfer_id).await?.ok_or_else(|| MessengerError::Invalid("unknown transfer".into()))?;
+        if t.status == "running" || t.status == "queued" {
+            return Ok(());
+        }
+        let message_id = t.message_id.clone().ok_or_else(|| MessengerError::Invalid("transfer has no message".into()))?;
+        if t.direction == DIR_UP {
+            if !message_id.starts_with("local:") {
+                return Ok(()); // already sent
+            }
+            let keys = self.session_keys().await?;
+            self.dm.media_set_status(&message_id, "uploading", None).await?;
+            let job = self.upload_job(keys);
+            let chat_id = t.chat_id.clone().unwrap_or_default();
+            let local = t.local_path.clone().unwrap_or_default();
+            tokio::spawn(job.run(t.id, message_id, chat_id, local));
+            Ok(())
+        } else {
+            self.media_download(&message_id, true).await.map(|_| ())
+        }
+    }
+
+    /// Copy the attachment somewhere the user chose.
+    pub async fn media_save_as(&self, message_id: &str, dest: &Path) -> Result<()> {
+        let src = self
+            .media_local_path(message_id)
+            .await?
+            .ok_or_else(|| MessengerError::Invalid("err.not_downloaded".into()))?;
+        tokio::fs::copy(&src, dest).await?;
+        Ok(())
+    }
+
+    /// The attachment as a `data:` url for inline previews.
+    pub async fn media_data_url(&self, message_id: &str) -> Result<Option<String>> {
+        let Some(path) = self.media_local_path(message_id).await? else { return Ok(None) };
+        let meta = tokio::fs::metadata(&path).await?;
+        if meta.len() > MAX_INLINE_BYTES {
+            return Err(MessengerError::Invalid("err.too_large_for_preview".into()));
+        }
+        let m = self.dm.message(message_id).await?.and_then(|m| m.media);
+        let mime = m
+            .as_ref()
+            .and_then(|f| f.get("mime"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        // Only types a webview renders passively; never html or svg.
+        let safe = matches!(
+            mime.as_str(),
+            "image/jpeg" | "image/png" | "image/gif" | "image/webp" | "image/avif" | "image/bmp"
+                | "video/mp4" | "video/webm" | "audio/mpeg" | "audio/ogg" | "audio/wav" | "audio/mp4" | "audio/flac"
+        );
+        if !safe {
+            return Ok(None);
+        }
+        let bytes = tokio::fs::read(&path).await?;
+        Ok(Some(format!("data:{mime};base64,{}", B64.encode(bytes))))
+    }
+}

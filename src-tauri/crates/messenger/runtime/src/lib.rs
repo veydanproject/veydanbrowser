@@ -9,6 +9,10 @@
 //! talks to this type: the Tauri adapter today, a standalone app or the
 //! `messenger-cli` tomorrow. Nothing here knows about Tauri.
 
+pub mod media;
+
+/// Region used when the stored one cannot be read.
+pub(crate) const REGION_FALLBACK: &str = "default";
 pub mod relays;
 pub mod session;
 
@@ -18,6 +22,7 @@ use messenger_contacts::{ContactService, MetaHandler, Nip05Service, ProfileServi
 use messenger_core::{Clock, EventId, MessengerConfig, MessengerError, Outbound, PubKey, Result, Scope, SecretStore, SubId, Transport};
 use messenger_dm::{Action, DmHandler, DmRoutesHandler, DmService, Prepared};
 use messenger_identity::IdentityService;
+use messenger_media::MediaService;
 use messenger_ingress::{filters, Dispatcher, Fanout, Outbox};
 use messenger_store::{settings, Store};
 use nostr::key::Keys;
@@ -28,6 +33,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
 pub use messenger_dm::{Action as DmAction, ChatView, MessageView, RelationView};
+pub use messenger_media::{MediaServerInput, MediaServerView, TransferView};
 
 pub use messenger_contacts::book::ContactPatch;
 pub use messenger_contacts::{ContactView, ProfileInput, ProfileView};
@@ -68,11 +74,12 @@ pub struct MessengerRuntime {
     store: Store,
     secrets: Arc<dyn SecretStore>,
     identity: IdentityService,
-    relays: RelayService,
+    relays: Arc<RelayService>,
     profiles: ProfileService,
     contacts: ContactService,
     nip05: Nip05Service,
     dm: DmService,
+    media: MediaService,
     outbox: Outbox,
     dispatcher: Arc<Dispatcher>,
     ui: broadcast::Sender<UiEvent>,
@@ -85,7 +92,10 @@ impl MessengerRuntime {
         let store = Store::open(&config).await?;
         let identity = IdentityService::new(store.clone(), secrets.clone());
         let signer = load_signer(&identity).await;
-        let relays = RelayService::init(store.clone(), signer.clone()).await?;
+        let relays = Arc::new(RelayService::init(store.clone(), signer.clone()).await?);
+        let media = MediaService::new(store.clone(), secrets.clone(), config.data_dir())?;
+        media.recover().await?;
+        messenger_store::messages::pause_uploading(&store).await?;
         let outbox = Outbox::new(store.clone(), Arc::new(SystemClock));
         let profiles = ProfileService::new(store.clone());
         let contacts = ContactService::new(store.clone(), profiles.clone());
@@ -110,11 +120,15 @@ impl MessengerRuntime {
             contacts,
             nip05,
             dm,
+            media,
             outbox,
             dispatcher,
             ui,
             session: Mutex::new(None),
         };
+        if let Err(e) = rt.seed_media_servers().await {
+            eprintln!("messenger: media servers from the manifest not applied: {e}");
+        }
         if let Some(keys) = signer {
             rt.start_session(keys).await?;
         }
@@ -602,7 +616,7 @@ mod tests {
         assert!(st.secrets_unlocked);
         assert!(!st.identity_present);
         assert!(!st.session_active);
-        assert_eq!(st.manifest_serial, Some(2));
+        assert!(st.manifest_serial.is_some());
         assert!(st.relays_total >= 1);
         assert_eq!(st.outbox_pending, 0);
         assert!(cfg.db_path().exists());

@@ -18,11 +18,13 @@ messenger-transport.workspace = true
 messenger-ingress.workspace = true
 messenger-contacts.workspace = true
 messenger-dm.workspace = true
+messenger-media.workspace = true
 async-trait.workspace = true
 nostr.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["sync", "rt", "time"] }
+tokio = { workspace = true, features = ["sync", "rt", "time", "fs"] }
 serde_json.workspace = true
+base64.workspace = true
 
 [dev-dependencies]
 messenger-testkit.workspace = true
