@@ -6,6 +6,8 @@
   import { t } from '$lib/i18n';
   import Icon from '$lib/Icon.svelte';
   import { clock } from '../shared/time';
+  import { linkify } from '../shared/linkify';
+  import { messengerApi } from '../api';
   import type { MessengerMessage } from '../api';
 
   interface Props {
@@ -45,7 +47,7 @@
       {@render media(m)}
       {#if m.text}<span class="text">{m.text}</span>{/if}
     {:else if m.text}
-      <span class="text">{m.text}</span>
+      <span class="text">{#each linkify(m.text) as p}{#if p.href}<a href={p.href} onclick={(e) => { e.preventDefault(); messengerApi.openUrl(p.href!).catch(() => {}); }}>{p.text}</a>{:else}{p.text}{/if}{/each}</span>
     {:else}
       <span class="tomb">{$t('msg_message_unsupported', { type: m.content_type })}</span>
     {/if}
@@ -80,6 +82,7 @@
   .line.out.first .bubble { border-top-left-radius: 14px; border-top-right-radius: 5px; }
   .bubble.failed { border-color: var(--danger-border); }
   .text { font-size: var(--fs-sm); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+  .text a { color: var(--accent-text-2); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
   .tomb { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--text-3); font-style: italic; }
   .meta { display: inline-flex; align-items: center; gap: 5px; align-self: flex-end; font-size: var(--fs-2xs); color: var(--text-3); line-height: 1; }
   .status { display: inline-flex; }

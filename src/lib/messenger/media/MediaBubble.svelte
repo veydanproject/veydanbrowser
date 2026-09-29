@@ -76,12 +76,7 @@
   }
 
   async function open() {
-    const p = local ?? media?.local_path ?? (await messengerApi.media.localPath(m.id));
-    if (!p || !isTauriHost) return;
-    await act(async () => {
-      const { openPath } = await import('@tauri-apps/plugin-opener');
-      await openPath(p);
-    });
+    await act(() => messengerApi.media.open(m.id));
   }
 
   async function saveAs() {
@@ -121,7 +116,7 @@
       <audio class="audio" {src} controls preload="metadata"></audio>
     {/if}
 
-    <div class="card">
+    <div class="file-row">
       <span class="ico" class:spin={phase === 'uploading' || phase === 'downloading'}>
         {#if phase === 'uploading' || phase === 'downloading'}<Icon name="loader" size={18} />
         {:else if phase === 'remote' || phase === 'download_paused' || phase === 'download_failed'}<Icon name="download" size={18} />
@@ -175,7 +170,7 @@
   .thumb img { display: block; max-width: 100%; max-height: 320px; object-fit: contain; border-radius: 10px; background: var(--surface-3); }
   .player { max-width: 100%; max-height: 320px; border-radius: 10px; background: #000; }
   .audio { width: 100%; height: 36px; }
-  .card { display: flex; align-items: center; gap: var(--sp-2); }
+  .file-row { display: flex; align-items: center; gap: var(--sp-2); }
   .ico {
     width: 38px; height: 38px; flex-shrink: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
     background: var(--surface-3); color: var(--accent-text-2);

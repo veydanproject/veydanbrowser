@@ -50,6 +50,11 @@ class MessengerStore {
     return !!s && s.compiled && s.enabled && s.runtime !== null;
   }
 
+  /** Unread messages in chats that are not archived (navigation badge). */
+  get unread(): number {
+    return this.visible ? chatStore.totalUnread : 0;
+  }
+
   get compiled(): boolean {
     return this.status?.compiled ?? false;
   }
@@ -82,7 +87,12 @@ class MessengerStore {
         this.manifest = manifest;
         this.contacts = contacts;
         this.ownProfile = ownProfile;
-        if (identity) chatStore.loadChats().catch(() => {});
+        if (identity) {
+          chatStore.loadChats().catch(() => {});
+          // Events must flow as soon as the module is visible, not only
+          // while its page is open (unread badge, statuses).
+          this.startListeners().catch(() => {});
+        }
       } else {
         this.identity = null;
         this.relays = [];

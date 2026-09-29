@@ -36,7 +36,7 @@
   <div class="card-title"><Icon name="user" size={16} /> {$t('msg_own_title')}</div>
   {#if !editing}
     <div class="head">
-      <Avatar url={p?.picture ?? null} label={profileLabel(p) || (messengerStore.identity?.npub ?? '?')} size={48} />
+      <Avatar url={p?.picture ?? null} label={profileLabel(p) || (messengerStore.identity?.npub ?? '?')} seed={messengerStore.identity?.pubkey} size={48} />
       <div class="info">
         <div class="name">{profileLabel(p) || $t('msg_own_unnamed')}</div>
         {#if p?.nip05}<div class="meta">{p.nip05}</div>{/if}

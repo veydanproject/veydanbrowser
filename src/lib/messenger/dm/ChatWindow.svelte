@@ -129,6 +129,11 @@
     }
   }
 
+  function editLast() {
+    const mine = [...chatStore.messages].reverse().find((m) => m.direction === 'out' && m.content_type === 'text' && !m.deleted);
+    if (mine) { replyTo = null; editing = mine; }
+  }
+
   async function attach(paths: string[]) {
     error = "";
     atBottom = true;
@@ -197,8 +202,8 @@
 
 <section class="window">
   <header class="head">
-    {#if onback}<button class="icon back" onclick={onback} title={$t('msg_back')}><Icon name="arrow-left" size={16} /></button>{/if}
-    <Avatar url={chat.picture} label={chat.title} size={36} />
+    {#if onback}<button class="icon back narrow-only" onclick={onback} title={$t('msg_back')}><Icon name="arrow-left" size={16} /></button>{/if}
+    <Avatar url={chat.picture} label={chat.title} seed={chat.peer_pubkey} size={36} />
     <div class="who">
       <div class="title">{chat.title}{#if chat.is_muted}<span class="dim"><Icon name="bell-off" size={12} /></span>{/if}</div>
       <div class="sub">
@@ -246,7 +251,7 @@
   {#if error}<div class="error-line">{error}</div>{/if}
 
   {#if chat.can_send}
-    <Composer {replyTo} {editing} peerTitle={chat.title} disabled={!sessionActive}
+    <Composer {replyTo} {editing} peerTitle={chat.title} disabled={!sessionActive} draftKey={chat.id} oneditlast={editLast}
       oncancel={() => { replyTo = null; editing = null; }} onsend={send} tools={composerTools} />
   {:else if footer}
     {@render footer()}
@@ -269,6 +274,8 @@
   .offline { color: var(--warn-text); }
   .icon { border: none; background: none; color: var(--text-2); cursor: pointer; display: inline-flex; padding: 6px; border-radius: var(--radius-sm); }
   .icon:hover { color: var(--text); background: var(--surface-3); }
+  .narrow-only { display: none; }
+  @media (max-width: 860px) { .narrow-only { display: inline-flex; } }
   .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-3) 0; display: flex; flex-direction: column; }
   .scroll > :global(:first-child) { margin-top: auto; }
   .day, .system { display: flex; justify-content: center; margin: var(--sp-3) 0 var(--sp-1); }

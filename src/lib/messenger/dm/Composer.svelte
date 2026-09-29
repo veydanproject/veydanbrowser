@@ -17,9 +17,14 @@
     onsend: (text: string) => Promise<void>;
     /** Buttons left of the input (attach, emoji). */
     tools?: Snippet;
+    /** Keeps an unsent text per conversation. */
+    draftKey?: string;
+    /** Arrow up in an empty field: edit my last message. */
+    oneditlast?: () => void;
   }
-  let { disabled = false, placeholder, replyTo, editing, peerTitle, oncancel, onsend, tools }: Props = $props();
+  let { disabled = false, placeholder, replyTo, editing, peerTitle, oncancel, onsend, tools, draftKey, oneditlast }: Props = $props();
 
+  const drafts: Map<string, string> = ((globalThis as Record<string, unknown>).__msgDrafts ??= new Map()) as Map<string, string>;
   const MAX_BYTES = 32 * 1024;
   let text = $state('');
   let busy = $state(false);
@@ -39,6 +44,18 @@
     queueMicrotask(() => { resize(); el?.focus(); });
   });
   $effect(() => { if (replyTo) el?.focus(); });
+
+  // Switching conversations: park the text of the old one, restore the new one.
+  let lastKey: string | undefined;
+  $effect(() => {
+    const key = draftKey;
+    if (key === lastKey) return;
+    if (lastKey !== undefined && !editing) drafts.set(lastKey, text);
+    lastKey = key;
+    text = key ? (drafts.get(key) ?? "") : "";
+    queueMicrotask(() => { resize(); el?.focus(); });
+  });
+  $effect(() => { if (draftKey && !editing) drafts.set(draftKey, text); });
 
   function resize() {
     if (!el) return;
@@ -73,6 +90,7 @@
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
     else if (e.key === 'Escape' && (replyTo || editing)) { e.preventDefault(); oncancel(); }
+    else if (e.key === "ArrowUp" && !text && !editing && oneditlast) { e.preventDefault(); oneditlast(); }
   }
 </script>
 

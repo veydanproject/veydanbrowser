@@ -46,7 +46,7 @@
 {#snippet row(c: MessengerChat)}
   <li>
     <button class="chat" class:active={chatStore.activeId === c.id} onclick={() => onopen(c)} oncontextmenu={(e) => openMenu(e, c)}>
-      <Avatar url={c.picture} label={c.title} size={42} />
+      <Avatar url={c.picture} label={c.title} seed={c.peer_pubkey} size={42} />
       <span class="body">
         <span class="top">
           <span class="title">{c.title}</span>

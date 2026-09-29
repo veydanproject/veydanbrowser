@@ -50,7 +50,7 @@
         {#each contacts as c (c.pubkey)}
           <li>
             <button class="row" disabled={busy} onclick={() => pick(c)}>
-              <Avatar url={c.profile?.picture ?? null} label={contactLabel(c)} size={34} />
+              <Avatar url={c.profile?.picture ?? null} label={contactLabel(c)} seed={c.pubkey} size={34} />
               <span class="name">{contactLabel(c)}</span>
               <code>{c.npub.slice(0, 12)}…</code>
             </button>

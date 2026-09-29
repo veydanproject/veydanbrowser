@@ -700,6 +700,77 @@ pub async fn messenger_media_local_path(
     Ok(p.map(|p| p.to_string_lossy().into_owned()))
 }
 
+/// Open a link from a message in the system browser. http(s) only; the
+/// opener never goes through a shell.
+#[tauri::command]
+pub async fn messenger_open_url(url: String, app: tauri::AppHandle) -> CmdResult<()> {
+    let url = url.trim();
+    let ok = (url.starts_with("https://") || url.starts_with("http://"))
+        && url.len() <= 2048
+        && !url.chars().any(|c| c.is_control() || c.is_whitespace());
+    if !ok {
+        return Err(AppError::Other("only http(s) links can be opened".into()));
+    }
+    open_external(&app, url, false)
+}
+
+/// Open the attachment of a message with the system's default application.
+#[tauri::command]
+pub async fn messenger_media_open(
+    message_id: String,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    let path = state
+        .messenger
+        .runtime()?
+        .media_local_path(&message_id)
+        .await
+        .map_err(map_err)?
+        .ok_or_else(|| AppError::Other("err.not_downloaded".into()))?;
+    // A received file is untrusted: anything the system would run is only
+    // shown in its folder, never launched.
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if RUNNABLE_EXTENSIONS.contains(&ext.as_str()) || ext.is_empty() {
+        return reveal(&app, &path);
+    }
+    open_external(&app, &path.to_string_lossy(), true)
+}
+
+/// File types that execute code when opened with the default handler.
+const RUNNABLE_EXTENSIONS: &[&str] = &[
+    "exe", "msi", "bat", "cmd", "com", "scr", "pif", "cpl", "ps1", "vbs", "vbe", "js", "jse", "wsf", "wsh", "hta",
+    "lnk", "reg", "sh", "bash", "zsh", "fish", "desktop", "appimage", "run", "bin", "jar", "app", "command",
+    "dmg", "pkg", "deb", "rpm", "apk", "py", "pl", "rb", "php", "html", "htm", "svg", "url", "scpt",
+];
+
+#[cfg(desktop)]
+fn reveal(app: &tauri::AppHandle, path: &Path) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().reveal_item_in_dir(path).map_err(|e| AppError::Other(e.to_string()))
+}
+
+#[cfg(not(desktop))]
+fn reveal(_app: &tauri::AppHandle, _path: &Path) -> CmdResult<()> {
+    Err(AppError::Other("not available on this platform".into()))
+}
+
+#[cfg(desktop)]
+fn open_external(app: &tauri::AppHandle, target: &str, is_path: bool) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let res = if is_path {
+        app.opener().open_path(target, None::<&str>)
+    } else {
+        app.opener().open_url(target, None::<&str>)
+    };
+    res.map_err(|e| AppError::Other(e.to_string()))
+}
+
+#[cfg(not(desktop))]
+fn open_external(_app: &tauri::AppHandle, _target: &str, _is_path: bool) -> CmdResult<()> {
+    Err(AppError::Other("not available on this platform".into()))
+}
+
 #[tauri::command]
 pub async fn messenger_relays_remove(url: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
     state.messenger.runtime()?.relays().remove_user(&url).await.map_err(map_err)

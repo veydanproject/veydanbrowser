@@ -25,7 +25,8 @@ class ChatStore {
   }
 
   get totalUnread(): number {
-    return this.chats.reduce((n, c) => n + (c.archived ? 0 : c.unread), 0);
+    // Muted chats keep their own counter but stay out of the total.
+    return this.chats.reduce((n, c) => n + (c.archived || c.is_muted ? 0 : c.unread), 0);
   }
 
   async loadChats() {

@@ -308,25 +308,28 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 const NOT_COMPILED: MessengerStatus = { compiled: false, enabled: false, runtime: null, error: null };
 
-let mockIdentity: MessengerIdentity | null = null;
+import { buildDemo, demoEnabled } from './devDemo';
+
+const demo = !isTauri && demoEnabled() ? buildDemo() : null;
+let mockIdentity: MessengerIdentity | null = demo?.identity ?? null;
 let mockRelays: MessengerRelay[] = [
   { url: 'wss://relay.damus.io', relay_id: 'pub-damus', source: 'manifest', regions: ['default'], read: true, write: true, enabled: true, auth_type: 'api_key', state: 'connected' },
   { url: 'wss://nos.lol', relay_id: 'pub-nos', source: 'manifest', regions: ['default'], read: true, write: true, enabled: false, auth_type: null, state: 'disconnected' },
 ];
 let mockSilent = false;
 let mockRegion = 'default';
-let mockContacts: MessengerContact[] = [];
-let mockOwnProfile: MessengerProfile | null = null;
+let mockContacts: MessengerContact[] = demo?.contacts ?? [];
+let mockOwnProfile: MessengerProfile | null = demo?.ownProfile ?? null;
 const emptyProfile = (pubkey: string): MessengerProfile => ({
   pubkey, npub: `npub1${pubkey.slice(0, 58)}`, name: null, display_name: null, about: null, picture: null, banner: null,
   website: null, nip05: null, lud16: null, nip05_verified: false, event_created_at: 0, fetched_at: 0,
 });
 
-let mockChats: MessengerChat[] = [];
+let mockChats: MessengerChat[] = demo?.chats ?? [];
 let mockMediaServers: MessengerMediaServer[] = [
   { id: 'veydan-node-1-s3', kind: 's3', url: 'https://node-1.veydan.net:9000', bucket: 'veydan-media', region: 'us-east-1', access_key: null, has_secret: false, priority: 10, enabled: true, source: 'manifest', public_base: 'https://node-1.veydan.net:9000/veydan-media' },
 ];
-const mockMessages: Record<string, MessengerMessage[]> = {};
+const mockMessages: Record<string, MessengerMessage[]> = demo?.messages ?? {};
 function mockChat(peer: string): MessengerChat {
   const hex = peer.startsWith('npub') ? 'ef'.repeat(32) : peer;
   const id = `dm:${hex}`;
@@ -417,6 +420,8 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_media_save_as: () => undefined,
   messenger_media_data_url: () => null,
   messenger_media_local_path: () => null,
+  messenger_media_open: () => undefined,
+  messenger_open_url: (a) => { window.open(String(a?.url), '_blank', 'noopener'); },
   messenger_dm_relation: (a) => {
     const c = mockChat(String(a?.peer));
     return { peer_pubkey: c.peer_pubkey, mode: c.mode, my_contact: 'approved', blocked: c.mode === 'blocked', peer_signal: 'approved', was_ever_mutual: true, can_send: c.can_send };
@@ -518,6 +523,8 @@ export const messengerApi = {
     }
   },
   setEnabled: (enabled: boolean) => invoke<void>('messenger_set_enabled', { enabled }),
+  /** Open an http(s) link in the system browser. */
+  openUrl: (url: string) => invoke<void>('messenger_open_url', { url }),
 
   relays: {
     list: () => invoke<MessengerRelay[]>('messenger_relays_list'),
@@ -568,6 +575,8 @@ export const messengerApi = {
     saveAs: (messageId: string, dest: string) => invoke<void>('messenger_media_save_as', { messageId, dest }),
     dataUrl: (messageId: string) => invoke<string | null>('messenger_media_data_url', { messageId }),
     localPath: (messageId: string) => invoke<string | null>('messenger_media_local_path', { messageId }),
+    /** Opens with the default application; runnable files are only revealed in their folder. */
+    open: (messageId: string) => invoke<void>('messenger_media_open', { messageId }),
   },
 
   profiles: {

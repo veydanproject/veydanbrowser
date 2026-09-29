@@ -99,9 +99,8 @@
               <button class="btn btn-ghost btn-sm" disabled={busy} onclick={() => editCredentials(s)}><Icon name="key" size={12} />{$t('msg_media_keys')}</button>
             {/if}
             <button class="btn btn-ghost btn-sm" disabled={busy || !canAct || needsSecret(s)} onclick={() => check(s.id)}>{$t('msg_media_check')}</button>
-            <label class="switch" title={$t('msg_relay_enabled')}>
-              <input type="checkbox" checked={s.enabled} disabled={busy} onchange={(e) => run(() => messengerApi.media.setServerEnabled(s.id, (e.currentTarget as HTMLInputElement).checked))} />
-            </label>
+            <button class="toggle" class:on={s.enabled} disabled={busy} aria-pressed={s.enabled} aria-label={$t("msg_relay_enabled")} title={$t("msg_relay_enabled")}
+              onclick={() => run(() => messengerApi.media.setServerEnabled(s.id, !s.enabled))}></button>
             {#if s.source === 'user'}
               <button class="icon danger" disabled={busy} onclick={() => run(() => messengerApi.media.removeServer(s.id))} title={$t('msg_relay_remove')}><Icon name="trash-2" size={14} /></button>
             {/if}
@@ -159,7 +158,6 @@
   .actions { display: inline-flex; align-items: center; gap: var(--sp-1); }
   .icon { border: none; background: none; color: var(--text-2); cursor: pointer; display: inline-flex; padding: 6px; border-radius: var(--radius-sm); }
   .icon.danger:hover { color: var(--danger-text); background: var(--danger-bg); }
-  .switch input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
   .form { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); }
   .form .wide { grid-column: 1 / -1; }
   .form label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--text-3); }

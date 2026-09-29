@@ -66,11 +66,11 @@
       {#each messengerStore.contacts as c (c.pubkey)}
         <li class="row" class:open={openId === c.pubkey}>
           <button class="head" onclick={() => toggle(c)}>
-            <Avatar url={c.profile?.picture ?? null} label={contactLabel(c)} />
+            <Avatar url={c.profile?.picture ?? null} label={contactLabel(c)} seed={c.pubkey} />
             <span class="info">
               <span class="name">
                 {contactLabel(c)}
-                {#if c.is_muted}<Icon name="lock" size={11} />{/if}
+                {#if c.is_muted}<span class="dim"><Icon name="bell-off" size={11} /></span>{/if}
                 {#if c.followed}<span class="tag">{$t('msg_contacts_following')}</span>{/if}
               </span>
               <span class="meta">
@@ -157,6 +157,7 @@
   }
   .info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .name { display: flex; align-items: center; gap: 6px; font-weight: var(--fw-semibold); font-size: var(--fs-sm); }
+  .dim { color: var(--text-3); display: inline-flex; }
   .tag { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.5px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-text-2); }
   .meta { color: var(--text-3); font-size: var(--fs-xs); }
   .meta code { font-family: var(--font-mono); }
