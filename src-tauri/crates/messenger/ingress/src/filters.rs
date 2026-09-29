@@ -81,6 +81,20 @@ pub fn dm_history(me: &PubKey, since: Timestamp) -> Filter {
     }))
 }
 
+pub const SUB_GROUPS: &str = "groups";
+pub const CURSOR_GROUPS: &str = "groups";
+/// Group events carry their real time; the margin covers clock drift.
+pub const GROUP_LIVE_MARGIN_SECS: i64 = 600;
+
+/// Events of the groups I am in (kind 9, tag `h`).
+pub fn group_events(group_ids: &[String], since: Option<Timestamp>) -> Filter {
+    let mut f = serde_json::json!({ "kinds": [9], "#h": group_ids });
+    if let Some(s) = since {
+        f["since"] = serde_json::json!(s.secs());
+    }
+    Filter(f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,3 +111,4 @@ mod tests {
         assert_eq!(w.0["limit"], 50);
     }
 }
+

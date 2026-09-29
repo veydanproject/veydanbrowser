@@ -148,13 +148,13 @@ fn classify_group(event: &Event, envelope: WireEnvelope) -> Inbound {
     let Some(group_id) = group_id else {
         return Inbound::ignored(KIND_GROUP_MESSAGE, "group message without h tag");
     };
-    let key_version = event
+    let key_id = event
         .tags
         .iter()
-        .filter(|t| t.kind() == "kver")
+        .filter(|t| t.kind() == "k")
         .filter_map(|t| t.as_slice().get(1))
-        .filter_map(|s| s.parse::<u32>().ok())
-        .next();
+        .next()
+        .cloned();
     let reply_to = event
         .tags
         .iter()
@@ -168,7 +168,7 @@ fn classify_group(event: &Event, envelope: WireEnvelope) -> Inbound {
         sender: pk(&event.pubkey),
         created_at: ts(event.created_at),
         kind: KIND_GROUP_MESSAGE,
-        key_version,
+        key_id,
         ciphertext: event.content.clone(),
         reply_to,
     })
@@ -284,13 +284,13 @@ mod tests {
         assert!(matches!(classify(&raw_of(&no_h), None), Inbound::Ignored { kind: 9, .. }));
         let with_h = EventBuilder::new(Kind::from(9u16), "cipher")
             .tag(Tag::parse(["h", "group1"]).unwrap())
-            .tag(Tag::parse(["kver", "3"]).unwrap())
+            .tag(Tag::parse(["k", "abc"]).unwrap())
             .finalize(&k)
             .unwrap();
         match classify(&raw_of(&with_h), None) {
             Inbound::Group(g) => {
                 assert_eq!(g.group_id, "group1");
-                assert_eq!(g.key_version, Some(3));
+                assert_eq!(g.key_id.as_deref(), Some("abc"));
                 assert_eq!(g.ciphertext, "cipher");
             }
             other => panic!("{other:?}"),
