@@ -9,10 +9,11 @@
   import Avatar from '../contacts/Avatar.svelte';
   import MessageBubble from './MessageBubble.svelte';
   import Composer from './Composer.svelte';
+  import RelationBanner from './RelationBanner.svelte';
   import { chatStore } from '../chats/chatStore.svelte';
   import { messengerStore } from '../store.svelte';
   import { dayKey, dayLabel } from '../shared/time';
-  import { messengerError, type MessengerChat, type MessengerMessage } from '../api';
+  import { dmErrorCode, messengerError, type DmAction, type MessengerChat, type MessengerMessage } from '../api';
 
   interface Props {
     chat: MessengerChat;
@@ -31,6 +32,8 @@
   let atBottom = $state(true);
   let highlighted = $state<string | null>(null);
   let menu = $state<{ open: boolean; x: number; y: number; m: MessengerMessage | null }>({ open: false, x: 0, y: 0, m: null });
+  let chatMenu = $state<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 });
+  let acting = $state(false);
 
   const online = $derived((messengerStore.status?.runtime?.relays_connected ?? 0) > 0);
   const sessionActive = $derived(!!messengerStore.status?.runtime?.session_active);
@@ -63,9 +66,44 @@
     }
   }
 
+  /** Relationship refusals arrive as stable codes; everything else as text. */
+  function explain(e: unknown): string {
+    const code = dmErrorCode(e);
+    return code ? $t(`msg_err_${code}` as "msg_err_dm_blocked", { name: chat.title }) : messengerError(e);
+  }
+
+  async function act(a: DmAction) {
+    if (a === "block" && !confirm($t("msg_rel_confirm_block", { name: chat.title }))) return;
+    if (a === "remove" && chat.is_contact && chat.mode === "full_chat" && !confirm($t("msg_rel_confirm_remove", { name: chat.title }))) return;
+    error = ""; acting = true;
+    try { await chatStore.act(chat.id, a); }
+    catch (e) { error = explain(e); }
+    finally { acting = false; }
+  }
+
+  function openChatMenu(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    chatMenu = { open: true, x: r.right - 200, y: r.bottom + 4 };
+  }
+
+  const chatItems = $derived.by((): MenuEntry[] => {
+    const list: MenuEntry[] = [];
+    if (chat.mode === "blocked") list.push({ label: $t("msg_rel_cta_unblock"), icon: "lock-open", onselect: () => act("unblock") });
+    else {
+      if (chat.is_contact) list.push({ label: $t("msg_rel_cta_remove"), icon: "user", onselect: () => act("remove") });
+      else if (chat.mode !== "request_received") list.push({ label: $t("msg_rel_cta_add"), icon: "user-plus", onselect: () => act("request") });
+      list.push({ label: $t("msg_rel_cta_block"), icon: "ban", danger: true, onselect: () => act("block") });
+    }
+    list.push({ type: "separator" });
+    list.push({ label: chat.pinned ? $t("msg_chat_unpin") : $t("msg_chat_pin"), icon: "pin", onselect: () => chatStore.setPinned(chat.id, !chat.pinned) });
+    list.push({ label: chat.archived ? $t("msg_chat_unarchive") : $t("msg_chat_archive"), icon: "archive", onselect: () => chatStore.setArchived(chat.id, !chat.archived) });
+    list.push({ label: $t("msg_chat_delete"), icon: "trash-2", danger: true, onselect: () => { if (confirm($t("msg_chat_delete_confirm", { name: chat.title }))) chatStore.deleteChat(chat.id); } });
+    return list;
+  });
+
   async function guard(fn: () => Promise<unknown>) {
     error = '';
-    try { await fn(); } catch (e) { error = messengerError(e); }
+    try { await fn(); } catch (e) { error = explain(e); }
   }
 
   async function send(text: string) {
@@ -82,7 +120,7 @@
         await chatStore.send(text, r);
       }
     } catch (e) {
-      error = messengerError(e);
+      error = explain(e);
       throw e;
     }
   }
@@ -149,8 +187,10 @@
       </div>
     </div>
     {#if actions}{@render actions()}{/if}
+    <button class="icon" onclick={openChatMenu} title={$t("msg_chat_menu")}><Icon name="more-vertical" size={16} /></button>
   </header>
 
+  <RelationBanner {chat} busy={acting} onaction={act} />
   {#if banner}{@render banner()}{/if}
 
   <div class="scroll" bind:this={scroller} {onscroll}>
@@ -189,10 +229,13 @@
       oncancel={() => { replyTo = null; editing = null; }} onsend={send} />
   {:else if footer}
     {@render footer()}
+  {:else}
+    <div class="no-composer"><Icon name="lock" size={13} />{$t("msg_chat_cannot_send")}</div>
   {/if}
 </section>
 
 <ContextMenu bind:open={menu.open} x={menu.x} y={menu.y} {items} onclose={() => (menu.open = false)} />
+<ContextMenu bind:open={chatMenu.open} x={chatMenu.x} y={chatMenu.y} items={chatItems} onclose={() => (chatMenu.open = false)} />
 
 <style>
   .window { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
@@ -222,4 +265,5 @@
   }
   .to-bottom:hover { color: var(--text); }
   .error-line { padding: 6px var(--sp-4); font-size: var(--fs-xs); color: var(--danger-text); background: var(--danger-bg); border-top: 1px solid var(--danger-border); }
+  .no-composer { display: flex; align-items: center; justify-content: center; gap: 6px; padding: var(--sp-3); border-top: 1px solid var(--border); background: var(--surface); font-size: var(--fs-xs); color: var(--text-3); }
 </style>

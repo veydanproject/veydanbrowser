@@ -24,7 +24,8 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use messenger_core::{MessengerConfig, MessengerError, SecretStore};
 use messenger_core::PubKey;
 use messenger_runtime::{
-    ChatView, ContactPatch, ContactView, CreatedIdentity, Identity, ManifestInfo, MessageView, MessengerRuntime,
+    ChatView, ContactPatch, ContactView, CreatedIdentity, DmAction, Identity, ManifestInfo, MessageView,
+    MessengerRuntime, RelationView,
     ProfileView, RelayView,
     RuntimeStatus,
 };
@@ -216,6 +217,9 @@ fn map_err(e: MessengerError) -> AppError {
         MessengerError::Storage(m) => AppError::Db(m),
         MessengerError::Io(m) => AppError::Io(m),
         MessengerError::NotLoggedIn => AppError::NotFound("messenger identity".into()),
+        // Validation messages reach the UI as they are: relationship
+        // refusals are stable codes (`dm_waiting_approval`, …) it translates.
+        MessengerError::Invalid(m) => AppError::Other(m),
         other => AppError::Other(other.to_string()),
     }
 }
@@ -545,6 +549,38 @@ pub async fn messenger_dm_delete(
 #[tauri::command]
 pub async fn messenger_dm_retry(message_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
     state.messenger.runtime()?.dm_retry(&message_id).await.map_err(map_err)
+}
+
+// ─── DM relationship ────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn messenger_dm_relation(peer: String, state: tauri::State<'_, AppState>) -> CmdResult<RelationView> {
+    state.messenger.runtime()?.dm_relation(&peer).await.map_err(map_err)
+}
+
+/// `action`: request | accept | decline | block | unblock | remove.
+#[tauri::command]
+pub async fn messenger_dm_action(
+    peer: String,
+    action: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<RelationView> {
+    let action = match action.as_str() {
+        "request" => DmAction::Request,
+        "accept" => DmAction::Accept,
+        "decline" => DmAction::Decline,
+        "block" => DmAction::Block,
+        "unblock" => DmAction::Unblock,
+        "remove" => DmAction::Remove,
+        other => return Err(AppError::Other(format!("unknown action: {other}"))),
+    };
+    state.messenger.runtime()?.dm_act(&peer, action).await.map_err(map_err)
+}
+
+/// Hex keys of everyone I block.
+#[tauri::command]
+pub async fn messenger_dm_blocked(state: tauri::State<'_, AppState>) -> CmdResult<Vec<String>> {
+    state.messenger.runtime()?.dm_blocked().await.map_err(map_err)
 }
 
 #[tauri::command]

@@ -134,6 +134,25 @@ export interface MessengerMessage {
   media: Record<string, unknown> | null;
 }
 
+
+export type DmAction = 'request' | 'accept' | 'decline' | 'block' | 'unblock' | 'remove';
+
+export interface MessengerRelation {
+  peer_pubkey: string;
+  mode: ChatMode;
+  my_contact: 'none' | 'approved' | 'declined';
+  blocked: boolean;
+  peer_signal: 'none' | 'approved' | 'blocked' | 'left' | 'declined' | 'revoked';
+  was_ever_mutual: boolean;
+  can_send: boolean;
+}
+
+/** Stable refusal code inside an error (`dm_waiting_approval`, …), if any. */
+export function dmErrorCode(e: unknown): string | null {
+  const m = /\bdm_[a-z_]+\b/.exec(messengerError(e));
+  return m ? m[0] : null;
+}
+
 /** Runtime UI event as forwarded by the host. */
 export interface MessengerUiEvent {
   name: string;
@@ -278,6 +297,25 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_dm_edit: (a) => { const m = mockFind(String(a?.messageId)); if (m) { m.text = String(a?.text); m.edited_at = Math.floor(Date.now() / 1000); } return m; },
   messenger_dm_delete: (a) => { const m = mockFind(String(a?.messageId)); if (m) { m.deleted = true; m.text = null; } },
   messenger_dm_retry: () => undefined,
+  messenger_dm_relation: (a) => {
+    const c = mockChat(String(a?.peer));
+    return { peer_pubkey: c.peer_pubkey, mode: c.mode, my_contact: 'approved', blocked: c.mode === 'blocked', peer_signal: 'approved', was_ever_mutual: true, can_send: c.can_send };
+  },
+  messenger_dm_action: (a) => {
+    const c = mockChat(String(a?.peer));
+    const next: Record<string, [ChatMode, boolean]> = {
+      request: ['request_sent', false], accept: ['full_chat', true], decline: ['request_declined_by_me', false],
+      block: ['blocked', false], unblock: ['full_chat', true], remove: ['mutual_reconnect', true],
+    };
+    const [mode, can_send] = next[String(a?.action)] ?? ['full_chat', true];
+    mockChats = mockChats.map((x) => (x.id === c.id ? { ...x, mode, can_send } : x));
+    return { peer_pubkey: c.peer_pubkey, mode, my_contact: 'approved', blocked: mode === 'blocked', peer_signal: 'approved', was_ever_mutual: true, can_send };
+  },
+  messenger_dm_blocked: () => mockChats.filter((c) => c.mode === 'blocked').map((c) => c.peer_pubkey),
+  /** Dev only: put the open mock chat into a given screen mode. */
+  messenger_dev_set_mode: (a) => {
+    mockChats = mockChats.map((x) => (x.id === a?.chatId ? { ...x, mode: a?.mode as ChatMode, can_send: Boolean(a?.canSend) } : x));
+  },
   messenger_profile_get: () => null,
   messenger_profile_request: () => undefined,
   messenger_profile_own_get: () => mockOwnProfile,
@@ -389,6 +427,9 @@ export const messengerApi = {
     edit: (messageId: string, text: string) => invoke<MessengerMessage>('messenger_dm_edit', { messageId, text }),
     delete: (messageId: string, forEveryone: boolean) => invoke<void>('messenger_dm_delete', { messageId, forEveryone }),
     retry: (messageId: string) => invoke<void>('messenger_dm_retry', { messageId }),
+    relation: (peer: string) => invoke<MessengerRelation>('messenger_dm_relation', { peer }),
+    action: (peer: string, action: DmAction) => invoke<MessengerRelation>('messenger_dm_action', { peer, action }),
+    blocked: () => invoke<string[]>('messenger_dm_blocked'),
   },
 
   profiles: {

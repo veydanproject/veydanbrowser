@@ -4,7 +4,7 @@
 // Chat list and the open conversation. Fed by runtime events that the
 // module store forwards here; knows nothing about identity or relays.
 
-import { messengerApi, type MessengerChat, type MessengerMessage, type MessengerUiEvent } from '../api';
+import { messengerApi, type DmAction, type MessengerChat, type MessengerMessage, type MessengerUiEvent } from '../api';
 
 const PAGE = 50;
 
@@ -148,6 +148,15 @@ class ChatStore {
   async retry(messageId: string) {
     await messengerApi.dm.retry(messageId);
     await this.reloadWindow();
+  }
+
+  /** Relationship action on the peer of a chat. */
+  async act(chatId: string, action: DmAction) {
+    const chat = this.chats.find((c) => c.id === chatId);
+    if (!chat?.peer_pubkey) throw new Error('no chat');
+    await messengerApi.dm.action(chat.peer_pubkey, action);
+    await this.loadChats();
+    if (this.activeId === chatId) await this.reloadWindow();
   }
 
   async setPinned(chatId: string, pinned: boolean) {
