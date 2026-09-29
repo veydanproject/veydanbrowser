@@ -173,6 +173,26 @@ export interface MessengerGroup {
   link: string | null;
   /** Events this device has no key for (yet). */
   undecrypted: number;
+  /** The key messages are sealed with now (members only). */
+  key: MessengerGroupKey | null;
+}
+
+/** What a member may know about the current group key: never the key itself. */
+export interface MessengerGroupKey {
+  /** Short fingerprint of the key. */
+  id: string;
+  /** 1 for the key the group was created with, then one more per change. */
+  version: number;
+  cipher: string;
+  source: 'random' | 'link';
+  link_epoch: number;
+  /** When it came, unix seconds by its author's clock. */
+  since: number;
+  by: string;
+  reason: 'create' | 'rotate_key' | 'rotate_link' | 'remove' | 'ban' | 'admit' | 'other';
+  /** This device holds it. */
+  held: boolean;
+  status: 'good' | 'rotate' | 'deliver';
 }
 
 export interface MessengerGroupInvite {
@@ -560,6 +580,7 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
       owner: 'ab'.repeat(32), membership: 'joined', my_role: 'owner', muted: false, can_post: true, history_for_new: kind === 'public' || Boolean(a?.historyForNew),
       members: [{ pubkey: 'ab'.repeat(32), role: 'owner', muted: false, joined_at: Math.floor(Date.now() / 1000), is_me: true }],
       banned: [], requests: [], undecrypted: 0,
+      key: { id: id.slice(0, 32), version: 1, cipher: 'AES-256-GCM', source: kind === 'public' ? 'link' : 'random', link_epoch: 0, since: Math.floor(Date.now() / 1000), by: 'ab'.repeat(32), reason: 'create', held: true, status: 'good' },
       link: `veydan://group/${id}?t=${kind}&r=wss%3A%2F%2Frelay.example&o=${'ab'.repeat(32)}&n=${encodeURIComponent(String(a?.name))}${kind === 'public' ? '&s=demo&e=0' : ''}`,
     };
     mockGroups = [g, ...mockGroups];

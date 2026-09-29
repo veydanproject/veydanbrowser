@@ -404,8 +404,10 @@ impl GroupService {
                 MEMBERSHIP_JOINED => {
                     return self.on_keys(keys, wire::KeyDelivery { group_id, keys: body.keys }, sender, ctx).await;
                 }
-                MEMBERSHIP_BANNED | MEMBERSHIP_DISBANDED => return Ok(Outcome::default()),
-                MEMBERSHIP_LEFT | MEMBERSHIP_REMOVED if from_me => return Ok(Outcome::default()),
+                MEMBERSHIP_DISBANDED => return Ok(Outcome::default()),
+                // A ban is lifted in the log, not here: a manager who admits
+                // me again shows it, and the whole log decides in `settle`.
+                MEMBERSHIP_LEFT | MEMBERSHIP_REMOVED | MEMBERSHIP_BANNED if from_me => return Ok(Outcome::default()),
                 _ => {}
             }
         }
@@ -487,7 +489,10 @@ impl GroupService {
         }
         self.consume_consent(&group_id, me).await?;
 
-        let mut out = Outcome { resubscribe: true, ..Default::default() };
+        // The row was rewritten above, so `settle` sees no change in it:
+        // the screen has to hear of it here (a group I was banned in or
+        // removed from is shown as such until it does).
+        let mut out = Outcome { resubscribe: true, events: vec![Self::updated(&group_id)], ..Default::default() };
         self.drain(keys, &group_id, ctx, &mut out).await?;
         self.settle(keys, &group_id, true, ctx, &mut out).await?;
         if !from_me {

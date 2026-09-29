@@ -282,6 +282,13 @@ impl World {
         self.run(guest, o).await;
     }
 
+    /// The history of a group has arrived: what the runtime does then.
+    async fn synced(&mut self, who: usize, group: &str) {
+        let d = &self.devices[who];
+        let o = d.svc.maintain(&d.keys, group).await.unwrap();
+        self.run(who, o).await;
+    }
+
     async fn open_link(&mut self, who: usize, link: &str) -> GroupView {
         self.tick();
         let d = &self.devices[who];
@@ -492,11 +499,11 @@ async fn ban_hides_and_a_new_link_shuts_the_old_one() {
     assert_eq!(w.devices[alice].group(&g).await.unwrap().banned, vec![w.pk(troll).as_hex().to_string()]);
     assert_eq!(code(w.try_say(troll, &g, "again").await), "group_not_member");
     // The link still opens the group for everyone else…
-    assert_eq!(code({
-        w.tick();
-        let d = &w.devices[troll];
-        d.svc.open_link(&d.keys, &link, "").await
-    }), "group_author_banned");
+    w.open_link(troll, &link).await;
+    w.catch_up(troll).await;
+    w.synced(troll, &g).await;
+    assert_eq!(w.devices[troll].group(&g).await.unwrap().membership, "banned");
+    assert_eq!(w.devices[alice].group(&g).await.unwrap().members.len(), 2, "troll is not back");
 
     // …until the owner presses the button.
     w.act(alice, &g, OpBody::RotateLink { link_epoch: 1 }).await.unwrap();
@@ -692,4 +699,59 @@ async fn joining_too_early_by_an_old_link_ends_as_a_stale_link() {
     w.run(troll, Outcome { publish: vec![GroupService::scoped(&g, sealed)], ..Default::default() }).await;
     let v = w.devices[alice].group(&g).await.unwrap();
     assert_eq!((v.members.len(), v.banned.len()), (1, 1));
+}
+
+#[tokio::test]
+async fn a_lifted_ban_lets_one_be_invited_again() {
+    let mut w = World::new();
+    let alice = w.person().await;
+    let bob = w.person().await;
+    let g = w.create(alice, GroupKind::Private, "Family", true).await;
+    w.bring(alice, &g, bob).await;
+    w.say(alice, &g, "before").await;
+
+    w.act(alice, &g, OpBody::Ban { who: w.pk(bob) }).await.unwrap();
+    assert_eq!(w.devices[bob].group(&g).await.unwrap().membership, "banned");
+    w.say(alice, &g, "while banned").await;
+
+    // Unbanning does not bring anyone back: it lets them be brought.
+    w.act(alice, &g, OpBody::Unban { who: w.pk(bob) }).await.unwrap();
+    let v = w.devices[alice].group(&g).await.unwrap();
+    assert_eq!((v.members.len(), v.banned.len()), (1, 0));
+    assert_eq!(w.devices[bob].group(&g).await.unwrap().membership, "banned", "bob hears nothing: he holds no key");
+
+    w.bring(alice, &g, bob).await;
+    let v = w.devices[bob].group(&g).await.unwrap();
+    assert_eq!((v.membership.as_str(), v.can_post), ("joined", true));
+    assert_eq!(w.devices[alice].group(&g).await.unwrap().members.len(), 2);
+    w.catch_up(bob).await;
+    w.say(bob, &g, "back").await;
+    assert_eq!(w.devices[alice].texts(&g).await, vec!["before", "while banned", "back"]);
+    assert!(w.notes.is_empty(), "{:?}", w.notes);
+}
+
+#[tokio::test]
+async fn a_lifted_ban_opens_the_link_again() {
+    let mut w = World::new();
+    let alice = w.person().await;
+    let bob = w.person().await;
+    let g = w.create(alice, GroupKind::Public, "Square", true).await;
+    let link = w.devices[alice].group(&g).await.unwrap().link.unwrap();
+    w.open_link(bob, &link).await;
+    w.catch_up(bob).await;
+
+    w.act(alice, &g, OpBody::Ban { who: w.pk(bob) }).await.unwrap();
+    assert_eq!(w.devices[bob].group(&g).await.unwrap().membership, "banned");
+    w.act(alice, &g, OpBody::Unban { who: w.pk(bob) }).await.unwrap();
+    assert_eq!(w.devices[bob].group(&g).await.unwrap().membership, "banned", "bob no longer listens");
+
+    // What bob knows says banned; the history he gets now says otherwise.
+    let v = w.open_link(bob, &link).await;
+    assert_eq!(v.membership, "joining");
+    w.catch_up(bob).await;
+    w.synced(bob, &g).await;
+    let v = w.devices[bob].group(&g).await.unwrap();
+    assert_eq!((v.membership.as_str(), v.can_post), ("joined", true));
+    assert_eq!(w.devices[alice].group(&g).await.unwrap().members.len(), 2);
+    assert!(w.notes.is_empty(), "{:?}", w.notes);
 }

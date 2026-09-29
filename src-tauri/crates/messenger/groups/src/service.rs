@@ -113,6 +113,30 @@ pub struct GroupView {
     pub link: Option<String>,
     /// Events that wait for a key this device does not have yet.
     pub undecrypted: i64,
+    /// The key messages are sealed with now (members only).
+    pub key: Option<KeyView>,
+}
+
+/// What a member may know about the current key: never the key itself.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyView {
+    /// Short fingerprint: the first bytes of a hash of the key.
+    pub id: String,
+    /// 1 for the key the group was created with, then one more per change.
+    pub version: u32,
+    pub cipher: String,
+    /// `random` (private: handed to each member) | `link` (public: derived from the link).
+    pub source: String,
+    pub link_epoch: u32,
+    /// The operation that brought it, by its author's clock.
+    pub since: i64,
+    pub by: String,
+    /// `create` | `rotate_key` | `rotate_link` | `remove` | `ban` | `admit`
+    pub reason: String,
+    /// This device holds it.
+    pub held: bool,
+    /// `good` | `rotate` (a former member knows it) | `deliver` (someone still waits for it)
+    pub status: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,7 +314,9 @@ impl GroupService {
             if row.membership == MEMBERSHIP_JOINED || row.membership == MEMBERSHIP_JOINING {
                 if s.disbanded {
                     row.membership = MEMBERSHIP_DISBANDED.into();
-                } else if s.is_banned(me) {
+                } else if row.membership == MEMBERSHIP_JOINED && s.is_banned(me) {
+                    // Joining, what I know may be older than the ban's
+                    // lifting: `maintain` decides once the history is here.
                     row.membership = MEMBERSHIP_BANNED.into();
                 } else if row.membership == MEMBERSHIP_JOINED && !s.is_member(me) {
                     row.membership = MEMBERSHIP_REMOVED.into();
@@ -366,6 +392,10 @@ impl GroupService {
             },
             _ => None,
         };
+        let key = match (log.as_ref(), joined) {
+            (Some(l), true) => self.key_view(l).await?,
+            _ => None,
+        };
         Ok(GroupView {
             chat_id: repo::group_chat_id(&row.id),
             kind: row.kind.clone(),
@@ -386,8 +416,50 @@ impl GroupService {
             // What was said before I came is not mine to read when the
             // group keeps its history closed: that is not a missing key.
             undecrypted: repo::count_pending(&self.store, &row.id, state.and_then(|s| s.member(me)).map(|m| m.joined_at).unwrap_or(0)).await?,
+            key,
             id: row.id,
         })
+    }
+
+    async fn key_view(&self, log: &OpLog) -> Result<Option<KeyView>> {
+        let s = log.state();
+        let Some(current) = s.current_key.clone() else { return Ok(None) };
+        // The last applied operation that brought it: a key may come back
+        // only by an operation that carries it again.
+        let Some(op) = log
+            .ordered()
+            .filter(|o| o.key.as_ref() == Some(&current) && log.rejection(&o.id()).is_none())
+            .last()
+        else {
+            return Ok(None);
+        };
+        let reason = match &op.body {
+            OpBody::Create { .. } => "create",
+            OpBody::RotateKey => "rotate_key",
+            OpBody::RotateLink { .. } => "rotate_link",
+            OpBody::Remove { .. } => "remove",
+            OpBody::Ban { .. } => "ban",
+            OpBody::Admit { .. } => "admit",
+            _ => "other",
+        };
+        let version = s.keys.iter().position(|k| k == &current).map_or(s.keys.len(), |i| i + 1);
+        Ok(Some(KeyView {
+            id: current.0.clone(),
+            version: version as u32,
+            cipher: "AES-256-GCM".into(),
+            source: if s.kind == GroupKind::Public { "link" } else { "random" }.into(),
+            link_epoch: s.link_epoch,
+            since: op.created_at,
+            by: op.author.as_hex().to_string(),
+            reason: reason.into(),
+            held: self.key(&s.group_id, &current).await?.is_some(),
+            status: match log.key_status() {
+                KeyStatus::Good => "good",
+                KeyStatus::Rotate => "rotate",
+                KeyStatus::Deliver(_) => "deliver",
+            }
+            .into(),
+        }))
     }
 
     /// A public link is shared by any member. A private one (it only says
@@ -819,9 +891,8 @@ impl GroupService {
                 let view = self.view_of(existing, &me).await?;
                 return Ok((view, Outcome::default()));
             }
-            if existing.membership == MEMBERSHIP_BANNED {
-                return Err(MessengerError::Invalid("group_author_banned".into()));
-            }
+            // A ban here is only what I knew when I stopped listening: it
+            // may be lifted since. The group's log answers, not this row.
         }
         let mut row = GroupRow {
             id: link.group_id.clone(),
@@ -887,9 +958,14 @@ impl GroupService {
         }
         let Some(log) = self.log(group_id).await? else { return Ok(Outcome::default()) };
         let s = log.state();
-        if s.kind != GroupKind::Public || s.disbanded || s.is_banned(&me) {
+        if s.kind != GroupKind::Public || s.disbanded {
             self.refresh_row(group_id, &me, None).await?;
             return Ok(Outcome { events: vec![Self::updated(group_id)], ..Default::default() });
+        }
+        if s.is_banned(&me) {
+            // Perhaps not any more: the history that is coming may lift it.
+            // `maintain` gives the answer once it is here.
+            return Ok(Outcome::default());
         }
         if s.is_member(&me) {
             self.refresh_row(group_id, &me, Some(MEMBERSHIP_JOINED)).await?;
@@ -945,9 +1021,18 @@ impl GroupService {
     }
 
     /// What a manager's device does by itself when the key needs care.
+    /// Also, the history of a group I am joining is here: if its log
+    /// still bans me, that is the answer.
     pub async fn maintain(&self, keys: &Keys, group_id: &str) -> Result<Outcome> {
         let me = me_of(keys);
         let Some(row) = repo::get(&self.store, group_id).await? else { return Ok(Outcome::default()) };
+        if row.membership == MEMBERSHIP_JOINING {
+            if !self.log(group_id).await?.is_some_and(|l| l.state().is_banned(&me)) {
+                return Ok(Outcome::default());
+            }
+            self.refresh_row(group_id, &me, Some(MEMBERSHIP_BANNED)).await?;
+            return Ok(Outcome { events: vec![Self::updated(group_id)], resubscribe: true, ..Default::default() });
+        }
         if row.membership != MEMBERSHIP_JOINED {
             return Ok(Outcome::default());
         }

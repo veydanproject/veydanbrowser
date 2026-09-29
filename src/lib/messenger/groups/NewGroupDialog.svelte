@@ -95,7 +95,16 @@
         onkeydown={(e) => { if (e.key === 'Enter' && name.trim()) create(); }} />
       <textarea class="field" rows="2" bind:value={about} maxlength="500" placeholder={$t('msg_group_about')} disabled={busy}></textarea>
       {#if kind === 'private'}
-        <label class="check"><input type="checkbox" bind:checked={history} disabled={busy} /><span>{$t('msg_group_history_for_new')}</span></label>
+        <div class="option">
+          <div class="option-info">
+            <span>{$t('msg_group_history_for_new')}</span>
+            <span class="option-hint">{$t(history ? 'msg_group_note_history_on' : 'msg_group_note_history_off')}</span>
+          </div>
+          <button class="toggle" class:on={history} role="switch" aria-checked={history} aria-label={$t('msg_group_history_for_new')}
+            disabled={busy} onclick={() => (history = !history)}></button>
+        </div>
+      {:else}
+        <p class="hint">{$t('msg_group_note_public')}</p>
       {/if}
       {#if error}<div class="error-msg">{error}</div>{/if}
       <button class="btn btn-primary" disabled={busy || !name.trim()} onclick={create}>{$t('msg_group_create')}</button>
@@ -142,7 +151,12 @@
   }
   .field:focus { outline: none; border-color: var(--accent-border); }
   .mono { font-family: var(--font-mono); font-size: var(--fs-xs); overflow-wrap: anywhere; }
-  .check { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-xs); color: var(--text-2); line-height: 1.4; }
+  .option {
+    display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3);
+    border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-2);
+  }
+  .option-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-sm); line-height: 1.4; }
+  .option-hint { font-size: var(--fs-xs); color: var(--text-3); }
   .found { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius-md); background: var(--surface-2); border: 1px solid var(--border); overflow-wrap: anywhere; }
   .hint { margin: 0; font-size: var(--fs-xs); color: var(--text-3); line-height: 1.5; }
   .hint.bad { color: var(--danger-text); }

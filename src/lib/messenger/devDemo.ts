@@ -127,6 +127,7 @@ export function buildDemo(): DemoData {
     picture: '', relay: 'wss://node-1.veydan.net', owner: ME, membership: 'joined', my_role: 'owner', muted: false, can_post: true, history_for_new: true,
     members: [member(ME, 'owner', now - day * 20), member(boris, 'admin', now - day * 19), member(alice, 'moderator', now - day * 18), member(daria, 'member', now - day * 3, true)],
     banned: [bot], requests: [vera], undecrypted: 0,
+    key: { id: 'e0aa8b956aaf838d50ee6ab5d8622273', version: 3, cipher: 'AES-256-GCM', source: 'random', link_epoch: 0, since: now - day * 5, by: ME, reason: 'remove', held: true, status: 'good' },
     link: `veydan://group/${gid('7a')}?t=private&r=wss%3A%2F%2Fnode-1.veydan.net&o=${ME}&n=%D0%9A%D0%BE%D0%BC%D0%B0%D0%BD%D0%B4%D0%B0&m=${ME},${boris}`,
   };
   const square: MessengerGroup = {
@@ -134,11 +135,12 @@ export function buildDemo(): DemoData {
     picture: '', relay: 'wss://node-1.veydan.net', owner: boris, membership: 'joined', my_role: 'member', muted: false, can_post: true, history_for_new: true,
     members: [member(boris, 'owner', now - day * 40), member(alice, 'admin', now - day * 39), member(ME, 'member', now - day * 2), member(gleb, 'member', now - day)],
     banned: [], requests: [], undecrypted: 3,
+    key: { id: '5a0f3c395349207ca3117c7e8590da77', version: 1, cipher: 'AES-256-GCM', source: 'link', link_epoch: 0, since: now - day * 40, by: boris, reason: 'create', held: true, status: 'deliver' },
     link: `veydan://group/${gid('8b')}?t=public&r=wss%3A%2F%2Fnode-1.veydan.net&o=${boris}&n=Veydan&s=M_ASAN9VOjsg94VjUdQvzIk-0vXXcmv_mjLOLp-neys&e=0`,
   };
   const left: MessengerGroup = {
     ...square, id: gid('9c'), chat_id: `group:${gid('9c')}`, name: 'Старая группа', about: '', membership: 'removed', my_role: null, can_post: false,
-    members: [member(boris, 'owner', now - day * 40)], undecrypted: 0, link: null,
+    members: [member(boris, 'owner', now - day * 40)], undecrypted: 0, link: null, key: null,
   };
   const groups = [team, square, left];
   for (const g of groups) {

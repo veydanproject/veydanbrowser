@@ -121,6 +121,9 @@ impl GroupsDriver {
 
         let fresh: Vec<String> = {
             let mut synced = self.synced.lock().await;
+            // A group I stopped listening to has missed things: when I listen
+            // again (a lifted ban, a second join), its history is asked anew.
+            synced.retain(|g| ids.contains(g));
             ids.into_iter().filter(|g| synced.insert(g.clone())).collect()
         };
         if !fresh.is_empty() {

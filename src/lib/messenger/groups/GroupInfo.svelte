@@ -7,7 +7,8 @@
 -->
 <script lang="ts">
   import { get } from 'svelte/store';
-  import { t } from '$lib/i18n';
+  import { t, locale, type TranslationKey } from '$lib/i18n';
+  import { formatEpochDate, formatTime } from '$lib/utils';
   import { groupError } from './errors';
   import Icon from '$lib/Icon.svelte';
   import ContextMenu, { type MenuEntry } from '$lib/components/ui/ContextMenu.svelte';
@@ -20,7 +21,7 @@
   import { chatStore } from '../chats/chatStore.svelte';
   import { confirmStore } from '../shared/confirm.svelte';
   import { longpress } from '../shared/longpress';
-  import { type GroupAction, type MessengerGroup, type MessengerGroupMember } from '../api';
+  import { type GroupAction, type MessengerGroup, type MessengerGroupKey, type MessengerGroupMember } from '../api';
 
   const tr = (key: string, params?: Record<string, string>) => get(t)(key as "msg_you", params);
 
@@ -60,6 +61,14 @@
     if (await confirmStore.ask(text, cta, true)) await act(a);
   }
 
+  /** Unbanning does not bring anyone back: offer to invite them. */
+  async function unban(who: string) {
+    if (!(await act({ op: 'unban', who }))) return;
+    if (await confirmStore.ask($t('msg_group_unban_invite', { name: nameStore.label(who) }), $t('msg_group_invite'), false)) {
+      await run(() => groupStore.invite(group.id, who));
+    }
+  }
+
   function startEdit() {
     name = group.name; about = group.about; history = group.history_for_new; editing = true;
   }
@@ -75,14 +84,13 @@
 
   function openMenu(e: MouseEvent | { x: number; y: number }, m: MessengerGroupMember) {
     if ('preventDefault' in e) e.preventDefault();
+    if (!entriesFor(m).length) return;
     const x = 'clientX' in e ? e.clientX : e.x;
     const y = 'clientY' in e ? e.clientY : e.y;
     menu = { open: true, x, y, m };
   }
 
-  const items = $derived.by((): MenuEntry[] => {
-    const m = menu.m;
-    if (!m) return [];
+  function entriesFor(m: MessengerGroupMember): MenuEntry[] {
     const who = nameStore.label(m.pubkey);
     const list: MenuEntry[] = [];
     if (!m.is_me) list.push({ label: $t('msg_group_member_write'), icon: 'message-circle', onselect: () => { chatStore.openPeer(m.pubkey).catch(() => {}); onclose(); } });
@@ -101,7 +109,28 @@
       list.push({ label: $t('msg_group_member_ban'), icon: 'ban', danger: true, onselect: () => sure($t('msg_group_ban_confirm', { name: who }), $t('msg_group_member_ban'), { op: 'ban', who: m.pubkey }) });
     }
     return list;
-  });
+  }
+
+  const items = $derived(menu.m ? entriesFor(menu.m) : []);
+
+  const when = (unix: number) => `${formatEpochDate(unix, $locale)}, ${formatTime(new Date(unix * 1000).toISOString(), $locale)}`;
+
+  /** A key younger than this is still reaching everyone. */
+  const FRESH_SECS = 24 * 3600;
+  type Tone = 'ok' | 'fresh' | 'bad';
+  /** Red: something is wrong with the key; yellow: it is new or still being handed out; green: settled. */
+  function keyTone(k: MessengerGroupKey): Tone {
+    if (!k.held || k.status === 'rotate') return 'bad';
+    if (k.status === 'deliver' || Date.now() / 1000 - k.since < FRESH_SECS) return 'fresh';
+    return 'ok';
+  }
+  function keyLabel(k: MessengerGroupKey): TranslationKey {
+    if (!k.held) return 'msg_group_key_status_missing';
+    if (k.status !== 'good') return `msg_group_key_status_${k.status}`;
+    return keyTone(k) === 'fresh' ? 'msg_group_key_status_fresh' : 'msg_group_key_status_good';
+  }
+  /** Fingerprint in groups of four, the way people compare them aloud. */
+  const fingerprint = (id: string) => id.match(/.{1,4}/g)?.join(' ') ?? id;
 
   async function leave() {
     if (await confirmStore.ask($t('msg_group_leave_confirm', { name: group.name }), $t('msg_group_leave'), true)) await act({ op: 'leave' });
@@ -130,7 +159,11 @@
         <input class="field" type="text" bind:value={name} maxlength="64" placeholder={$t('msg_group_name')} disabled={busy} />
         <textarea class="field" rows="3" bind:value={about} maxlength="500" placeholder={$t('msg_group_about')} disabled={busy}></textarea>
         {#if group.kind === 'private'}
-          <label class="check"><input type="checkbox" bind:checked={history} disabled={busy} /><span>{$t('msg_group_history_for_new')}</span></label>
+          <div class="option">
+            <span class="option-text">{$t('msg_group_history_for_new')}</span>
+            <button class="toggle" class:on={history} role="switch" aria-checked={history} aria-label={$t('msg_group_history_for_new')}
+              disabled={busy} onclick={() => (history = !history)}></button>
+          </div>
         {/if}
         <div class="row">
           <button class="btn btn-primary btn-sm" disabled={busy || !name.trim()} onclick={save}>{$t('msg_group_save')}</button>
@@ -152,6 +185,29 @@
         {#if manager}<button class="btn btn-ghost btn-sm" onclick={startEdit}><Icon name="pencil" size={13} />{$t('msg_group_edit')}</button>{/if}
       {/if}
     </section>
+
+    {#if joined && group.key}
+      {@const k = group.key}
+      {@const tone = keyTone(k)}
+      <section class="key {tone}" aria-label={$t('msg_group_key')}
+        title={k.source === 'link' ? $t('msg_group_key_source_link', { n: String(k.link_epoch + 1) }) : $t('msg_group_key_source_random')}>
+        <div class="key-head">
+          <Icon name="key" size={13} />
+          <span class="key-name">{$t('msg_group_key')} <b>v{k.version}</b></span>
+          <span class="key-cipher">{k.cipher}</span>
+          <span class="key-status">{$t(keyLabel(k))}</span>
+        </div>
+        <div class="key-meta">
+          {$t('msg_group_key_since')} {when(k.since)} · {$t(`msg_group_key_reason_${k.reason}` as 'msg_group_key_reason_other')} · {nameStore.label(k.by)}
+        </div>
+        <code class="key-fp">{fingerprint(k.id)}</code>
+        {#if !k.held}
+          <p class="key-note">{$t('msg_group_key_missing')}</p>
+        {:else if k.status !== 'good'}
+          <p class="key-note">{$t(`msg_group_key_status_${k.status}_hint` as 'msg_group_key_status_rotate_hint')}</p>
+        {/if}
+      </section>
+    {/if}
 
     {#if error}<div class="error-msg">{error}</div>{/if}
 
@@ -185,7 +241,7 @@
       <ul class="list">
         {#each group.members as m (m.pubkey)}
           <li>
-            <button class="person as-button" oncontextmenu={(e) => openMenu(e, m)} onclick={(e) => openMenu(e, m)}
+            <button class="person as-button" class:still={!entriesFor(m).length} oncontextmenu={(e) => openMenu(e, m)} onclick={(e) => openMenu(e, m)}
               use:longpress={{ onpress: (p) => openMenu(p, m) }}>
               <Avatar url={nameStore.picture(m.pubkey)} label={nameStore.label(m.pubkey)} seed={m.pubkey} size={34} />
               <span class="who">
@@ -208,7 +264,7 @@
             <li class="person">
               <Avatar url={nameStore.picture(b)} label={nameStore.label(b)} seed={b} size={34} />
               <span class="who"><span class="who-name">{nameStore.label(b)}</span><code>{shortKey(b)}</code></span>
-              <button class="btn btn-ghost btn-sm" disabled={busy} onclick={() => act({ op: 'unban', who: b })}>{$t('msg_group_unban')}</button>
+              <button class="btn btn-ghost btn-sm" disabled={busy} onclick={() => unban(b)}>{$t('msg_group_unban')}</button>
             </li>
           {/each}
         </ul>
@@ -248,7 +304,8 @@
     border: 1px solid var(--border); border-radius: var(--radius-field); padding: 8px 10px; resize: vertical;
   }
   .field:focus { outline: none; border-color: var(--accent-border); }
-  .check { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-xs); color: var(--text-2); text-align: left; line-height: 1.4; }
+  .option { display: flex; align-items: center; gap: var(--sp-3); width: 100%; text-align: left; }
+  .option-text { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--text-2); line-height: 1.4; }
   .row { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
   .state { padding: var(--sp-2) var(--sp-3); border-radius: var(--radius-md); background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); font-size: var(--fs-xs); line-height: 1.45; }
   .block { display: flex; flex-direction: column; gap: var(--sp-2); }
@@ -259,6 +316,8 @@
   .person { display: flex; align-items: center; gap: var(--sp-3); padding: 6px 8px; border-radius: var(--radius-sm); min-width: 0; }
   .as-button { width: 100%; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
   .as-button:hover { background: var(--surface-row-hover); }
+  .as-button.still { cursor: default; }
+  .as-button.still:hover { background: none; }
   .who { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
   .who-name { font-size: var(--fs-sm); font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .who code { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-3); }
@@ -267,6 +326,16 @@
   .role { flex-shrink: 0; font-size: var(--fs-2xs); font-weight: var(--fw-bold); padding: 2px 7px; border-radius: var(--radius-pill); background: var(--surface-3); color: var(--text-2); }
   .role.owner { background: var(--accent-tint); color: var(--accent-text-2); }
   .role.admin { background: var(--success-bg); color: var(--success-text, var(--success)); }
+  .key { display: flex; flex-direction: column; gap: 3px; padding: var(--sp-2) var(--sp-3); border-radius: var(--radius-md); border: 1px solid var(--success-border); background: var(--success-bg); --tone: var(--success-text, var(--success)); font-size: var(--fs-xs); line-height: 1.4; }
+  .key.fresh { border-color: var(--warn-border); background: var(--warn-bg); --tone: var(--warn-text); }
+  .key.bad { border-color: var(--danger-border); background: var(--danger-bg); --tone: var(--danger-text); }
+  .key-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; color: var(--tone); }
+  .key-name { color: var(--text); font-weight: var(--fw-semibold); }
+  .key-cipher { color: var(--text-3); font-size: var(--fs-2xs); }
+  .key-status { margin-left: auto; flex-shrink: 0; font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--tone); }
+  .key-meta { color: var(--text-2); overflow-wrap: anywhere; }
+  .key-fp { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-3); letter-spacing: 0.2px; }
+  .key-note { margin: 2px 0 0; color: var(--tone); }
   .icon { border: none; background: none; color: var(--text-2); cursor: pointer; display: inline-flex; padding: 6px; border-radius: var(--radius-sm); }
   .icon:hover { color: var(--text); background: var(--surface-3); }
   .danger { color: var(--danger-text); }

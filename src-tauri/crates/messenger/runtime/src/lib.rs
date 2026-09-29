@@ -40,7 +40,7 @@ pub use messenger_media::{MediaKind, MediaServerInput, MediaServerView, Transfer
 pub use messenger_contacts::book::{parse_key, ContactPatch};
 pub use messenger_contacts::{ContactView, ProfileInput, ProfileView};
 pub use messenger_identity::{CreatedIdentity, Identity};
-pub use messenger_groups::{GroupKind, GroupView, InviteView, MemberView, OpBody as GroupOp, Role as GroupRole};
+pub use messenger_groups::{GroupKind, GroupView, InviteView, KeyView as GroupKeyView, MemberView, OpBody as GroupOp, Role as GroupRole};
 pub use relays::{ManifestInfo, RelayService, RelayView};
 
 /// Facts for the host's status screen. Never contains secrets.
