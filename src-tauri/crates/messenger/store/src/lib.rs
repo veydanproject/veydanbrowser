@@ -16,6 +16,7 @@ pub mod cursors;
 pub mod dm_relations;
 pub mod dm_routes;
 pub mod events_raw;
+pub mod groups;
 pub mod identity;
 pub mod media;
 pub mod messages;

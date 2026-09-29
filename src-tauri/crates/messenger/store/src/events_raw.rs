@@ -76,6 +76,21 @@ pub async fn count(store: &Store) -> Result<i64> {
         .map_err(storage)
 }
 
+/// Forget the wire events that carry this tag value, so that they are
+/// taken again when they arrive (a group that was removed and re-joined).
+pub async fn forget_tagged(store: &Store, kind: u16, value: &str) -> Result<u64> {
+    if value.len() < 32 || !value.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Ok(0);
+    }
+    let res = sqlx::query("DELETE FROM msg_events_raw WHERE kind = ? AND raw_json LIKE ?")
+        .bind(kind as i64)
+        .bind(format!("%\"{value}\"%"))
+        .execute(store.pool())
+        .await
+        .map_err(storage)?;
+    Ok(res.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,3 +122,4 @@ mod tests {
         assert_eq!(ids[0].as_hex(), "1".repeat(64));
     }
 }
+
