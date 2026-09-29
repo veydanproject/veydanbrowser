@@ -19,8 +19,8 @@ use messenger_store::{dm_routes, Store};
 use nostr::key::Keys;
 use nostr::nips::nip19::ToBech32;
 use nostr::prelude::PublicKey;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, RwLock};
 
 pub const UI_EVENT_DM_MESSAGE: &str = "dm.message";
 pub const UI_EVENT_DM_UPDATED: &str = "dm.updated";
@@ -44,23 +44,56 @@ pub struct Prepared {
     pub tracking_id: String,
     pub to_peer: Outbound,
     pub to_self: Option<Outbound>,
+    /// Control signals that accompany the message (a request's
+    /// `dm_accept`), to be published after it.
+    pub followups: Vec<Outbound>,
+    /// The message was a request: the peer is now my contact and the host
+    /// should put them in the address book.
+    pub became_contact: bool,
+    pub events: Vec<UiEvent>,
 }
 
 #[derive(Clone)]
 pub struct DmService {
-    store: Store,
-    contacts: ContactService,
-    profiles: ProfileService,
-    clock: Arc<dyn Clock>,
+    pub(crate) store: Store,
+    pub(crate) contacts: ContactService,
+    pub(crate) profiles: ProfileService,
+    pub(crate) clock: Arc<dyn Clock>,
     /// Incoming messages at or after this time count as unread even when
     /// they predate the session (they arrived while we were offline).
     /// Negative: not set, the session start is used.
-    unread_floor: Arc<AtomicI64>,
+    pub(crate) unread_floor: Arc<AtomicI64>,
+    /// Relationship gate. On by default; off means every chat behaves as
+    /// `full_chat` (tests of the plain message flow, emergency switch).
+    pub(crate) gate: Arc<AtomicBool>,
+    /// Keys of the running session, for answers the handler must sign
+    /// itself (confirm-back). `None` while locked: no answers are sent.
+    pub(crate) signer: Arc<RwLock<Option<Keys>>>,
 }
 
 impl DmService {
     pub fn new(store: Store, contacts: ContactService, profiles: ProfileService, clock: Arc<dyn Clock>) -> Self {
-        Self { store, contacts, profiles, clock, unread_floor: Arc::new(AtomicI64::new(-1)) }
+        Self {
+            store,
+            contacts,
+            profiles,
+            clock,
+            unread_floor: Arc::new(AtomicI64::new(-1)),
+            gate: Arc::new(AtomicBool::new(true)),
+            signer: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    pub fn set_gate(&self, on: bool) {
+        self.gate.store(on, Ordering::SeqCst);
+    }
+
+    pub fn gate_enabled(&self) -> bool {
+        self.gate.load(Ordering::SeqCst)
+    }
+
+    pub fn set_signer(&self, keys: Option<Keys>) {
+        *self.signer.write().unwrap() = keys;
     }
 
     /// See `unread_floor`. The runtime sets it to the end of the previous
@@ -138,6 +171,10 @@ impl DmService {
                 title = format!("{}…{}", &n[..12.min(n.len())], &n[n.len().saturating_sub(4)..]);
             }
         }
+        let (mode, can_send) = match &peer {
+            Some(pk) => self.mode_of(&r.id, pk).await?,
+            None => (crate::relationship::ScreenMode::FullChat, true),
+        };
         Ok(ChatView {
             id: r.id,
             kind: r.kind,
@@ -152,8 +189,8 @@ impl DmService {
             last_preview: r.last_preview,
             pinned: r.pinned,
             archived: r.archived,
-            mode: "full_chat".into(),
-            can_send: true,
+            mode: mode.as_str().into(),
+            can_send,
         })
     }
 
@@ -259,6 +296,8 @@ impl DmService {
                 _ => return Err(MessengerError::Invalid("reply target is not in this chat".into())),
             }
         }
+        let me_hex = Self::me(keys);
+        let gate = self.gate_outbound(&chat.id, peer, &me_hex, content_type == repo::CT_TEXT).await?;
         let content = envelope.encode();
         let created_at = self.next_created_at(&chat.id).await?;
         let (id, wire_id, to_peer, to_self) = self.publish_pair(keys, peer, &content, created_at, reply_to).await?;
@@ -286,7 +325,16 @@ impl DmService {
         let line = text.as_deref().map(preview).unwrap_or_else(|| format!("[{content_type}]"));
         chats::touch(&self.store, &chat.id, created_at, Some(&line), false).await?;
         let message = self.message(&id).await?.ok_or_else(|| MessengerError::Storage("message vanished".into()))?;
-        Ok(Prepared { message, tracking_id: id, to_peer, to_self })
+        let (mut followups, mut events, mut became_contact) = (Vec::new(), Vec::new(), false);
+        if gate.request {
+            // The text is stored first, the accept follows it: a request
+            // must never arrive as an accept without its message.
+            let result = self.act_with(keys, peer, crate::relationship::Action::Request, true).await?;
+            followups = result.outbounds;
+            events = result.events;
+            became_contact = true;
+        }
+        Ok(Prepared { message, tracking_id: id, to_peer, to_self, followups, became_contact, events })
     }
 
     async fn own_target(&self, keys: &Keys, message_id: &str) -> Result<(MessageRow, PubKey)> {
@@ -296,6 +344,14 @@ impl DmService {
             .ok_or_else(|| MessengerError::Invalid("unknown message".into()))?;
         if row.sender_pubkey != Self::me(keys) {
             return Err(MessengerError::Invalid("only your own messages can be changed for everyone".into()));
+        }
+        if self.gate_enabled() {
+            if let Some(peer) = chats::get(&self.store, &row.chat_id).await?.and_then(|c| c.peer_pubkey).as_deref().and_then(PubKey::parse) {
+                let r = self.load_relation(&peer).await?;
+                if r.blocked || r.peer_signal == crate::relationship::PeerSignal::Blocked {
+                    return Err(MessengerError::Invalid("dm_blocked".into()));
+                }
+            }
         }
         if row.deleted_at.is_some() {
             return Err(MessengerError::Invalid("message is deleted".into()));
@@ -367,7 +423,7 @@ impl DmService {
         repo::set_text(&self.store, message_id, text, created_at).await?;
         chats::recompute_last(&self.store, &row.chat_id).await?;
         let message = self.message(message_id).await?.ok_or_else(|| MessengerError::Storage("message vanished".into()))?;
-        Ok(Prepared { message, tracking_id: id, to_peer, to_self })
+        Ok(Prepared { message, tracking_id: id, to_peer, to_self, followups: vec![], became_contact: false, events: vec![] })
     }
 
     /// Retract one of our messages for everyone.
@@ -380,7 +436,7 @@ impl DmService {
         repo::mark_deleted(&self.store, message_id, created_at).await?;
         chats::recompute_last(&self.store, &row.chat_id).await?;
         let message = self.message(message_id).await?.ok_or_else(|| MessengerError::Storage("message vanished".into()))?;
-        Ok(Prepared { message, tracking_id: id, to_peer, to_self })
+        Ok(Prepared { message, tracking_id: id, to_peer, to_self, followups: vec![], became_contact: false, events: vec![] })
     }
 
     /// Hide a message on this device only (works for incoming ones too).
@@ -436,6 +492,7 @@ impl DmService {
             msg.created_at < ctx.session_started_at || matches!(msg.envelope.source, EventSource::Sync { .. });
         let chat = chats::ensure_dm(&self.store, peer.as_hex()).await?;
         let id = msg.rumor_id.as_hex().to_string();
+        let mut effects: Vec<Effect> = Vec::new();
 
         // Other NIP-17 clients send bare text; read it as a text message.
         let envelope = Envelope::parse(&msg.content).unwrap_or_else(|_| Envelope::text(&msg.content));
@@ -454,6 +511,15 @@ impl DmService {
                 ),
                 other => (other.to_string(), envelope.str_field("text").map(String::from), false, None, None),
             };
+
+        // Relationship gate for regular messages of the peer. A copy of
+        // something already stored skips it and dedups below.
+        if !from_me && !hidden && repo::get(&self.store, &id).await?.is_none() {
+            match self.gate_inbound(&chat.id, &peer, msg.created_at.secs(), historical).await? {
+                Some(mut e) => effects.append(&mut e),
+                None => return Ok(vec![]),
+            }
+        }
 
         let inserted = repo::insert(
             &self.store,
@@ -493,6 +559,12 @@ impl DmService {
             return Ok(vec![]);
         }
 
+        if content_type == repo::CT_CONTROL {
+            let action = envelope.str_field("action").map(String::from);
+            return self
+                .on_control(&chat.id, &peer, from_me, action.as_deref(), msg.created_at.secs(), historical)
+                .await;
+        }
         if hidden {
             let Some(target) = target else { return Ok(vec![]) };
             return self.apply_change(&chat.id, &content_type, &target, &msg, text_of(&envelope)).await;
@@ -522,10 +594,10 @@ impl DmService {
         chats::recompute_last(&self.store, &chat.id).await?;
 
         let view = self.message(&id).await?.ok_or_else(|| MessengerError::Storage("message vanished".into()))?;
-        let mut effects = vec![Effect::Emit(UiEvent {
+        effects.push(Effect::Emit(UiEvent {
             name: UI_EVENT_DM_MESSAGE.into(),
             payload: serde_json::json!({ "chat_id": chat.id, "message": view, "historical": historical }),
-        })];
+        }));
         if live_incoming && !view.deleted && !self.contacts.is_muted(&peer).await? {
             let title = self.chat(&chat.id).await?.map(|c| c.title).unwrap_or_default();
             effects.push(Effect::Notify { title, body: Some(line), chat_id: Some(chat.id.clone()) });
@@ -618,6 +690,7 @@ mod tests {
             let contacts = ContactService::new(store.clone(), profiles.clone());
             let clock = Arc::new(TestClock(AtomicI64::new(1_000_000)));
             let dm = DmService::new(store, contacts.clone(), profiles, clock.clone());
+            dm.set_gate(false);
             Self { keys, dm, contacts, clock, session_started_at: 999_000 }
         }
 
@@ -941,5 +1014,311 @@ mod tests {
         assert_eq!(names(&bob.receive_from(&missed.to_peer, true).await), vec!["dm.message"], "no notification");
         bob.receive_from(&old.to_peer, true).await;
         assert_eq!(bob.dm.open_chat(&alice.pk()).await.unwrap().unread, 1, "only the missed one");
+    }
+
+    // ─── Stage 5b: the relationship matrix in motion ────────────────────────
+
+    use crate::relationship::Action;
+
+    async fn gated() -> Party {
+        let p = Party::new().await;
+        p.dm.set_gate(true);
+        p.dm.set_signer(Some(p.keys.clone()));
+        p
+    }
+
+    /// Wraps of a list of outbounds that the peer can open.
+    fn for_peer(outs: &[Outbound]) -> Vec<WireEvent> {
+        outs.iter()
+            .filter_map(|o| match o {
+                Outbound::PublishToInbox { event, .. } => Some(event.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn sends(effects: &[Effect]) -> Vec<Outbound> {
+        effects.iter().filter_map(|e| if let Effect::Send(o) = e { Some(o.clone()) } else { None }).collect()
+    }
+
+    async fn mode(p: &Party, peer: &Party) -> String {
+        p.dm.relation(&peer.pk()).await.unwrap().mode
+    }
+
+    async fn visible(p: &Party, peer: &Party) -> Vec<String> {
+        let chat = p.dm.open_chat(&peer.pk()).await.unwrap();
+        p.dm.messages(&chat.id, None, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| if m.content_type == "system" { format!("[{}]", m.text.unwrap()) } else { m.text.unwrap_or_default() })
+            .collect()
+    }
+
+    fn reason(e: MessengerError) -> String {
+        match e {
+            MessengerError::Invalid(s) => s,
+            other => other.to_string(),
+        }
+    }
+
+    /// Alice and Bob in a mutual chat.
+    async fn mutual() -> (Party, Party) {
+        let alice = gated().await;
+        let bob = gated().await;
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "hi", None).await.unwrap();
+        bob.receive(&peer_event(&p)).await;
+        for w in for_peer(&p.followups) {
+            bob.receive(&w).await;
+        }
+        let acc = bob.dm.act(&bob.keys, &alice.pk(), Action::Accept).await.unwrap();
+        for w in for_peer(&acc.outbounds) {
+            for back in for_peer(&sends(&alice.receive(&w).await)) {
+                bob.receive(&back).await;
+            }
+        }
+        assert_eq!(mode(&alice, &bob).await, "full_chat");
+        assert_eq!(mode(&bob, &alice).await, "full_chat");
+        (alice, bob)
+    }
+
+    #[tokio::test]
+    async fn request_accept_and_confirm_back() {
+        let alice = gated().await;
+        let bob = gated().await;
+        assert_eq!(mode(&alice, &bob).await, "first_contact");
+
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "hello, may I?", None).await.unwrap();
+        assert!(p.became_contact);
+        let accepts = for_peer(&p.followups);
+        assert_eq!(accepts.len(), 1, "the request carries one accept");
+        assert_eq!(mode(&alice, &bob).await, "request_sent");
+        assert_eq!(visible(&alice, &bob).await, vec!["hello, may I?", "[request_sent]"]);
+        let chat = alice.dm.open_chat(&bob.pk()).await.unwrap();
+        assert!(!chat.can_send, "one message until approval");
+        assert_eq!(chat.last_preview.as_deref(), Some("hello, may I?"), "system lines are not previews");
+        let err = alice.dm.prepare_text(&alice.keys, &bob.pk(), "and another", None).await.unwrap_err();
+        assert_eq!(reason(err), "dm_waiting_approval");
+
+        // Bob: the text, then the accept.
+        let fx = bob.receive(&peer_event(&p)).await;
+        assert!(names(&fx).contains(&"notify".to_string()));
+        assert_eq!(mode(&bob, &alice).await, "request_received");
+        assert!(bob.receive(&accepts[0]).await.iter().all(|e| !matches!(e, Effect::Send(_))), "a stranger's accept is not confirmed");
+        assert_eq!(visible(&bob, &alice).await, vec!["[request_received]", "hello, may I?"], "one system line only");
+        assert_eq!(reason(bob.dm.prepare_text(&bob.keys, &alice.pk(), "hi", None).await.unwrap_err()), "dm_answer_request_first");
+
+        // A pushy sender forging a second message gets nowhere.
+        let spam = wrap(&alice.keys, &bob.pk(), &Envelope::text("answer me!").encode(), 1_000_050, None).unwrap();
+        assert!(bob.receive(&spam.to_peer).await.is_empty());
+        assert_eq!(visible(&bob, &alice).await.len(), 2);
+
+        // Bob accepts.
+        let acc = bob.dm.act(&bob.keys, &alice.pk(), Action::Accept).await.unwrap();
+        assert_eq!(acc.relation.mode, "full_chat");
+        assert!(acc.relation.can_send);
+        let bob_accept = for_peer(&acc.outbounds);
+        assert_eq!(bob_accept.len(), 1);
+
+        // Alice learns it, shows it once, and confirms back.
+        let fx = alice.receive(&bob_accept[0]).await;
+        assert_eq!(mode(&alice, &bob).await, "full_chat");
+        let back = for_peer(&sends(&fx));
+        assert_eq!(back.len(), 1, "confirm-back");
+        assert!(visible(&alice, &bob).await.contains(&"[request_accepted]".to_string()));
+
+        // Bob gets the confirm-back: no echo, no second line.
+        let fx = bob.receive(&back[0]).await;
+        assert!(sends(&fx).is_empty(), "no ping-pong");
+        assert_eq!(visible(&bob, &alice).await.iter().filter(|l| *l == "[request_accepted]").count(), 1);
+
+        // Now both talk freely.
+        let m = bob.dm.prepare_text(&bob.keys, &alice.pk(), "sure", None).await.unwrap();
+        assert!(m.followups.is_empty() && !m.became_contact);
+        alice.receive(&peer_event(&m)).await;
+        alice.dm.prepare_text(&alice.keys, &bob.pk(), "great", None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn accept_overtaking_the_request_text_does_not_lose_it() {
+        let alice = gated().await;
+        let bob = gated().await;
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "the request", None).await.unwrap();
+        bob.receive(&for_peer(&p.followups)[0]).await;
+        assert_eq!(mode(&bob, &alice).await, "request_received");
+        bob.receive(&peer_event(&p)).await;
+        assert!(visible(&bob, &alice).await.contains(&"the request".to_string()));
+    }
+
+    #[tokio::test]
+    async fn decline_then_a_new_request() {
+        let alice = gated().await;
+        let bob = gated().await;
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "hi", None).await.unwrap();
+        bob.receive(&peer_event(&p)).await;
+        bob.receive(&for_peer(&p.followups)[0]).await;
+        assert!(bob.dm.act(&alice.keys, &alice.pk(), Action::Accept).await.is_err(), "not with a foreign key on my own pubkey");
+
+        let d = bob.dm.act(&bob.keys, &alice.pk(), Action::Decline).await.unwrap();
+        assert_eq!(d.relation.mode, "request_declined_by_me");
+        assert!(bob.dm.act(&bob.keys, &alice.pk(), Action::Decline).await.is_err(), "nothing left to decline");
+        assert!(visible(&bob, &alice).await.contains(&"hi".to_string()), "the request stays visible");
+
+        alice.receive(&for_peer(&d.outbounds)[0]).await;
+        assert_eq!(mode(&alice, &bob).await, "request_declined");
+        assert_eq!(reason(alice.dm.prepare_text(&alice.keys, &bob.pk(), "please", None).await.unwrap_err()), "dm_request_declined");
+
+        // Bob changes his mind: adding Alice tells her at once.
+        let again = bob.dm.act(&bob.keys, &alice.pk(), Action::Request).await.unwrap();
+        assert_eq!(again.relation.mode, "request_sent");
+        let fx = alice.receive(&for_peer(&again.outbounds)[0]).await;
+        assert_eq!(mode(&alice, &bob).await, "full_chat", "she still has him as a contact");
+        for back in for_peer(&sends(&fx)) {
+            bob.receive(&back).await;
+        }
+        assert_eq!(mode(&bob, &alice).await, "full_chat");
+    }
+
+    #[tokio::test]
+    async fn block_is_absolute_and_symmetric_and_unblock_restores() {
+        let (alice, bob) = mutual().await;
+        let b = alice.dm.act(&alice.keys, &bob.pk(), Action::Block).await.unwrap();
+        assert_eq!(b.relation.mode, "blocked");
+        assert_eq!(alice.dm.blocked_peers().await.unwrap(), vec![bob.pk().as_hex().to_string()]);
+        assert_eq!(reason(alice.dm.prepare_text(&alice.keys, &bob.pk(), "x", None).await.unwrap_err()), "dm_blocked");
+
+        // Before Bob learns about it his message is already dropped by Alice.
+        let m = bob.dm.prepare_text(&bob.keys, &alice.pk(), "are you there?", None).await.unwrap();
+        assert!(alice.receive(&peer_event(&m)).await.is_empty());
+        assert!(!visible(&alice, &bob).await.contains(&"are you there?".to_string()));
+
+        bob.receive(&for_peer(&b.outbounds)[0]).await;
+        assert_eq!(mode(&bob, &alice).await, "blocked_by_peer");
+        assert_eq!(reason(bob.dm.prepare_text(&bob.keys, &alice.pk(), "x", None).await.unwrap_err()), "dm_blocked_by_peer");
+        assert_eq!(reason(bob.dm.prepare_edit(&bob.keys, &m.message.id, "y").await.unwrap_err()), "dm_blocked");
+
+        let u = alice.dm.act(&alice.keys, &bob.pk(), Action::Unblock).await.unwrap();
+        assert_eq!(u.relation.mode, "full_chat");
+        let signals = for_peer(&u.outbounds);
+        assert_eq!(signals.len(), 2, "unblock, then accept");
+        for w in &signals {
+            bob.receive(w).await;
+        }
+        assert_eq!(mode(&bob, &alice).await, "full_chat");
+        bob.dm.prepare_text(&bob.keys, &alice.pk(), "welcome back", None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn removing_a_contact_tells_the_peer() {
+        let (alice, bob) = mutual().await;
+        let r = alice.dm.act(&alice.keys, &bob.pk(), Action::Remove).await.unwrap();
+        assert_eq!(r.relation.mode, "mutual_reconnect");
+        bob.receive(&for_peer(&r.outbounds)[0]).await;
+        assert_eq!(mode(&bob, &alice).await, "removed_by_peer");
+        assert!(visible(&bob, &alice).await.contains(&"[contact_left]".to_string()));
+        assert_eq!(reason(bob.dm.prepare_text(&bob.keys, &alice.pk(), "why?", None).await.unwrap_err()), "dm_contact_removed_by_peer");
+        // Bob removes her too: both sides are clean.
+        let r2 = bob.dm.act(&bob.keys, &alice.pk(), Action::Remove).await.unwrap();
+        assert_eq!(r2.relation.mode, "both_removed");
+        assert!(for_peer(&r2.outbounds).len() == 1);
+    }
+
+    #[tokio::test]
+    async fn pending_request_is_withdrawn_quietly_or_with_notice() {
+        // Added silently, never wrote: removal says nothing.
+        let alice = gated().await;
+        let bob = gated().await;
+        let add = alice.dm.act(&alice.keys, &bob.pk(), Action::Request).await.unwrap();
+        assert!(add.outbounds.is_empty(), "adding a contact is silent");
+        assert!(alice.dm.act(&alice.keys, &bob.pk(), Action::Remove).await.unwrap().outbounds.is_empty());
+
+        // Wrote a request, then withdrew it.
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "hi", None).await.unwrap();
+        bob.receive(&peer_event(&p)).await;
+        bob.receive(&for_peer(&p.followups)[0]).await;
+        let w = alice.dm.act(&alice.keys, &bob.pk(), Action::Remove).await.unwrap();
+        let sig = for_peer(&w.outbounds);
+        assert_eq!(sig.len(), 1);
+        // Bob already saw an explicit accept, so "cancelled" does not apply
+        // over it; his request stays answerable until he decides.
+        bob.receive(&sig[0]).await;
+        assert_eq!(mode(&bob, &alice).await, "request_received");
+    }
+
+    #[tokio::test]
+    async fn replayed_history_in_any_order_keeps_the_newest_signal() {
+        let alice = gated().await;
+        let mut bob = gated().await;
+        bob.session_started_at = 2_000_000; // everything below is history
+        bob.dm.act(&bob.keys, &alice.pk(), Action::Request).await.unwrap();
+        let accept = wrap(&alice.keys, &bob.pk(), &Envelope::control("dm_accept").encode(), 100, None).unwrap();
+        let block = wrap(&alice.keys, &bob.pk(), &Envelope::control("dm_block").encode(), 200, None).unwrap();
+        // Newest first, as a relay may deliver.
+        assert!(sends(&bob.receive_from(&block.to_peer, true).await).is_empty());
+        let fx = bob.receive_from(&accept.to_peer, true).await;
+        assert!(sends(&fx).is_empty(), "historical accepts are never answered");
+        assert_eq!(mode(&bob, &alice).await, "blocked_by_peer");
+
+        // And in the natural order a historical accept is applied, silently.
+        let carol = gated().await;
+        let mut dave = gated().await;
+        dave.session_started_at = 2_000_000;
+        dave.dm.act(&dave.keys, &carol.pk(), Action::Request).await.unwrap();
+        let a = wrap(&carol.keys, &dave.pk(), &Envelope::control("dm_accept").encode(), 100, None).unwrap();
+        assert!(sends(&dave.receive_from(&a.to_peer, true).await).is_empty());
+        assert_eq!(mode(&dave, &carol).await, "full_chat");
+    }
+
+    #[tokio::test]
+    async fn a_reply_from_a_client_without_signals_counts_as_approval() {
+        let alice = gated().await;
+        let bob = gated().await;
+        alice.dm.prepare_text(&alice.keys, &bob.pk(), "hello from veydan", None).await.unwrap();
+        assert_eq!(mode(&alice, &bob).await, "request_sent");
+        let reply = wrap(&bob.keys, &alice.pk(), "hello from another app", 1_000_100, None).unwrap();
+        alice.receive(&reply.to_peer).await;
+        assert_eq!(mode(&alice, &bob).await, "full_chat");
+        alice.dm.prepare_text(&alice.keys, &bob.pk(), "nice", None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn blocked_peer_cannot_slip_in_while_i_am_offline() {
+        let (alice, mut bob) = mutual().await;
+        bob.dm.act(&bob.keys, &alice.pk(), Action::Block).await.unwrap();
+        // Bob goes offline at 1_000_200, Alice writes at 1_000_300, Bob's
+        // next session starts at 1_001_000 and sees it as history.
+        bob.dm.set_unread_floor(1_000_200);
+        bob.session_started_at = 1_001_000;
+        let m = wrap(&alice.keys, &bob.pk(), &Envelope::text("psst").encode(), 1_000_300, None).unwrap();
+        assert!(bob.receive_from(&m.to_peer, true).await.is_empty());
+        assert!(!visible(&bob, &alice).await.contains(&"psst".to_string()));
+    }
+
+    #[tokio::test]
+    async fn my_other_device_learns_my_decisions_from_self_copies() {
+        let alice = gated().await;
+        let bob = gated().await;
+        let p = alice.dm.prepare_text(&alice.keys, &bob.pk(), "hi", None).await.unwrap();
+        bob.receive(&peer_event(&p)).await;
+        bob.receive(&for_peer(&p.followups)[0]).await;
+        let acc = bob.dm.act(&bob.keys, &alice.pk(), Action::Accept).await.unwrap();
+        let own_copy = acc.outbounds.iter().find_map(|o| match o {
+            Outbound::PublishOwn { event } => Some(event.clone()),
+            _ => None,
+        });
+
+        // Bob's second device saw the request and now sees Bob's accept.
+        let device2 = Party::with_keys(bob.keys.clone()).await;
+        device2.dm.set_gate(true);
+        device2.receive(&peer_event(&p)).await;
+        device2.receive(&for_peer(&p.followups)[0]).await;
+        assert_eq!(device2.dm.relation(&alice.pk()).await.unwrap().mode, "request_received");
+        device2.receive(&own_copy.unwrap()).await;
+        assert_eq!(device2.dm.relation(&alice.pk()).await.unwrap().mode, "full_chat");
+        // The first device ignores its own copy.
+        assert!(bob.receive(acc.outbounds.iter().find_map(|o| match o {
+            Outbound::PublishOwn { event } => Some(event),
+            _ => None,
+        }).unwrap()).await.is_empty());
     }
 }
