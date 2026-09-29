@@ -178,6 +178,11 @@ export const messengerTranslations = {
     msg_status_refresh: 'Refresh',
     // Relationship
     msg_chat_menu: 'Chat actions',
+    msg_mobile_disabled: 'The messenger is turned off. Turn it on in the app settings.',
+    msg_mobile_chat_missing: 'This chat is not on this device.',
+    msg_mobile_setting: 'Messenger (alpha)',
+    msg_mobile_setting_on: 'on',
+    msg_mobile_setting_off: 'off',
     msg_chat_cannot_send: 'You cannot write to this chat right now',
     msg_rel_first_contact: 'You have not talked to {name} yet. The first message is sent as a request: one text message until they accept.',
     msg_rel_mutual_reconnect: 'You talked before. The next message is sent as a new request.',
@@ -459,6 +464,11 @@ export const messengerTranslations = {
     msg_status_refresh: 'Обновить',
     // Relationship
     msg_chat_menu: 'Действия с чатом',
+    msg_mobile_disabled: 'Мессенджер выключен. Включите его в настройках приложения.',
+    msg_mobile_chat_missing: 'Этого чата нет на устройстве.',
+    msg_mobile_setting: 'Мессенджер (альфа)',
+    msg_mobile_setting_on: 'включён',
+    msg_mobile_setting_off: 'выключен',
     msg_chat_cannot_send: 'Сейчас писать в этот чат нельзя',
     msg_rel_first_contact: 'Вы ещё не общались с {name}. Первое сообщение уйдёт как запрос: одно текстовое сообщение, пока его не примут.',
     msg_rel_mutual_reconnect: 'Вы общались раньше. Следующее сообщение уйдёт как новый запрос.',

@@ -13,6 +13,7 @@
   import ChatWindow from '../dm/ChatWindow.svelte';
   import ContactsPanel from '../contacts/ContactsPanel.svelte';
   import SettingsView from './SettingsView.svelte';
+  import ConfirmHost from '../shared/ConfirmHost.svelte';
   import type { MessengerChat } from '../api';
 
   type View = 'chat' | 'contacts' | 'settings';
@@ -102,6 +103,7 @@
     </div>
   </div>
   <NewChatDialog bind:open={newChat} onopened={() => (view = 'chat')} />
+  <ConfirmHost />
 {/if}
 
 <style>

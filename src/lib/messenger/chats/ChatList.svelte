@@ -8,6 +8,8 @@
   import Avatar from '../contacts/Avatar.svelte';
   import { chatStore } from './chatStore.svelte';
   import { listStamp } from '../shared/time';
+  import { confirmStore } from '../shared/confirm.svelte';
+  import { longpress } from '../shared/longpress';
   import type { MessengerChat } from '../api';
 
   interface Props {
@@ -38,14 +40,15 @@
       { label: $t('msg_chat_mark_read'), icon: 'check-check', disabled: c.unread === 0, onselect: () => chatStore.markRead(c.id) },
       { label: c.archived ? $t('msg_chat_unarchive') : $t('msg_chat_archive'), icon: c.archived ? 'archive-restore' : 'archive', onselect: () => chatStore.setArchived(c.id, !c.archived) },
       { type: 'separator' },
-      { label: $t('msg_chat_delete'), icon: 'trash-2', danger: true, onselect: () => { if (confirm($t('msg_chat_delete_confirm', { name: c.title }))) chatStore.deleteChat(c.id); } },
+      { label: $t('msg_chat_delete'), icon: 'trash-2', danger: true, onselect: async () => { if (await confirmStore.ask($t('msg_chat_delete_confirm', { name: c.title }), $t('msg_chat_delete'), true)) chatStore.deleteChat(c.id); } },
     ];
   });
 </script>
 
 {#snippet row(c: MessengerChat)}
   <li>
-    <button class="chat" class:active={chatStore.activeId === c.id} onclick={() => onopen(c)} oncontextmenu={(e) => openMenu(e, c)}>
+    <button class="chat" class:active={chatStore.activeId === c.id} onclick={() => onopen(c)} oncontextmenu={(e) => openMenu(e, c)}
+      use:longpress={{ onpress: (p) => (menu = { open: true, x: p.x, y: p.y, chat: c }) }}>
       <Avatar url={c.picture} label={c.title} seed={c.peer_pubkey} size={42} />
       <span class="body">
         <span class="top">

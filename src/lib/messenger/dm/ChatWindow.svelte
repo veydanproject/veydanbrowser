@@ -15,6 +15,7 @@
   import { chatStore } from '../chats/chatStore.svelte';
   import { messengerStore } from '../store.svelte';
   import { dayKey, dayLabel } from '../shared/time';
+  import { confirmStore } from '../shared/confirm.svelte';
   import { dmErrorCode, mediaErrorCode, messengerError, type DmAction, type MessengerChat, type MessengerMessage } from '../api';
 
   interface Props {
@@ -77,8 +78,8 @@
   }
 
   async function act(a: DmAction) {
-    if (a === "block" && !confirm($t("msg_rel_confirm_block", { name: chat.title }))) return;
-    if (a === "remove" && chat.is_contact && chat.mode === "full_chat" && !confirm($t("msg_rel_confirm_remove", { name: chat.title }))) return;
+    if (a === "block" && !(await confirmStore.ask($t("msg_rel_confirm_block", { name: chat.title }), $t("msg_rel_cta_block"), true))) return;
+    if (a === "remove" && chat.is_contact && chat.mode === "full_chat" && !(await confirmStore.ask($t("msg_rel_confirm_remove", { name: chat.title }), $t("msg_rel_cta_remove"), true))) return;
     error = ""; acting = true;
     try { await chatStore.act(chat.id, a); }
     catch (e) { error = explain(e); }
@@ -101,7 +102,7 @@
     list.push({ type: "separator" });
     list.push({ label: chat.pinned ? $t("msg_chat_unpin") : $t("msg_chat_pin"), icon: "pin", onselect: () => chatStore.setPinned(chat.id, !chat.pinned) });
     list.push({ label: chat.archived ? $t("msg_chat_unarchive") : $t("msg_chat_archive"), icon: "archive", onselect: () => chatStore.setArchived(chat.id, !chat.archived) });
-    list.push({ label: $t("msg_chat_delete"), icon: "trash-2", danger: true, onselect: () => { if (confirm($t("msg_chat_delete_confirm", { name: chat.title }))) chatStore.deleteChat(chat.id); } });
+    list.push({ label: $t("msg_chat_delete"), icon: "trash-2", danger: true, onselect: async () => { if (await confirmStore.ask($t("msg_chat_delete_confirm", { name: chat.title }), $t("msg_chat_delete"), true)) { await chatStore.deleteChat(chat.id); onback?.(); } } });
     return list;
   });
 
@@ -274,6 +275,11 @@
   .offline { color: var(--warn-text); }
   .icon { border: none; background: none; color: var(--text-2); cursor: pointer; display: inline-flex; padding: 6px; border-radius: var(--radius-sm); }
   .icon:hover { color: var(--text); background: var(--surface-3); }
+  @media (pointer: coarse) {
+    .icon { padding: 10px; }
+    .head { padding-inline: var(--sp-2); gap: var(--sp-2); }
+    .to-bottom { width: 44px; height: 44px; }
+  }
   .narrow-only { display: none; }
   @media (max-width: 860px) { .narrow-only { display: inline-flex; } }
   .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-3) 0; display: flex; flex-direction: column; }

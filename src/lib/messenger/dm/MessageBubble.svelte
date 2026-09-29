@@ -7,6 +7,7 @@
   import Icon from '$lib/Icon.svelte';
   import { clock } from '../shared/time';
   import { linkify } from '../shared/linkify';
+  import { longpress } from '../shared/longpress';
   import { messengerApi } from '../api';
   import type { MessengerMessage } from '../api';
 
@@ -33,7 +34,8 @@
 
 <div class="line" class:out class:first class:highlighted data-mid={m.id}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="bubble" class:deleted={m.deleted} class:failed={m.status === 'failed'} oncontextmenu={(e) => onmenu(e, m)}>
+  <div class="bubble" class:deleted={m.deleted} class:failed={m.status === 'failed'} oncontextmenu={(e) => onmenu(e, m)}
+    use:longpress={{ onpress: (p) => onmenu(new MouseEvent('contextmenu', { clientX: p.x, clientY: p.y }), m) }}>
     {#if m.reply_to && !m.deleted}
       <button class="reply" onclick={() => onreplyclick(m.reply_to!.id)}>
         <span class="reply-who">{m.reply_to.sender_pubkey === m.sender_pubkey && out || m.reply_to.sender_pubkey !== m.sender_pubkey && !out ? $t('msg_you') : peerTitle}</span>
@@ -83,6 +85,12 @@
   .bubble.failed { border-color: var(--danger-border); }
   .text { font-size: var(--fs-sm); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
   .text a { color: var(--accent-text-2); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+  /* Touch: a long press opens the menu, so it must not start a selection. */
+  @media (pointer: coarse) {
+    .text { user-select: none; -webkit-user-select: none; }
+    .bubble { max-width: 86%; -webkit-touch-callout: none; }
+    .line { padding-inline: var(--sp-3); }
+  }
   .tomb { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--text-3); font-style: italic; }
   .meta { display: inline-flex; align-items: center; gap: 5px; align-self: flex-end; font-size: var(--fs-2xs); color: var(--text-3); line-height: 1; }
   .status { display: inline-flex; }

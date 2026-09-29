@@ -76,6 +76,7 @@
   .small { font-size: var(--fs-xs); }
   .actions { display: flex; gap: var(--sp-2); justify-content: flex-end; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
   .grid .wide { grid-column: 1 / -1; }
   .grid label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--text-3); }
   .grid input, .grid textarea {

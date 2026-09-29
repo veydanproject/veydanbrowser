@@ -35,7 +35,7 @@
   const pick = (c: MessengerContact) => start(c.pubkey);
 </script>
 
-<Dialog bind:open title={$t('msg_newchat_title')} width="440px">
+<Dialog bind:open title={$t('msg_newchat_title')} width="min(440px, calc(100vw - 24px))">
   <div class="body">
     <input type="text" bind:value={key} placeholder={$t('msg_newchat_placeholder')} spellcheck="false" disabled={busy}
       onkeydown={(e) => { if (e.key === 'Enter' && looksLikeKey) start(key.trim()); }} />

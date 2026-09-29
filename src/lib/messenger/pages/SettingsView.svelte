@@ -10,13 +10,19 @@
   import MediaServersPanel from '../media/MediaServersPanel.svelte';
   import DebugFeed from '../debug/DebugFeed.svelte';
 
+  interface Props {
+    /** The host screen already shows the title (phone). */
+    compact?: boolean;
+  }
+  let { compact = false }: Props = $props();
+
   type Tab = 'profile' | 'network' | 'diagnostics';
   let tab = $state<Tab>('profile');
   const s = $derived(messengerStore.status);
 </script>
 
 <div class="settings">
-  <h2>{$t('msg_settings_title')}</h2>
+  {#if !compact}<h2>{$t('msg_settings_title')}</h2>{/if}
   <div class="tabs" role="tablist">
     {#each ['profile', 'network', 'diagnostics'] as const as id}
       <button role="tab" class="tab" class:active={tab === id} aria-selected={tab === id} onclick={() => (tab = id)}>
@@ -58,7 +64,8 @@
 <style>
   .settings { display: flex; flex-direction: column; gap: var(--sp-4); max-width: 680px; width: 100%; margin-inline: auto; }
   h2 { margin: 0; font-size: var(--fs-xl); font-weight: var(--fw-extrabold); letter-spacing: -0.4px; }
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .tab { white-space: nowrap; }
   .tab {
     border: none; background: none; font: inherit; font-size: var(--fs-sm); font-weight: var(--fw-semibold);
     color: var(--text-2); padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;

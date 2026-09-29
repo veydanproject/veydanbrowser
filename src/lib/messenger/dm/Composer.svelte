@@ -143,4 +143,9 @@
   .icon { border: none; background: none; color: var(--text-3); cursor: pointer; display: inline-flex; padding: 4px; border-radius: var(--radius-sm); }
   .icon:hover { color: var(--text); background: var(--surface-3); }
   .warn { font-size: var(--fs-2xs); color: var(--danger-text); }
+  @media (pointer: coarse) {
+    .composer { padding-bottom: calc(var(--sp-2) + var(--sab, 0px)); }
+    textarea { font-size: 16px; min-height: 44px; border-radius: 22px; padding: 10px 14px; }
+    .send { width: 44px; height: 44px; }
+  }
 </style>

@@ -150,7 +150,11 @@
   .dot.connecting { background: var(--color-warning); }
   .dot.paused { background: var(--danger-text); }
   .icon-spacer { width: 28px; }
-  .add { display: flex; gap: var(--sp-2); }
+  .add { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+  @media (max-width: 560px) {
+    .add input:first-child { flex: 1 1 100%; }
+    .add input.key { flex: 1 1 140px; }
+  }
   .add input {
     flex: 1; font: inherit; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text);
     background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px;

@@ -626,14 +626,51 @@ pub async fn messenger_dm_send_file(
     to: String,
     path: String,
     caption: Option<String>,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<MessageView> {
-    state
-        .messenger
-        .runtime()?
-        .dm_send_file(&to, Path::new(&path), caption.as_deref())
-        .await
-        .map_err(map_err)
+    let rt = state.messenger.runtime()?;
+    let local = import_picked(&app, &path, rt.config().data_dir()).await?;
+    rt.dm_send_file(&to, &local, caption.as_deref()).await.map_err(map_err)
+}
+
+/// A picked file as a local path. Desktop pickers give paths. Android gives
+/// `content://` URIs that only the system can read: those are copied into
+/// the messenger's own folder first (the copy is also what the chat shows
+/// for a sent file).
+async fn import_picked(app: &tauri::AppHandle, picked: &str, data_dir: &Path) -> CmdResult<std::path::PathBuf> {
+    if !picked.starts_with("content://") {
+        let _ = (app, data_dir);
+        return Ok(std::path::PathBuf::from(picked));
+    }
+    let source = crate::commands::notes::attachments::open_source(app, picked)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = data_dir.join("outgoing").join(format!("{stamp:x}"));
+    // The display name comes from another app: keep only its last segment.
+    let name: String = source
+        .name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("file")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    let name = if name.trim().is_empty() || name.starts_with('.') { "file".to_string() } else { name };
+    let dest = dir.join(name);
+    let out = dest.clone();
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        std::fs::create_dir_all(&dir).map_err(AppError::io)?;
+        let mut input = (source.open)().map_err(AppError::io)?;
+        let mut file = std::fs::File::create(&out).map_err(AppError::io)?;
+        std::io::copy(&mut input, &mut file).map_err(AppError::io)?;
+        Ok(())
+    })
+    .await
+    .map_err(AppError::io)??;
+    Ok(dest)
 }
 
 /// Path of the attachment once it is on this device; `null` when an
@@ -675,9 +712,30 @@ pub async fn messenger_media_cancel(transfer_id: String, state: tauri::State<'_,
 pub async fn messenger_media_save_as(
     message_id: String,
     dest: String,
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
-    state.messenger.runtime()?.media_save_as(&message_id, Path::new(&dest)).await.map_err(map_err)
+    let rt = state.messenger.runtime()?;
+    if dest.starts_with("content://") {
+        // Android: the destination is a document the system opens for us.
+        let src = rt
+            .media_local_path(&message_id)
+            .await
+            .map_err(map_err)?
+            .ok_or_else(|| AppError::Other("err.not_downloaded".into()))?;
+        return tokio::task::spawn_blocking(move || -> CmdResult<()> {
+            use tauri_plugin_fs::{FilePath, FsExt, OpenOptions};
+            let url = tauri::Url::parse(&dest).map_err(AppError::other)?;
+            let mut opts = OpenOptions::new();
+            opts.write(true).truncate(true);
+            let mut out = app.fs().open(FilePath::Url(url), opts).map_err(AppError::io)?;
+            std::io::copy(&mut std::fs::File::open(&src).map_err(AppError::io)?, &mut out).map_err(AppError::io)?;
+            Ok(())
+        })
+        .await
+        .map_err(AppError::io)?;
+    }
+    rt.media_save_as(&message_id, Path::new(&dest)).await.map_err(map_err)
 }
 
 /// Inline preview (`data:` url) for images, audio and video that are on

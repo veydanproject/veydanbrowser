@@ -36,5 +36,6 @@
     background: none; color: var(--text-2); display: inline-flex; align-items: center; justify-content: center;
   }
   .attach:hover:not(:disabled) { color: var(--text); background: var(--surface-3); }
+  @media (pointer: coarse) { .attach { width: 44px; height: 44px; } }
   .attach:disabled { opacity: 0.4; cursor: default; }
 </style>
