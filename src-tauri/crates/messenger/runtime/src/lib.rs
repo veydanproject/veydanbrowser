@@ -322,10 +322,9 @@ impl MessengerRuntime {
         for ev in p.events {
             let _ = self.ui.send(ev);
         }
-        let pool = self.relays.pool().await;
-        // A failed pump is not an error for the caller: the message is
-        // stored and queued, the outbox retries.
-        let _ = self.outbox.pump(pool.as_ref()).await;
+        // Published in the background: the caller gets the stored message at
+        // once and the status follows as an event.
+        self.outbox.kick();
         for ev in self.dm.sync_statuses().await? {
             let _ = self.ui.send(ev);
         }
@@ -396,8 +395,7 @@ impl MessengerRuntime {
             let _ = self.ui.send(ev);
         }
         let _ = self.ui.send(UiEvent { name: "chats.updated".into(), payload: serde_json::json!({}) });
-        let pool = self.relays.pool().await;
-        let _ = self.outbox.pump(pool.as_ref()).await;
+        self.outbox.kick();
         Ok(result.relation)
     }
 
@@ -409,8 +407,7 @@ impl MessengerRuntime {
     pub async fn dm_retry(&self, message_id: &str) -> Result<()> {
         let local_id = self.dm.outbox_id_for_retry(message_id).await?;
         self.outbox.retry_now(&local_id).await?;
-        let pool = self.relays.pool().await;
-        let _ = self.outbox.pump(pool.as_ref()).await;
+        self.outbox.kick();
         for ev in self.dm.sync_statuses().await? {
             let _ = self.ui.send(ev);
         }
@@ -512,8 +509,7 @@ impl MessengerRuntime {
 
     async fn enqueue_and_pump(&self, out: Outbound) -> Result<()> {
         self.outbox.enqueue(out).await?;
-        let pool = self.relays.pool().await;
-        self.outbox.pump(pool.as_ref()).await?;
+        self.outbox.kick();
         Ok(())
     }
 

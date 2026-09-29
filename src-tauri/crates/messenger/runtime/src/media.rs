@@ -5,7 +5,7 @@
 //! module (blobs and transfers) and the outbox. Uploads run in background
 //! tasks; progress reaches the host as `transfer.progress` events.
 
-use crate::relays::RelayService;
+
 use crate::{MessengerRuntime, REGION_FALLBACK};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use messenger_core::traits::UiEvent;
@@ -18,7 +18,6 @@ use messenger_store::media::{DIR_DOWN, DIR_UP};
 use messenger_transport::{Manifest, EMBEDDED_MANIFEST_JSON};
 use nostr::key::Keys;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tokio::sync::broadcast;
 
 pub const UI_EVENT_TRANSFER: &str = "transfer.progress";
@@ -44,7 +43,6 @@ struct UploadJob {
     dm: DmService,
     media: MediaService,
     outbox: Outbox,
-    relays: Arc<RelayService>,
     ui: broadcast::Sender<UiEvent>,
     keys: Keys,
 }
@@ -79,8 +77,7 @@ impl UploadJob {
                         if let Some(own) = p.to_self {
                             let _ = self.outbox.enqueue(own).await;
                         }
-                        let pool = self.relays.pool().await;
-                        let _ = self.outbox.pump(pool.as_ref()).await;
+                        self.outbox.kick();
                         if let Ok(events) = self.dm.sync_statuses().await {
                             for ev in events {
                                 let _ = self.ui.send(ev);
@@ -182,7 +179,6 @@ impl MessengerRuntime {
             dm: self.dm.clone(),
             media: self.media.clone(),
             outbox: self.outbox.clone(),
-            relays: self.relays.clone(),
             ui: self.ui.clone(),
             keys,
         }

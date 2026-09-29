@@ -26,7 +26,7 @@ const HISTORY_WAIT_FOR_RELAY: Duration = Duration::from_secs(60);
 const PUMP_INTERVAL: Duration = Duration::from_secs(5);
 /// Setting that remembers when this device was last online.
 const KEY_LAST_SEEN: &str = "session.last_seen";
-const LAST_SEEN_EVERY_TICKS: u64 = 6;
+const LAST_SEEN_EVERY_SECS: i64 = 30;
 
 /// Effects go to the outbox (with an immediate pump) and to the UI channel.
 pub struct RuntimeSink {
@@ -39,9 +39,9 @@ pub struct RuntimeSink {
 impl EffectSink for RuntimeSink {
     async fn send(&self, out: Outbound) -> Result<Ack> {
         // Persist first so a crash between here and the relay ack cannot
-        // lose the request; then try right away.
+        // lose the request; the pump publishes it in the background.
         self.outbox.enqueue(out).await?;
-        self.outbox.pump(self.pool.as_ref()).await?;
+        self.outbox.kick();
         Ok(Ack { accepted_by: vec![], rejected_by: vec![] })
     }
 
@@ -127,12 +127,17 @@ impl Drop for Session {
 
 /// Retry what is due, then turn publish results into message statuses.
 async fn pump_loop(store: Store, pool: Arc<RelayPool>, outbox: Outbox, dm: DmService, ui: broadcast::Sender<UiEvent>) {
-    let mut tick: u64 = 0;
+    let mut last_seen_at = 0i64;
     loop {
-        tokio::time::sleep(PUMP_INTERVAL).await;
-        tick += 1;
-        if tick.is_multiple_of(LAST_SEEN_EVERY_TICKS) {
-            let now = SystemClock.now().secs();
+        // Whichever comes first: something was queued, or it is time to
+        // retry what failed earlier.
+        tokio::select! {
+            _ = outbox.kicked() => {}
+            _ = tokio::time::sleep(PUMP_INTERVAL) => {}
+        }
+        let now = SystemClock.now().secs();
+        if now - last_seen_at >= LAST_SEEN_EVERY_SECS {
+            last_seen_at = now;
             let _ = settings::set(&store, KEY_LAST_SEEN, &now.to_string()).await;
         }
         if let Err(e) = outbox.pump(pool.as_ref()).await {
