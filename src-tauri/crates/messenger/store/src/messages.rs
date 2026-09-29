@@ -254,6 +254,33 @@ pub async fn count_visible_outgoing(store: &Store, chat_id: &str) -> Result<i64>
     .map_err(storage)
 }
 
+pub const STATUS_UPLOADING: &str = "uploading";
+
+/// Remove one row for good (placeholders of uploads).
+pub async fn delete(store: &Store, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM msg_messages WHERE id = ?").bind(id).execute(store.pool()).await.map_err(storage)?;
+    Ok(())
+}
+
+pub async fn set_media_json(store: &Store, id: &str, media_json: &str) -> Result<()> {
+    sqlx::query("UPDATE msg_messages SET media_json = ? WHERE id = ?")
+        .bind(media_json)
+        .bind(id)
+        .execute(store.pool())
+        .await
+        .map_err(storage)?;
+    Ok(())
+}
+
+/// After a restart no upload is running: placeholders show as paused.
+pub async fn pause_uploading(store: &Store) -> Result<u64> {
+    let res = sqlx::query("UPDATE msg_messages SET status = 'paused' WHERE status = 'uploading'")
+        .execute(store.pool())
+        .await
+        .map_err(storage)?;
+    Ok(res.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

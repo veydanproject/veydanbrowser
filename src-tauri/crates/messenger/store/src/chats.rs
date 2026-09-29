@@ -98,7 +98,9 @@ pub async fn recompute_last(store: &Store, id: &str) -> Result<()> {
     sqlx::query(
         "UPDATE msg_chats SET
            last_message_at = (SELECT MAX(created_at) FROM msg_messages WHERE chat_id = ? AND is_hidden = 0 AND content_type != 'system'),
-           last_preview = (SELECT CASE WHEN deleted_at IS NULL THEN text ELSE NULL END FROM msg_messages
+           last_preview = (SELECT CASE WHEN deleted_at IS NOT NULL THEN NULL
+                                       WHEN content_type = 'media' THEN '📎 ' || COALESCE(text, json_extract(media_json, '$.name'), '')
+                                       ELSE text END FROM msg_messages
                            WHERE chat_id = ? AND is_hidden = 0 AND content_type != 'system' ORDER BY created_at DESC LIMIT 1),
            updated_at = ?
          WHERE id = ?",
