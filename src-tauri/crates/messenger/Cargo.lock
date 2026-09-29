@@ -1406,6 +1406,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "messenger-core",
+ "messenger-http",
  "messenger-store",
  "nostr",
  "reqwest",
@@ -1438,6 +1439,16 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "messenger-http"
+version = "0.1.0"
+dependencies = [
+ "messenger-core",
+ "reqwest",
+ "rustls",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]
@@ -1479,6 +1490,7 @@ dependencies = [
  "hex",
  "hmac",
  "messenger-core",
+ "messenger-http",
  "messenger-store",
  "nostr",
  "reqwest",

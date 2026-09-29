@@ -16,10 +16,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-fn net(e: impl std::fmt::Display) -> MessengerError {
-    MessengerError::Transport(e.to_string())
-}
-
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -75,11 +71,7 @@ pub trait BlobBackend: Send + Sync {
 }
 
 pub(crate) fn http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(600))
-        .build()
-        .map_err(net)
+    messenger_http::client(Duration::from_secs(10), Duration::from_secs(600))
 }
 
 fn from_reqwest(e: reqwest::Error) -> BackendError {
