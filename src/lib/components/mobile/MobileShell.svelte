@@ -16,6 +16,7 @@
   import NotesMoreSheet from '$lib/components/mobile/NotesMoreSheet.svelte';
   import AppLockGate from '$lib/components/AppLockGate.svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
+  import { messengerStore } from '$lib/messenger/store.svelte';
 
   let { children }: { children: Snippet } = $props();
 
@@ -43,6 +44,7 @@
     // Theme may have applied before the native chrome bridge was ready.
     syncAndroidChrome($theme);
     void notesLock.listen();
+    messengerStore.ensureLoaded().catch(() => {});
   });
 </script>
 

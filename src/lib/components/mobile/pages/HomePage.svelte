@@ -6,7 +6,8 @@
   import { onMount } from 'svelte';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/mobile/i18n';
-  import { APPS, loadDefaultApp } from '$lib/mobile/apps';
+  import { APPS, availableApps, loadDefaultApp } from '$lib/mobile/apps';
+  import { messengerStore } from '$lib/messenger/store.svelte';
 
   let ready = $state(false);
 
@@ -43,7 +44,7 @@
     </a>
 
     <div class="m-grid">
-      {#each APPS.filter((a) => a.id !== 'settings') as app, i (app.id)}
+      {#each availableApps(messengerStore.visible).filter((a) => a.id !== 'settings') as app, i (app.id)}
         <a href={app.route} class="m-tile" class:active={i === 0}>
           <Icon name={app.icon} size={24} />
           <span class="label">{$t(app.title)}</span>

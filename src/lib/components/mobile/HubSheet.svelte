@@ -6,7 +6,8 @@
   import { page } from '$app/state';
   import Icon from '$lib/Icon.svelte';
   import { t } from '$lib/mobile/i18n';
-  import { APPS, appForPath } from '$lib/mobile/apps';
+  import { availableApps, appForPath } from '$lib/mobile/apps';
+  import { messengerStore } from '$lib/messenger/store.svelte';
   import BottomSheet from './BottomSheet.svelte';
 
   let { open, onclose }: { open: boolean; onclose: () => void } = $props();
@@ -26,7 +27,7 @@
     <p>{$t('hub_sub')}</p>
   </div>
   <div class="m-grid">
-    {#each APPS as app (app.id)}
+    {#each availableApps(messengerStore.visible) as app (app.id)}
       <button type="button" class="m-tile" class:active={current === app.id} onclick={() => pick(app.route)}>
         <Icon name={app.icon} size={24} />
         <span class="label">{$t(app.title)}</span>

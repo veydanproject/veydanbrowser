@@ -54,6 +54,8 @@ export function notesNav(onmore: () => void, newHref = '/notes/new'): NavItem[] 
 export function navKind(pathname: string): 'root' | 'notes' | null {
   if (/^\/notes\/(?!tags$)[^/]+/.test(pathname)) return null;
   if (pathname.startsWith('/totp/scan')) return null;
+  // Messenger sub-screens (chat, contacts, settings) use the whole height.
+  if (pathname.startsWith('/messenger/')) return null;
   if (pathname.startsWith('/notes') || pathname.startsWith('/search')) return 'notes';
   return 'root';
 }

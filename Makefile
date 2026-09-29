@@ -32,6 +32,13 @@ msg-test:
 msg-check:
 	@bash scripts/messenger-boundaries.sh
 
+# Android with the messenger module compiled in.
+android-dev-msg:
+	@MESSENGER=1 bash scripts/android/dev.sh
+
+android-test-msg:
+	@MESSENGER=1 bash scripts/android/apk.sh test
+
 android-dev:
 	@bash scripts/android/dev.sh
 

@@ -23,13 +23,14 @@ done
 allowed() {
   case "$1" in
     core)      echo "" ;;
+    http)      echo "messenger-core" ;;
     store)     echo "messenger-core" ;;
     transport) echo "messenger-core" ;;
     identity)  echo "messenger-core messenger-store" ;;
     ingress)   echo "messenger-core messenger-store messenger-identity" ;;
-    contacts)  echo "messenger-core messenger-store" ;;
+    contacts)  echo "messenger-core messenger-store messenger-http" ;;
     dm)        echo "messenger-core messenger-store messenger-contacts" ;;
-    media)     echo "messenger-core messenger-store" ;;
+    media)     echo "messenger-core messenger-store messenger-http" ;;
     groups)    echo "messenger-core messenger-store messenger-media messenger-dm" ;;
     runtime)   echo "messenger-core messenger-store messenger-transport messenger-identity messenger-ingress messenger-contacts messenger-dm messenger-media messenger-groups" ;;
     testkit)   echo "messenger-core messenger-store messenger-runtime" ;;

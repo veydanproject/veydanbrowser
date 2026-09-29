@@ -24,7 +24,7 @@
 //! - `templates` — notes from the Templates folder with placeholders
 //! - `lock`     — password lock for the notes UI with auto-lock
 
-mod attachments;
+pub(crate) mod attachments;
 mod binding;
 #[cfg(desktop)]
 mod capture;

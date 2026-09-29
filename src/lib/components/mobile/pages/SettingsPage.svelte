@@ -17,6 +17,7 @@
   import { notesStore } from '$lib/store/notes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
+  import { messengerStore } from '$lib/messenger/store.svelte';
 
   const locales: { id: Locale; label: string }[] = [
     { id: 'en', label: 'English' },
@@ -161,6 +162,18 @@
       <span class="chev"><Icon name="chevron-right" size={16} /></span>
     </button>
   </div>
+
+  {#if messengerStore.compiled}
+    <div class="m-section">{$t('msg_settings_group')}</div>
+    <div class="m-list">
+      <button type="button" class="m-row" onclick={() => messengerStore.setEnabled(!messengerStore.status?.enabled).catch(() => {})}>
+        <span class="m-row-label">{$t('msg_mobile_setting')}</span>
+        <span class="m-row-value" class:ok={messengerStore.status?.enabled}>
+          {messengerStore.status?.enabled ? $t('msg_mobile_setting_on') : $t('msg_mobile_setting_off')}
+        </span>
+      </button>
+    </div>
+  {/if}
 
   <div class="m-section">{$t('settings_security')}</div>
   <div class="m-list">
