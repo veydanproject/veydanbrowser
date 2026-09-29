@@ -239,6 +239,143 @@ async fn main() {
             tokio::time::sleep(Duration::from_millis(1500)).await;
             println!("mode={} can_send={}", r.mode, r.can_send);
         }
+        "media-servers" => {
+            for s in rt.media_servers().await.unwrap_or_else(die) {
+                println!(
+                    "{:<8} {} {}  access={} secret={}  {}  [{}]",
+                    s.kind,
+                    if s.enabled { "on " } else { "off" },
+                    s.public_base,
+                    s.access_key.unwrap_or_else(|| "-".into()),
+                    if s.has_secret { "set" } else { "-" },
+                    s.source,
+                    s.id
+                );
+            }
+        }
+        "media-s3" => {
+            // media-s3 <id> <endpoint> <bucket> <access-key> <secret-key> [region]
+            if args.len() < 5 {
+                usage();
+            }
+            let v = rt
+                .media_server_put(messenger_runtime::MediaServerInput {
+                    id: Some(args[0].clone()),
+                    kind: "s3".into(),
+                    url: args[1].clone(),
+                    bucket: Some(args[2].clone()),
+                    access_key: Some(args[3].clone()),
+                    secret_key: Some(args[4].clone()),
+                    region: args.get(5).cloned(),
+                    priority: None,
+                    source: None,
+                })
+                .await
+                .unwrap_or_else(die);
+            println!("saved {} -> {}", v.id, v.public_base);
+        }
+        "media-blossom" => {
+            if args.is_empty() {
+                usage();
+            }
+            let v = rt
+                .media_server_put(messenger_runtime::MediaServerInput {
+                    kind: "blossom".into(),
+                    url: args[0].clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_or_else(die);
+            println!("saved {} -> {}", v.id, v.public_base);
+        }
+        "media-check" => {
+            if args.is_empty() {
+                usage();
+            }
+            rt.media_server_check(&args[0]).await.unwrap_or_else(die);
+            println!("ok: writable and publicly readable");
+        }
+        "send-file" => {
+            if args.len() < 2 {
+                usage();
+            }
+            let to = args.remove(0);
+            let path = PathBuf::from(args.remove(0));
+            let caption = if args.is_empty() { None } else { Some(args.join(" ")) };
+            wait_connect(&rt).await;
+            let started = std::time::Instant::now();
+            let ph = rt.dm_send_file(&to, &path, caption.as_deref()).await.unwrap_or_else(die);
+            let tid = ph.media.as_ref().and_then(|m| m["transfer_id"].as_str().map(String::from)).unwrap_or_default();
+            let mut last = 0u64;
+            loop {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let Some(t) = rt.media().transfer(&tid).await.unwrap_or_else(die) else { break };
+                if t.done_bytes != last {
+                    last = t.done_bytes;
+                    eprintln!("  {} {}/{}", t.status, t.done_bytes, t.size);
+                }
+                if matches!(t.status.as_str(), "done" | "failed" | "cancelled" | "paused") {
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                    println!(
+                        "{} {} bytes in {:.1}s {}",
+                        t.status,
+                        t.size,
+                        started.elapsed().as_secs_f32(),
+                        t.failure_reason.unwrap_or_default()
+                    );
+                    break;
+                }
+            }
+        }
+        "download" => {
+            if args.is_empty() {
+                usage();
+            }
+            let id = full_id(&rt, &args[0]).await;
+            let started = std::time::Instant::now();
+            match rt.media_download(&id, true).await.unwrap_or_else(die) {
+                Some(p) => println!("{} ({:.1}s)", p.display(), started.elapsed().as_secs_f32()),
+                None => println!("not downloaded"),
+            }
+        }
+        "transfers" => {
+            for t in rt.media().active_transfers().await.unwrap_or_else(die) {
+                println!(
+                    "{} {:<4} {:<9} {}/{} {} {}",
+                    t.id,
+                    t.direction,
+                    t.status,
+                    t.done_bytes,
+                    t.size,
+                    t.file_name,
+                    t.failure_reason.unwrap_or_default()
+                );
+            }
+        }
+        "resume" => {
+            if args.is_empty() {
+                usage();
+            }
+            wait_connect(&rt).await;
+            let started = std::time::Instant::now();
+            rt.media_resume(&args[0]).await.unwrap_or_else(die);
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let Some(t) = rt.media().transfer(&args[0]).await.unwrap_or_else(die) else { break };
+                if matches!(t.status.as_str(), "done" | "failed" | "cancelled" | "paused") {
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+                    println!(
+                        "{} {}/{} in {:.1}s {}",
+                        t.status,
+                        t.done_bytes,
+                        t.size,
+                        started.elapsed().as_secs_f32(),
+                        t.failure_reason.unwrap_or_default()
+                    );
+                    break;
+                }
+            }
+        }
         _ => usage(),
     }
     rt.shutdown().await;
