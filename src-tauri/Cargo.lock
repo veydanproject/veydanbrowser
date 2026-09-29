@@ -3659,6 +3659,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "messenger-groups"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "async-trait",
+ "base64 0.22.1",
+ "getrandom 0.3.4",
+ "hex",
+ "messenger-core",
+ "messenger-dm",
+ "messenger-store",
+ "nostr",
+ "qrcode",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+]
+
+[[package]]
 name = "messenger-http"
 version = "0.1.0"
 dependencies = [
@@ -3722,9 +3742,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "getrandom 0.3.4",
  "messenger-contacts",
  "messenger-core",
  "messenger-dm",
+ "messenger-groups",
  "messenger-identity",
  "messenger-ingress",
  "messenger-media",
@@ -4916,6 +4938,12 @@ checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-xml"
@@ -7793,7 +7821,7 @@ dependencies = [
 
 [[package]]
 name = "veydanspace"
-version = "4.0.1-alpha.9"
+version = "4.0.1-alpha.12"
 dependencies = [
  "age",
  "anyhow",

@@ -503,6 +503,30 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_blocked,
             #[cfg(feature = "messenger")]
+            commands::messenger::messenger_groups_list,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_get,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_create,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_invite,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_invites,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_answer_invite,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_open_link,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_answer_request,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_act,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_rotate_link,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_link_qr,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_forget,
+            #[cfg(feature = "messenger")]
             commands::messenger::messenger_media_servers,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_media_server_put,
@@ -1057,6 +1081,30 @@ fn run_desktop() {
             commands::messenger::messenger_dm_action,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_blocked,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_groups_list,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_get,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_create,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_invite,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_invites,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_answer_invite,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_open_link,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_answer_request,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_act,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_rotate_link,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_link_qr,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_group_forget,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_media_servers,
             #[cfg(feature = "messenger")]
