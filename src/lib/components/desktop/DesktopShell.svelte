@@ -354,6 +354,7 @@
           <a href="/messenger" class="nav-link" class:active={isActive('/messenger')}>
             <Icon name="message-circle" size={14} />
             {$t('nav_messenger')}
+            {#if messengerStore.unread > 0}<span class="nav-badge">{messengerStore.unread > 99 ? '99+' : messengerStore.unread}</span>{/if}
           </a>
         {/if}
       </nav>
@@ -601,6 +602,11 @@
     flex: 1;
   }
 
+  .nav-badge {
+    min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--radius-pill);
+    background: var(--accent); color: #fff; font-size: var(--fs-2xs); font-weight: var(--fw-bold);
+    display: inline-flex; align-items: center; justify-content: center;
+  }
   .nav-link {
     display: flex;
     align-items: center;

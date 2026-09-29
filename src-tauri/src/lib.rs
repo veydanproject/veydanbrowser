@@ -531,6 +531,10 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_media_local_path,
             #[cfg(feature = "messenger")]
+            commands::messenger::messenger_open_url,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_open,
+            #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_get,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_request,
@@ -1077,6 +1081,10 @@ fn run_desktop() {
             commands::messenger::messenger_media_data_url,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_media_local_path,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_open_url,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_media_open,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_get,
             #[cfg(feature = "messenger")]
