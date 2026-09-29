@@ -477,6 +477,26 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
             #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chats_list,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_open,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_messages,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_mark_read,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_set_pinned,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_set_archived,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_delete,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_edit,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_delete,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_retry,
+            #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_get,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_request,
@@ -969,6 +989,26 @@ fn run_desktop() {
             commands::messenger::messenger_manifest_set_region,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chats_list,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_open,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_messages,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_mark_read,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_set_pinned,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_set_archived,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_chat_delete,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_edit,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_delete,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_dm_retry,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_profile_get,
             #[cfg(feature = "messenger")]
