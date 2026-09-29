@@ -391,6 +391,49 @@ async fn main() {
             tokio::time::sleep(Duration::from_secs(3)).await;
             println!("outbox pending after 3 s: {}", rt.outbox().pending().await.unwrap_or(0));
         }
+        "send-voice" => {
+            // send-voice <to> <audio-file> [duration-ms]: the file as a voice message.
+            if args.len() < 2 {
+                usage();
+            }
+            let bytes = std::fs::read(&args[1]).unwrap_or_else(|e| {
+                eprintln!("error: {e}");
+                std::process::exit(1)
+            });
+            let mime = if args[1].ends_with(".ogg") { "audio/ogg;codecs=opus" } else { "audio/webm;codecs=opus" };
+            wait_connect(&rt).await;
+            let rec = messenger_runtime::Recording {
+                kind: messenger_runtime::MediaKind::Voice,
+                mime: mime.into(),
+                duration_ms: args.get(2).and_then(|s| s.parse().ok()),
+                waveform: Some((0..48u32).map(|i| ((i * 37) % 256) as u8).collect()),
+                bytes,
+            };
+            let ph = rt.dm_send_recording(&args[0], rec, None).await.unwrap_or_else(die);
+            let tid = ph.media.as_ref().and_then(|m| m["transfer_id"].as_str().map(String::from)).unwrap_or_default();
+            for _ in 0..200 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                match rt.media().transfer(&tid).await.unwrap_or_else(die) {
+                    Some(t) if matches!(t.status.as_str(), "done" | "failed" | "cancelled") => {
+                        println!("{} {}", t.status, t.failure_reason.unwrap_or_default());
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            flush(&rt).await;
+        }
+        "media-info" => {
+            if args.is_empty() {
+                usage();
+            }
+            let id = full_id(&rt, &args[0]).await;
+            let m = rt.dm().message(&id).await.unwrap_or_else(die).and_then(|m| m.media).unwrap_or_default();
+            for k in ["kind", "mime", "name", "size", "duration_ms"] {
+                println!("{k}: {}", m.get(k).map(|v| v.to_string()).unwrap_or_else(|| "-".into()));
+            }
+            println!("waveform: {} values", m.get("waveform").and_then(|w| w.as_array()).map(|a| a.len()).unwrap_or(0));
+        }
         _ => usage(),
     }
     rt.shutdown().await;
