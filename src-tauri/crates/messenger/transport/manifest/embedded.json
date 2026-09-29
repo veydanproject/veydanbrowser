@@ -1,8 +1,8 @@
 {
   "format": "veydan-messenger-manifest",
   "v": 1,
-  "serial": 2,
-  "issued_at": 1759100000,
+  "serial": 3,
+  "issued_at": 1790640000,
   "regions": ["default", "ru"],
   "relays": [
     {
@@ -16,6 +16,15 @@
     { "id": "pub-damus", "url": "wss://relay.damus.io", "regions": ["*"], "read": true, "write": true },
     { "id": "pub-nos", "url": "wss://nos.lol", "regions": ["*"], "read": true, "write": true }
   ],
-  "media": [],
+  "media": [
+    {
+      "id": "veydan-node-1-s3",
+      "type": "s3",
+      "url": "https://node-1.veydan.net:9000",
+      "bucket": "veydan-media",
+      "s3_region": "us-east-1",
+      "regions": ["default", "ru"]
+    }
+  ],
   "sources": []
 }

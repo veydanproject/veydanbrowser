@@ -96,10 +96,23 @@ impl ManifestAuth {
     }
 }
 
+fn default_media_kind() -> String {
+    "blossom".into()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestMedia {
     pub id: String,
     pub url: String,
+    /// `blossom` (default) or `s3`.
+    #[serde(default = "default_media_kind", rename = "type")]
+    pub kind: String,
+    /// S3 only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bucket: Option<String>,
+    /// S3 only; the signing region, not a manifest region.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub s3_region: Option<String>,
     #[serde(default)]
     pub regions: Vec<String>,
 }
@@ -204,6 +217,12 @@ impl Manifest {
         for m in &self.media {
             if m.id.trim().is_empty() || !media_ids.insert(m.id.as_str()) {
                 return Err(MessengerError::Invalid(format!("bad media server id '{}'", m.id)));
+            }
+            if !matches!(m.kind.as_str(), "blossom" | "s3") {
+                return Err(MessengerError::Invalid(format!("media server '{}' has an unknown type", m.id)));
+            }
+            if m.kind == "s3" && m.bucket.as_deref().unwrap_or("").is_empty() {
+                return Err(MessengerError::Invalid(format!("media server '{}' needs a bucket", m.id)));
             }
             if !(m.url.starts_with("https://") || m.url.starts_with("http://")) {
                 return Err(MessengerError::Invalid(format!("media server '{}' url must be http(s)", m.id)));
@@ -310,7 +329,7 @@ mod tests {
                 ManifestRelay { id: "ru-1".into(), url: "wss://ru1.example".into(), regions: vec!["ru".into()], read: true, write: true, auth: Some(ManifestAuth::Nip42) },
                 ManifestRelay { id: "any".into(), url: "wss://any.example".into(), regions: vec!["*".into()], read: true, write: false, auth: None },
             ],
-            media: vec![ManifestMedia { id: "m1".into(), url: "https://media.example".into(), regions: vec!["default".into()] }],
+            media: vec![ManifestMedia { id: "m1".into(), url: "https://media.example".into(), regions: vec!["default".into()], kind: "blossom".into(), bucket: None, s3_region: None }],
             sources: vec![ManifestSource::Http { url: "https://cfg.example/m.json".into(), regions: vec![], priority: 10 }],
         }
     }
@@ -318,7 +337,10 @@ mod tests {
     #[test]
     fn embedded_manifest_parses() {
         let m = Manifest::parse_content(EMBEDDED_MANIFEST_JSON).unwrap();
-        assert_eq!(m.serial, 2);
+        assert_eq!(m.serial, 3);
+        let media = m.media_for_region("default");
+        assert_eq!(media.len(), 1);
+        assert_eq!((media[0].kind.as_str(), media[0].bucket.as_deref()), ("s3", Some("veydan-media")));
         assert!(m.relays.iter().any(|r| matches!(r.auth, Some(ManifestAuth::ApiKey { .. }))), "project relay is gated");
         assert!(!m.relays_for_region("default").is_empty());
         assert_eq!(m.relays_for_region("ru").len(), m.relays_for_region("default").len(), "ru falls back to default");
