@@ -16,7 +16,7 @@ use messenger_core::outbound::WireEvent;
 use messenger_core::traits::{RelayState, SystemClock, UiEvent};
 use messenger_contacts::{ContactService, MetaHandler, Nip05Service, ProfileService, ReqwestFetcher};
 use messenger_core::{Clock, EventId, MessengerConfig, MessengerError, Outbound, PubKey, Result, Scope, SecretStore, SubId, Transport};
-use messenger_dm::{DmHandler, DmRoutesHandler, DmService, Prepared};
+use messenger_dm::{Action, DmHandler, DmRoutesHandler, DmService, Prepared};
 use messenger_identity::IdentityService;
 use messenger_ingress::{filters, Dispatcher, Fanout, Outbox};
 use messenger_store::{settings, Store};
@@ -27,7 +27,7 @@ use session::Session;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
-pub use messenger_dm::{ChatView, MessageView};
+pub use messenger_dm::{Action as DmAction, ChatView, MessageView, RelationView};
 
 pub use messenger_contacts::book::ContactPatch;
 pub use messenger_contacts::{ContactView, ProfileInput, ProfileView};
@@ -174,6 +174,7 @@ impl MessengerRuntime {
 
     async fn start_session(&self, keys: Keys) -> Result<()> {
         let pool = self.relays.pool().await;
+        let keys_for_dm = keys.clone();
         let session = Session::start(
             self.store.clone(),
             pool,
@@ -184,6 +185,7 @@ impl MessengerRuntime {
             self.dm.clone(),
         )
         .await?;
+        self.dm.set_signer(Some(keys_for_dm));
         *self.session.lock().await = Some(session);
         self.resubscribe_meta().await?;
         if let Err(e) = self.publish_dm_relays(false).await {
@@ -286,10 +288,25 @@ impl MessengerRuntime {
     }
 
     async fn publish_prepared(&self, p: Prepared) -> Result<MessageView> {
+        let peer = p.message.chat_id.strip_prefix("dm:").and_then(PubKey::parse);
         let local_id = self.outbox.enqueue(p.to_peer).await?;
         self.dm.attach_outbox(&p.tracking_id, &local_id).await?;
         if let Some(own) = p.to_self {
             self.outbox.enqueue(own).await?;
+        }
+        // A request: the accept goes out after the text, and the peer
+        // joins the address book.
+        for out in p.followups {
+            self.outbox.enqueue(out).await?;
+        }
+        if p.became_contact {
+            if let (Some(me), Some(peer)) = (self.session_pubkey().await, &peer) {
+                let _ = self.contacts.add(&me, peer.as_hex(), None).await;
+                let _ = self.resubscribe_meta().await;
+            }
+        }
+        for ev in p.events {
+            let _ = self.ui.send(ev);
         }
         let pool = self.relays.pool().await;
         // A failed pump is not an error for the caller: the message is
@@ -332,6 +349,46 @@ impl MessengerRuntime {
             self.dm.delete_local(message_id).await?;
         }
         Ok(())
+    }
+
+    pub async fn dm_relation(&self, peer: &str) -> Result<RelationView> {
+        let pk = messenger_contacts::book::parse_key(peer)?;
+        self.dm.relation(&pk).await
+    }
+
+    /// Relationship action: request, accept, decline, block, unblock,
+    /// remove. Publishes the signals and keeps the address book in step.
+    pub async fn dm_act(&self, peer: &str, action: Action) -> Result<RelationView> {
+        let keys = self.session_keys().await?;
+        let pk = messenger_contacts::book::parse_key(peer)?;
+        let result = self.dm.act(&keys, &pk, action).await?;
+        for out in result.outbounds {
+            self.outbox.enqueue(out).await?;
+        }
+        let me = PubKey::parse(&keys.public_key().to_hex()).expect("valid pubkey");
+        let is_contact = self.contacts.is_contact(&pk).await?;
+        match action {
+            Action::Accept | Action::Request => {
+                if !is_contact {
+                    let _ = self.contacts.add(&me, pk.as_hex(), None).await;
+                    let _ = self.request_profile(&pk).await;
+                    let _ = self.resubscribe_meta().await;
+                }
+            }
+            Action::Remove if is_contact => self.contacts.remove(&pk).await?,
+            _ => {}
+        }
+        for ev in result.events {
+            let _ = self.ui.send(ev);
+        }
+        let _ = self.ui.send(UiEvent { name: "chats.updated".into(), payload: serde_json::json!({}) });
+        let pool = self.relays.pool().await;
+        let _ = self.outbox.pump(pool.as_ref()).await;
+        Ok(result.relation)
+    }
+
+    pub async fn dm_blocked(&self) -> Result<Vec<String>> {
+        self.dm.blocked_peers().await
     }
 
     /// Put a failed message back in front of the queue.
@@ -395,6 +452,10 @@ impl MessengerRuntime {
         };
         let view = self.contacts.add(&me, &key, nickname).await?;
         if let Some(pk) = PubKey::parse(&view.pubkey) {
+            // Silent unless there is a past to mend (see the matrix).
+            let _ = self.dm_act(pk.as_hex(), Action::Request).await;
+        }
+        if let Some(pk) = PubKey::parse(&view.pubkey) {
             let _ = self.request_profile(&pk).await;
         }
         let _ = self.resubscribe_meta().await;
@@ -406,6 +467,8 @@ impl MessengerRuntime {
     }
 
     pub async fn contact_remove(&self, pubkey: &PubKey) -> Result<()> {
+        // The signal is derived from the state before the removal.
+        let _ = self.dm_act(pubkey.as_hex(), Action::Remove).await;
         self.contacts.remove(pubkey).await
     }
 
@@ -441,6 +504,7 @@ impl MessengerRuntime {
     }
 
     async fn stop_session(&self) {
+        self.dm.set_signer(None);
         if let Some(s) = self.session.lock().await.take() {
             s.stop();
         }
