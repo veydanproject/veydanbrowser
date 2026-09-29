@@ -14,6 +14,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD as B64URL};
 use base64::Engine as _;
 use messenger_core::{MessengerError, PubKey, RelayUrl, Result};
+use messenger_links::{LinkError, LinkType, Uri, UriBuilder};
 use sha2::{Digest, Sha256};
 
 const NONCE_LEN: usize = 12;
@@ -139,98 +140,67 @@ pub struct GroupLink {
     pub link_epoch: u32,
 }
 
-const SCHEME: &str = "veydan://group/";
 const MAX_LINK_MANAGERS: usize = 3;
 
-fn enc(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
-fn dec(s: &str) -> Option<String> {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' {
-            let hex = s.get(i + 1..i + 3)?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
+fn bad(what: &str) -> MessengerError {
+    MessengerError::Invalid(format!("group link: {what}"))
 }
 
 impl GroupLink {
     pub fn encode(&self) -> String {
-        let mut s = format!(
-            "{SCHEME}{}?t={}&r={}&o={}&n={}",
-            self.group_id,
-            if self.kind == GroupKind::Public { "public" } else { "private" },
-            enc(self.relay.as_str()),
-            self.owner.as_hex(),
-            enc(&self.name),
-        );
-        if !self.managers.is_empty() {
-            let list: Vec<&str> = self.managers.iter().take(MAX_LINK_MANAGERS).map(|p| p.as_hex()).collect();
-            s.push_str(&format!("&m={}", list.join(",")));
-        }
+        let mut b = UriBuilder::new(&LinkType::Group, &self.group_id)
+            .param("t", if self.kind == GroupKind::Public { "public" } else { "private" })
+            .param("r", self.relay.as_str())
+            .param("o", self.owner.as_hex())
+            .param("n", &self.name)
+            .list("m", self.managers.iter().take(MAX_LINK_MANAGERS).map(|p| p.as_hex()));
         if let Some(secret) = &self.secret {
-            s.push_str(&format!("&s={}&e={}", B64URL.encode(secret.0), self.link_epoch));
+            b = b.param("s", &B64URL.encode(secret.0)).param("e", &self.link_epoch.to_string());
         }
-        s
+        b.build()
     }
 
     pub fn parse(link: &str) -> Result<Self> {
-        let bad = |what: &str| MessengerError::Invalid(format!("group link: {what}"));
-        let rest = link.trim().strip_prefix(SCHEME).ok_or_else(|| bad("not a group link"))?;
-        let (group_id, query) = rest.split_once('?').ok_or_else(|| bad("no parameters"))?;
+        let uri = Uri::parse(link).map_err(|e| match e {
+            LinkError::Scheme | LinkError::Type => bad("not a group link"),
+            LinkError::Id => bad("group id"),
+            other => bad(other.code()),
+        })?;
+        Self::from_uri(&uri)
+    }
+
+    /// A link already taken apart (by whoever looked at its type first).
+    pub fn from_uri(uri: &Uri) -> Result<Self> {
+        if uri.link_type() != &LinkType::Group {
+            return Err(bad("not a group link"));
+        }
+        let group_id = uri.id();
         if group_id.len() != 64 || !group_id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
             return Err(bad("group id"));
         }
-        let mut kind = None;
-        let mut relay = None;
-        let mut owner = None;
-        let mut name = String::new();
-        let mut managers = Vec::new();
-        let mut secret = None;
-        let mut link_epoch = 0u32;
-        for pair in query.split('&') {
-            let Some((k, v)) = pair.split_once('=') else { continue };
-            match k {
-                "t" => kind = Some(match v { "public" => GroupKind::Public, "private" => GroupKind::Private, _ => return Err(bad("type")) }),
-                "r" => relay = dec(v).and_then(|u| RelayUrl::parse(&u)),
-                "o" => owner = PubKey::parse(v),
-                "n" => name = dec(v).unwrap_or_default().chars().filter(|c| !c.is_control()).take(100).collect(),
-                "m" => managers = v.split(',').filter_map(PubKey::parse).take(MAX_LINK_MANAGERS).collect(),
-                "s" => secret = Some(LinkSecret::from_bytes(&B64URL.decode(v).map_err(|_| bad("secret"))?)?),
-                "e" => link_epoch = v.parse().map_err(|_| bad("epoch"))?,
-                _ => {} // newer clients may add parameters
-            }
-        }
-        let kind = kind.ok_or_else(|| bad("type"))?;
+        let kind = match uri.raw("t") {
+            Some("public") => GroupKind::Public,
+            Some("private") => GroupKind::Private,
+            _ => return Err(bad("type")),
+        };
+        let relay = uri.text("r").ok().flatten().and_then(|u| RelayUrl::parse(&u)).ok_or_else(|| bad("relay"))?;
+        let owner = uri.raw("o").and_then(PubKey::parse).ok_or_else(|| bad("owner"))?;
+        let name: String =
+            uri.text("n").ok().flatten().unwrap_or_default().chars().filter(|c| !c.is_control()).take(100).collect();
+        let managers =
+            uri.list("m").unwrap_or_default().iter().filter_map(|m| PubKey::parse(m)).take(MAX_LINK_MANAGERS).collect();
+        let secret = match uri.raw("s") {
+            Some(v) => Some(LinkSecret::from_bytes(&B64URL.decode(v).map_err(|_| bad("secret"))?)?),
+            None => None,
+        };
+        let link_epoch = match uri.raw("e") {
+            Some(v) => v.parse().map_err(|_| bad("epoch"))?,
+            None => 0,
+        };
         if (kind == GroupKind::Public) != secret.is_some() {
             return Err(bad("a public link carries a secret, a private one does not"));
         }
-        Ok(Self {
-            group_id: group_id.to_string(),
-            kind,
-            relay: relay.ok_or_else(|| bad("relay"))?,
-            name,
-            owner: owner.ok_or_else(|| bad("owner"))?,
-            managers,
-            secret,
-            link_epoch,
-        })
+        Ok(Self { group_id: group_id.to_string(), kind, relay, name, owner, managers, secret, link_epoch })
     }
 }
 

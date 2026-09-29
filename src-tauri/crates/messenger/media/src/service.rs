@@ -182,6 +182,7 @@ impl MediaService {
 
     /// Call once at start-up.
     pub async fn recover(&self) -> Result<u64> {
+        crate::download::drop_shared_folders(&self.cache_dir).await;
         repo::pause_interrupted(&self.store).await
     }
 
@@ -781,7 +782,7 @@ mod tests {
         assert_eq!(tokio::fs::read(&out).await.unwrap(), plain);
         assert!(out.ends_with(format!("{}/video.mp4", d.sha256)), "cache is keyed by hash: {out:?}");
         assert_eq!(sink.statuses(), vec!["queued", "running", "done"]);
-        assert!(!svc.cache_dir().join("tmp").join(&d.sha256).exists(), "temp chunks are removed");
+        assert!(!crate::download::tmp_dir(svc.cache_dir(), &dd).exists(), "temp chunks are removed");
 
         // Second request: served from the cache without touching the network.
         let calls_before = *fetch.calls.lock().unwrap();
@@ -868,7 +869,7 @@ mod tests {
         let err = svc.run_download("m", "chat", &dd, false, &sink).await.unwrap_err();
         assert!(err.to_string().contains("err.chunk_hash_mismatch"), "{err}");
         assert_eq!(sink.statuses().last().unwrap(), "failed");
-        let tmp = svc.cache_dir().join("tmp").join(&d.sha256);
+        let tmp = crate::download::tmp_dir(svc.cache_dir(), &dd);
         assert!(tmp.join("0").exists() && tmp.join("1").exists() && !tmp.join("2").exists());
         assert!(svc.may_auto_download("m").await.unwrap(), "one failure does not stop automatic retries");
 
@@ -892,6 +893,62 @@ mod tests {
         wrong.set_key(&crate::crypto::FileKey::generate().unwrap());
         assert!(svc.run_download("m3", "chat", &wrong, false, &Sink::default()).await.is_err());
         assert!(svc.cached(&wrong).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn shared_folders_of_the_old_naming_are_dropped_at_start() {
+        let r = rig().await;
+        let tmp = r.svc.cache_dir().join("tmp");
+        let old = tmp.join("ab".repeat(32));
+        let new = tmp.join(format!("{}-0123456789abcdef", "ab".repeat(32)));
+        for d in [&old, &new] {
+            tokio::fs::create_dir_all(d).await.unwrap();
+            tokio::fs::write(d.join("0"), b"chunk").await.unwrap();
+        }
+        r.svc.recover().await.unwrap();
+        assert!(!old.exists(), "a folder every copy shared cannot be resumed from");
+        assert!(new.join("0").exists(), "a folder of one copy is kept to resume");
+    }
+
+    /// The same picture sent several times (an album of one screenshot):
+    /// every copy has its own key, the plaintext hash is shared. All copies
+    /// arrive at once and are fetched at once.
+    #[tokio::test]
+    async fn copies_of_one_file_download_side_by_side() {
+        let r = rig().await;
+        let mut copies = Vec::new();
+        for n in 0..6 {
+            let path = file(&r, &format!("{n}.png"), 3 * MIB + 77).await;
+            let t = r.svc.queue_upload(&path, "chat", &format!("ph{n}")).await.unwrap();
+            copies.push(r.svc.run_upload(&t.id, &r.keys, None, &Sink::default()).await.unwrap().unwrap());
+        }
+        assert!(copies.iter().all(|d| d.sha256 == copies[0].sha256), "one plaintext");
+        assert!(copies.windows(2).all(|w| w[0].chunks != w[1].chunks), "different ciphertext");
+
+        let (svc, _, _) = https(&r, &copies[0]);
+        let jobs: Vec<_> = copies
+            .iter()
+            .enumerate()
+            // Every copy twice: an album that redraws starts the same download again.
+            .flat_map(|(n, d)| [(n, d.clone()), (n, d.clone())])
+            .map(|(n, d)| {
+                let (svc, mut dd) = (svc.clone(), d);
+                dd.servers = vec!["https://mem.example/a".into()];
+                tokio::spawn(async move { svc.run_download(&format!("m{n}"), "chat", &dd, true, &Sink::default()).await })
+            })
+            .collect();
+        let want = content(3 * MIB + 77);
+        for job in jobs {
+            match job.await.unwrap() {
+                Ok(Some(out)) => assert_eq!(tokio::fs::read(&out).await.unwrap(), want),
+                // The second start of a download already running is refused, never corrupted.
+                Err(e) => assert!(e.to_string().contains("err.transfer_in_progress"), "{e}"),
+                Ok(None) => panic!("a manual download always answers"),
+            }
+        }
+        for (n, d) in copies.iter().enumerate() {
+            assert!(svc.cached(d).await.is_some(), "copy {n} is on this device");
+        }
     }
 
     #[tokio::test]

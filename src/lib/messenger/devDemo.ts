@@ -170,6 +170,9 @@ export function buildDemo(): DemoData {
     sys(sq, now - day * 2, 'group_joined', ME),
     msg(sq, boris, now - day * 2 + 100, 'Добро пожаловать!'),
     sys(sq, now - day, 'group_joined', gleb),
+    sys(sq, now - 3300, 'group_joined', vera),
+    sys(sq, now - 3200, 'group_joined', daria),
+    sys(sq, now - 3100, 'group_left', vera),
     msg(sq, gleb, now - 3000, 'Подскажите, где взять сборку под Android?'),
     msg(sq, alice, now - 2800, 'Пока только тестовая, ссылка в закрепе.'),
   );
@@ -178,6 +181,32 @@ export function buildDemo(): DemoData {
     invite_id: 'inv1', group_id: gid('ad'), name: 'Книжный клуб', about: 'Читаем по книге в месяц.', picture: '', members: 12,
     peer: alice, direction: 'in', status: 'received', created_at: now - 3600, expires_at: now + day * 6,
   }];
+
+
+  // Links of every kind, and what the chat makes of them.
+  const stranger = gid('ad');
+  const borisNpub = contacts.find((c) => c.pubkey === boris)?.npub ?? '';
+  messages[a].push(
+    msg(a, alice, now - 50, `Заходи к нам: ${square.link}`),
+    msg(a, alice, now - 45, `veydan://group/${stranger}?t=private&r=wss%3A%2F%2Fnode-1.veydan.net&o=${alice}&n=${encodeURIComponent('Книжный клуб')}`),
+    msg(a, ME, now - 40, `Это Борис, он по реле: veydan://contact/${borisNpub}?n=${encodeURIComponent('Борис')}`),
+    msg(a, alice, now - 35, 'Статья про это: https://example.com/blog/nostr-groups?utm=1 и ещё старая http://old.example.org/page.'),
+    msg(a, alice, now - 30, 'А это что-то подозрительное: https://аррӏе.com/login'),
+    msg(a, alice, now - 25, 'Ссылка из новой версии: veydan://channel/42?n=News'),
+    msg(a, alice, now - 20, 'И битая: veydan://group/123'),
+    msg(a, alice, now - 15, 'javascript:alert(1) и file:///etc/passwd остаются текстом.'),
+    msg(a, ME, now - 10, 'Фото', { content_type: 'media', media: { name: 'one.png', mime: 'image/png', size: 120_000, kind: 'image', batch: 'demo-batch-1' } }),
+    msg(a, ME, now - 9, null, { content_type: 'media', media: { name: 'two.png', mime: 'image/png', size: 140_000, kind: 'image', batch: 'demo-batch-1' } }),
+    msg(a, ME, now - 8, null, { content_type: 'media', media: { name: 'three.mp4', mime: 'video/mp4', size: 4_140_000, kind: 'video', batch: 'demo-batch-1' } }),
+    msg(a, ME, now - 8, null, { content_type: 'media', media: { name: 'Отчёт за сентябрь.pdf', mime: 'application/pdf', size: 612_000, kind: 'file', batch: 'demo-batch-1' } }),
+    ...[['backup-2026-09.tar.gz', 48_000_000], ['report.xlsx', 88_000], ['manifest.json', 3_400]].map(([name, size]) =>
+      msg(a, ME, now - 6, null, { content_type: 'media', media: { name, mime: 'application/octet-stream', size, kind: 'file', batch: 'demo-batch-4', local_path: '/home/dev/x' } })),
+    ...['vite.config.js', 'dev.sh', 'tsconfig.json', 'svelte.config.js'].map((name, i) =>
+      msg(a, alice, now - 7, null, { content_type: 'media', media: { name, mime: 'text/plain', size: 1_200 + i * 700, kind: 'file', batch: 'demo-batch-2' } })),
+    msg(a, alice, now - 5, null, { content_type: 'media', media: { name: 'IMG_2031.jpg', mime: 'image/jpeg', size: 2_300_000, kind: 'image' } }),
+    ...['IMG_2032.jpg', 'IMG_2033.jpg', 'IMG_2034.jpg', 'IMG_2035.jpg', 'IMG_2036.jpg'].map((name, i) =>
+      msg(a, alice, now - 4, i === 4 ? 'Поездка, часть первая' : null, { content_type: 'media', media: { name, mime: 'image/jpeg', size: 1_900_000, kind: 'image', batch: 'demo-batch-3' } })),
+  );
 
   const unread: Record<string, number> = { [b]: 2, [v]: 1, [sq]: 2 };
   for (const c of chats) {

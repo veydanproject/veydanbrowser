@@ -8,6 +8,10 @@
   import ContextMenu, { type MenuEntry } from '$lib/components/ui/ContextMenu.svelte';
   import Avatar from '../contacts/Avatar.svelte';
   import MessageBubble from './MessageBubble.svelte';
+  import AlbumBubble from './AlbumBubble.svelte';
+  import Timeline from '../content/Timeline.svelte';
+  import type { TimelineItem } from '../content/types';
+  import { tint } from '../shared/tint';
   import Composer from './Composer.svelte';
   import RelationBanner from './RelationBanner.svelte';
   import MediaBubble from '../media/MediaBubble.svelte';
@@ -16,7 +20,6 @@
   import type { MessengerRecording } from '../api';
   import { chatStore } from '../chats/chatStore.svelte';
   import { messengerStore } from '../store.svelte';
-  import { dayKey, dayLabel } from '../shared/time';
   import { confirmStore } from '../shared/confirm.svelte';
   import { onKeyboard } from '../shared/keyboard';
   import { dmErrorCode, mediaErrorCode, messengerError, type DmAction, type MessengerChat, type MessengerMessage } from '../api';
@@ -47,6 +50,7 @@
   const canAttach = $derived(chat.mode === "full_chat" || chat.mode === "group");
 
   let scroller = $state<HTMLDivElement | null>(null);
+  let content = $state<HTMLDivElement | null>(null);
   let replyTo = $state<MessengerMessage | null>(null);
   let editing = $state<MessengerMessage | null>(null);
   let error = $state('');
@@ -71,15 +75,31 @@
     if (atBottom) tick().then(scrollToBottom);
   });
 
+  // What is shown grows after it is drawn (a card, a picture): the latest message stays in view.
+  $effect(() => {
+    if (!content) return;
+    const watch = new ResizeObserver(() => { if (atBottom) scrollToBottom(); });
+    watch.observe(content);
+    return () => watch.disconnect();
+  });
+
   // The keyboard takes height away: keep the latest message in view.
   $effect(() => onKeyboard(() => { if (atBottom) tick().then(scrollToBottom); }));
 
+  /** Height of what is shown when it was last looked at. */
+  let seenHeight = 0;
+
   function scrollToBottom() {
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    if (!scroller) return;
+    seenHeight = scroller.scrollHeight;
+    scroller.scrollTop = scroller.scrollHeight;
   }
 
   async function onscroll() {
     if (!scroller) return;
+    // The distance grew because the content did, not because the user left.
+    if (atBottom && scroller.scrollHeight !== seenHeight) { scrollToBottom(); return; }
+    seenHeight = scroller.scrollHeight;
     atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
     if (scroller.scrollTop < 120 && chatStore.hasMore && !chatStore.loadingOlder) {
       const before = scroller.scrollHeight;
@@ -170,8 +190,10 @@
   async function attach(paths: string[]) {
     error = "";
     atBottom = true;
+    // Picked together, shown together.
+    const batch = paths.length > 1 ? crypto.randomUUID() : undefined;
     for (const p of paths) {
-      try { await chatStore.sendFile(p); }
+      try { await chatStore.sendFile(p, undefined, batch); }
       catch (e) { error = explain(e); break; }
     }
   }
@@ -206,27 +228,22 @@
     return list;
   });
 
-  interface Row { m: MessengerMessage; first: boolean; day: string | null }
-  const rows = $derived.by((): Row[] => {
-    const out: Row[] = [];
-    let prev: MessengerMessage | null = null;
-    for (const m of chatStore.messages) {
-      const newDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at);
-      const first = newDay || !prev || prev.sender_pubkey !== m.sender_pubkey || prev.content_type === 'system' || m.created_at - prev.created_at > 300;
-      let day: string | null = null;
-      if (newDay) {
-        const l = dayLabel(m.created_at);
-        day = l.key ? $t(`msg_day_${l.key}` as 'msg_day_today') : l.text;
-      }
-      out.push({ m, first, day });
-      prev = m;
-    }
-    return out;
-  });
+  const systemLine = (m: MessengerMessage) => systemText?.(m) ?? $t(`msg_sys_${m.text}` as "msg_sys_request_sent", { name: chat.title });
 </script>
 
 {#snippet attachment(m: MessengerMessage)}
   <MediaBubble message={m} />
+{/snippet}
+
+{#snippet bubble(item: Extract<TimelineItem, { type: "bubble" }>)}
+  <MessageBubble message={item.message} first={item.first} last={item.last} showAuthor={item.showAuthor} peerTitle={chat.title} {author} highlighted={highlighted === item.message.id}
+    onmenu={openMenu} onreplyclick={jumpTo} onretry={(m) => guard(() => chatStore.retry(m.id))} media={attachment} />
+{/snippet}
+
+{#snippet album(item: Extract<TimelineItem, { type: "album" }>)}
+  {@const who = item.messages[0].sender_pubkey}
+  <AlbumBubble messages={item.messages} variant={item.variant} first={item.first} last={item.last} author={item.showAuthor && author ? author(who) : null} authorTint={tint(who)} {highlighted}
+    onmenu={openMenu} onretry={(m) => guard(() => chatStore.retry(m.id))} />
 {/snippet}
 
 {#snippet composerTools()}
@@ -257,26 +274,20 @@
   {#if banner}{@render banner()}{/if}
 
   <div class="scroll" bind:this={scroller} {onscroll}>
+    <div class="content" bind:this={content}>
     {#if chatStore.loadingOlder}<div class="loading"><Icon name="loader" size={14} /></div>{/if}
-    {#if chatStore.loading && rows.length === 0}
+    {#if chatStore.loading && chatStore.messages.length === 0}
       <div class="placeholder">{$t('loading')}</div>
-    {:else if rows.length === 0}
+    {:else if chatStore.messages.length === 0}
       <div class="placeholder">
         <Icon name="lock" size={22} />
         <p>{$t('msg_chat_empty')}</p>
         <span>{$t('msg_chat_empty_hint')}</span>
       </div>
     {:else}
-      {#each rows as r (r.m.id)}
-        {#if r.day}<div class="day"><span>{r.day}</span></div>{/if}
-        {#if r.m.content_type === 'system'}
-          <div class="system"><span>{systemText?.(r.m) ?? $t(`msg_sys_${r.m.text}` as "msg_sys_request_sent", { name: chat.title })}</span></div>
-        {:else}
-          <MessageBubble message={r.m} first={r.first} peerTitle={chat.title} {author} highlighted={highlighted === r.m.id}
-            onmenu={openMenu} onreplyclick={jumpTo} onretry={(m) => guard(() => chatStore.retry(m.id))}  media={attachment} />
-        {/if}
-      {/each}
+      <Timeline messages={chatStore.messages} many={isGroup} systemText={systemLine} {bubble} {album} />
     {/if}
+    </div>
   </div>
 
   {#if !atBottom}
@@ -322,11 +333,9 @@
   .narrow-only { display: none; }
   @media (max-width: 860px) { .narrow-only { display: inline-flex; } }
   .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-3) 0; display: flex; flex-direction: column; }
-  .scroll > :global(:first-child) { margin-top: auto; }
-  .day, .system { display: flex; justify-content: center; margin: var(--sp-3) 0 var(--sp-1); }
-  .day span { font-size: var(--fs-2xs); color: var(--text-3); background: var(--surface-2); border: 1px solid var(--border); padding: 3px 10px; border-radius: var(--radius-pill); }
-  .system { margin: var(--sp-2) var(--sp-4); }
-  .system span { font-size: var(--fs-xs); color: var(--text-2); text-align: center; line-height: 1.4; }
+  .content { margin-top: auto; display: flex; flex-direction: column; flex-shrink: 0; }
+  /* Nothing to show yet: the note stands in the middle. */
+  .content:has(> .placeholder) { margin-bottom: auto; }
   .placeholder { margin: auto; display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); color: var(--text-3); text-align: center; padding: var(--sp-6); }
   .placeholder p { margin: 0; color: var(--text-body); font-weight: var(--fw-semibold); font-size: var(--fs-sm); }
   .placeholder span { font-size: var(--fs-xs); max-width: 320px; line-height: 1.5; }

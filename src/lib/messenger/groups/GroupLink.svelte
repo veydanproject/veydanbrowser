@@ -12,11 +12,13 @@
   import { groupStore } from './groupStore.svelte';
   import { isManager } from './permissions';
   import { confirmStore } from '../shared/confirm.svelte';
+  import ShareDialog from '../content/ShareDialog.svelte';
 
   interface Props { group: MessengerGroup }
   let { group }: Props = $props();
 
   let copied = $state(false);
+  let sharing = $state(false);
   let qr = $state<string | null>(null);
   let busy = $state(false);
   let error = $state('');
@@ -63,6 +65,7 @@
     <code class="link">{group.link}</code>
     <div class="row">
       <button class="btn btn-ghost btn-sm" onclick={copy}><Icon name={copied ? 'check' : 'copy'} size={13} />{copied ? $t('msg_group_link_copied') : $t('msg_copy')}</button>
+      <button class="btn btn-ghost btn-sm" onclick={() => (sharing = true)}><Icon name="send" size={13} />{$t('msg_share')}</button>
       <button class="btn btn-ghost btn-sm" disabled={busy} onclick={toggleQr}><Icon name="qr-code" size={13} />{qr ? $t('msg_group_qr_hide') : $t('msg_group_qr_show')}</button>
       {#if group.kind === 'public' && isManager(group)}
         <button class="btn btn-ghost btn-sm danger" disabled={busy} onclick={rotate}><Icon name="refresh-cw" size={13} />{$t('msg_group_link_rotate')}</button>
@@ -72,6 +75,8 @@
     {#if error}<div class="error-msg">{error}</div>{/if}
   </section>
 {/if}
+
+{#if group.link}<ShareDialog bind:open={sharing} link={group.link} exclude={group.chat_id} />{/if}
 
 <style>
   .block { display: flex; flex-direction: column; gap: var(--sp-2); }

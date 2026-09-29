@@ -527,6 +527,12 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_group_link_qr,
             #[cfg(feature = "messenger")]
+            commands::messenger::messenger_links_inspect,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contact_link,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_link_preview,
+            #[cfg(feature = "messenger")]
             commands::messenger::messenger_group_forget,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_media_servers,
@@ -1124,6 +1130,12 @@ fn run_desktop() {
             commands::messenger::messenger_group_rotate_link,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_group_link_qr,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_links_inspect,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_contact_link,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_link_preview,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_group_forget,
             #[cfg(feature = "messenger")]

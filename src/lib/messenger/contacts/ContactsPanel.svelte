@@ -5,7 +5,9 @@
   import { t } from '$lib/i18n';
   import Icon from '$lib/Icon.svelte';
   import { messengerStore } from '../store.svelte';
-  import { contactLabel, messengerError, type MessengerContact } from '../api';
+  import { contactLabel, messengerApi, messengerError, type MessengerContact } from '../api';
+  import ShareDialog from '../content/ShareDialog.svelte';
+  import MessageContent from '../content/MessageContent.svelte';
   import Avatar from './Avatar.svelte';
 
   interface Props { onchat?: (pubkey: string) => void }
@@ -19,6 +21,9 @@
   let editNick = $state('');
   let editNote = $state('');
   let nip05Result = $state<Record<string, boolean>>({});
+  /** Whose link is being shared. */
+  let sharing = $state<string | null>(null);
+  let shareOpen = $state(false);
 
   const canAct = $derived(!!messengerStore.status?.runtime?.session_active);
 
@@ -84,7 +89,7 @@
 
           {#if openId === c.pubkey}
             <div class="details">
-              {#if c.profile?.about}<p class="about">{c.profile.about}</p>{/if}
+              {#if c.profile?.about}<div class="about"><MessageContent text={c.profile.about} cards={false} /></div>{/if}
               <div class="grid">
                 <label><span>{$t('msg_contacts_nickname')}</span><input type="text" bind:value={editNick} disabled={busy} /></label>
                 <label><span>{$t('msg_contacts_note')}</span><input type="text" bind:value={editNote} disabled={busy} /></label>
@@ -104,6 +109,9 @@
                 <button class="btn btn-ghost btn-sm" disabled={busy}
                   onclick={() => run(() => messengerStore.updateContact(c.pubkey, { nickname: editNick.trim() || null, note: editNote.trim() || null }))}>
                   {$t('msg_contacts_save')}
+                </button>
+                <button class="btn btn-ghost btn-sm" disabled={busy} onclick={() => { sharing = c.pubkey; shareOpen = true; }}>
+                  <Icon name="send" size={12} />{$t('msg_share_contact')}
                 </button>
                 <button class="btn btn-ghost btn-sm" disabled={busy}
                   onclick={() => run(() => messengerStore.updateContact(c.pubkey, { is_muted: !c.is_muted }))}>
@@ -134,6 +142,11 @@
     </ul>
   {/if}
 </div>
+
+{#if sharing}
+  {@const who = sharing}
+  <ShareDialog bind:open={shareOpen} link={() => messengerApi.links.contact(who)} exclude={`dm:${who}`} />
+{/if}
 
 <style>
   .contacts { max-width: 680px; width: 100%; margin-inline: auto; display: flex; flex-direction: column; gap: var(--sp-3); }

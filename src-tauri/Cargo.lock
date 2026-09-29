@@ -3669,6 +3669,7 @@ dependencies = [
  "hex",
  "messenger-core",
  "messenger-dm",
+ "messenger-links",
  "messenger-store",
  "nostr",
  "qrcode",
@@ -3716,6 +3717,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "messenger-links"
+version = "0.1.0"
+dependencies = [
+ "messenger-core",
+ "nostr",
+]
+
+[[package]]
 name = "messenger-media"
 version = "0.1.0"
 dependencies = [
@@ -3737,6 +3746,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "messenger-preview"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "messenger-core",
+ "messenger-http",
+ "reqwest",
+ "serde",
+ "tokio",
+ "ts-rs",
+]
+
+[[package]]
 name = "messenger-runtime"
 version = "0.1.0"
 dependencies = [
@@ -3749,13 +3772,16 @@ dependencies = [
  "messenger-groups",
  "messenger-identity",
  "messenger-ingress",
+ "messenger-links",
  "messenger-media",
+ "messenger-preview",
  "messenger-store",
  "messenger-transport",
  "nostr",
  "serde",
  "serde_json",
  "tokio",
+ "ts-rs",
 ]
 
 [[package]]
@@ -7057,6 +7083,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "termcolor"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
+dependencies = [
+ "winapi-util",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7517,6 +7552,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "ts-rs"
+version = "12.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "756050066659291d47a554a9f558125db17428b073c5ffce1daf5dcb0f7231d8"
+dependencies = [
+ "thiserror 2.0.18",
+ "ts-rs-macros",
+]
+
+[[package]]
+name = "ts-rs-macros"
+version = "12.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38d90eea51bc7988ef9e674bf80a85ba6804739e535e9cab48e4bb34a8b652aa"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+ "termcolor",
+]
+
+[[package]]
 name = "tungstenite"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7821,7 +7878,7 @@ dependencies = [
 
 [[package]]
 name = "veydanspace"
-version = "4.0.1-alpha.12"
+version = "4.0.1-alpha.13"
 dependencies = [
  "age",
  "anyhow",

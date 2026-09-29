@@ -5,6 +5,9 @@
 // module can be lifted into a standalone app: this file is the only place
 // that knows command names (docs/messenger-spec.md §4.6).
 
+// Types the runtime writes for itself (`make msg-types`); never by hand.
+export type { GroupMembership, LinkGroupKind, LinkPreview, LinkView } from './generated/links';
+
 export interface MessengerIngressCounters {
   received: number;
   duplicates: number;
@@ -139,8 +142,6 @@ export interface MessengerMessage {
 
 
 export type GroupRole = 'owner' | 'admin' | 'moderator' | 'member';
-export type GroupMembership =
-  | 'joined' | 'joining' | 'requested' | 'rejected' | 'left' | 'removed' | 'banned' | 'disbanded' | 'stale_link';
 
 export interface MessengerGroupMember {
   pubkey: string;
@@ -207,6 +208,13 @@ export interface MessengerGroupInvite {
   status: string;
   created_at: number;
   expires_at: number;
+}
+
+
+/** Stable refusal code of a preview (`preview_silent`, …), if any. */
+export function previewErrorCode(e: unknown): string | null {
+  const m = /\bpreview_[a-z_]+\b/.exec(messengerError(e));
+  return m ? m[0] : null;
 }
 
 /** An operation on a group, as its log writes it. */
@@ -423,6 +431,8 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const NOT_COMPILED: MessengerStatus = { compiled: false, enabled: false, runtime: null, error: null };
 
 import { buildDemo, demoEnabled } from './devDemo';
+import type { ExternalUrl, InternalLinkText } from './content/types';
+import type { GroupMembership, LinkPreview, LinkView } from './generated/links';
 
 const demo = !isTauri && demoEnabled() ? buildDemo() : null;
 let mockIdentity: MessengerIdentity | null = demo?.identity ?? null;
@@ -469,6 +479,33 @@ function mockChat(peer: string): MessengerChat {
 }
 function mockFind(id: string): MessengerMessage | undefined {
   return Object.values(mockMessages).flat().find((m) => m.id === id);
+}
+
+/** Browser preview only: in the app links are taken apart by the runtime. */
+function mockInspect(text: string): LinkView {
+  const link = text.trim();
+  const npub = /^(?:nostr:)?(npub1[0-9a-z]+)$/.exec(link)?.[1] ?? /^veydan:\/\/contact\/(npub1[0-9a-z]+)(?:\?|$)/.exec(link)?.[1];
+  if (npub) {
+    const c = mockContacts.find((x) => x.npub === npub);
+    const me = mockIdentity?.npub === npub;
+    const hint = new URLSearchParams(link.split('?')[1] ?? '').get('n') ?? '';
+    return {
+      kind: 'contact', link: link.startsWith('veydan://') ? link : `veydan://contact/${npub}`, pubkey: c?.pubkey ?? mockIdentity?.pubkey ?? 'ef'.repeat(32), npub,
+      name: c ? contactLabel(c) : me ? profileLabel(mockOwnProfile) : hint, picture: null, nip05: c?.profile?.nip05 ?? null,
+      is_me: me, is_contact: !!c, blocked: false,
+    };
+  }
+  const m = /^veydan:\/\/([a-z]+)\/([A-Za-z0-9._~-]+)(?:\?(.*))?$/.exec(link);
+  if (!m) return { kind: 'invalid', code: link.startsWith('veydan://') ? 'link_bad_id' : 'link_bad_scheme' };
+  if (m[1] !== 'group') return m[1] === 'contact' ? { kind: 'invalid', code: 'link_bad_id' } : { kind: 'unknown', link_type: m[1] };
+  const p = new URLSearchParams(m[3] ?? '');
+  const t = p.get('t');
+  if (!/^[0-9a-f]{64}$/.test(m[2]) || (t !== 'public' && t !== 'private') || !p.get('r') || !p.get('o')) return { kind: 'invalid', code: 'link_bad_param' };
+  const g = mockGroups.find((x) => x.id === m[2]);
+  return {
+    kind: 'group', link, group_id: m[2], group_kind: t, name: g?.name || p.get('n') || '', relay: p.get('r') ?? '', owner: p.get('o') ?? '',
+    picture: g?.picture || null, members: g?.members.length || null, membership: g?.membership ?? null,
+  };
 }
 
 const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
@@ -532,7 +569,7 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
     const name = String(a?.path).split(/[\\/]/).pop() ?? 'file';
     const ext = name.split('.').pop()?.toLowerCase() ?? '';
     const kind = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext) ? 'image' : ['mp4', 'webm'].includes(ext) ? 'video' : ['mp3', 'ogg', 'wav'].includes(ext) ? 'audio' : 'file';
-    const m: MessengerMessage = { id: `local:${Date.now().toString(16)}`, chat_id: c.id, direction: 'out', status: 'sent', content_type: 'media', text: (a?.caption as string) ?? null, sender_pubkey: 'ab'.repeat(32), reply_to: null, created_at: now, edited_at: null, deleted: false, failure_reason: null, media: { name, mime: 'application/octet-stream', size: 1_234_567, kind, local_path: String(a?.path) } };
+    const m: MessengerMessage = { id: `local:${Date.now().toString(16)}${Math.random().toString(16).slice(2, 8)}`, chat_id: c.id, direction: 'out', status: 'sent', content_type: 'media', text: (a?.caption as string) ?? null, sender_pubkey: 'ab'.repeat(32), reply_to: null, created_at: now, edited_at: null, deleted: false, failure_reason: null, media: { name, mime: 'application/octet-stream', size: 1_234_567, kind, local_path: String(a?.path), ...(a?.batch ? { batch: String(a.batch) } : {}) } };
     mockMessages[c.id] = [...(mockMessages[c.id] ?? []), m];
     mockChats = mockChats.map((x) => (x.id === c.id ? { ...x, last_message_at: now, last_preview: `📎 ${name}` } : x));
     return m;
@@ -556,6 +593,17 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_media_local_path: () => null,
   messenger_media_open: () => undefined,
   messenger_open_url: (a) => { window.open(String(a?.url), '_blank', 'noopener'); },
+  messenger_links_inspect: (a) => ((a?.links ?? []) as string[]).map((l) => mockInspect(l)),
+  messenger_contact_link: (a) => {
+    const c = mockContacts.find((x) => x.pubkey === a?.pubkey);
+    return `veydan://contact/${c?.npub ?? `npub1${String(a?.pubkey).slice(0, 58)}`}${c ? `?n=${encodeURIComponent(contactLabel(c))}` : ''}`;
+  },
+  messenger_link_preview: (a) => {
+    const host = new URL(String(a?.url)).hostname;
+    if (host.startsWith('silent.')) throw new Error('preview_silent');
+    if (host.startsWith('empty.')) throw new Error('preview_empty');
+    return { url: String(a?.url), host, title: `${host}: заголовок страницы`, description: 'Описание, которое страница дала о себе. В приложении его читает Rust, и только по кнопке.', site_name: null, image: null };
+  },
   messenger_dm_relation: (a) => {
     const c = mockChat(String(a?.peer));
     return { peer_pubkey: c.peer_pubkey, mode: c.mode, my_contact: 'approved', blocked: c.mode === 'blocked', peer_signal: 'approved', was_ever_mutual: true, can_send: c.can_send };
@@ -591,7 +639,25 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_group_invite: (a) => ({ invite_id: 'demo', group_id: String(a?.groupId), name: mockGroup(String(a?.groupId)).name, about: '', picture: '', members: 1, peer: String(a?.who), direction: 'out', status: 'sent', created_at: Date.now() / 1000, expires_at: Date.now() / 1000 + 7 * 86400 }),
   messenger_group_invites: (a) => (a?.direction === 'in' ? mockInvites : []),
   messenger_group_answer_invite: (a) => { mockInvites = mockInvites.filter((i) => i.invite_id !== a?.inviteId); },
-  messenger_group_open_link: () => { throw new Error('group_unknown'); },
+  messenger_group_open_link: (a) => {
+    const v = mockInspect(String(a?.link));
+    if (v.kind !== 'group') throw new Error('group_invalid');
+    const known = mockGroups.find((x) => x.id === v.group_id);
+    if (known?.membership === 'joined') throw new Error('group_already_member');
+    const open = v.group_kind === 'public';
+    const g: MessengerGroup = {
+      id: v.group_id, chat_id: `group:${v.group_id}`, kind: v.group_kind, name: v.name, about: '', picture: '', relay: v.relay, owner: v.owner,
+      membership: open ? 'joined' : 'requested', my_role: open ? 'member' : null, muted: false, can_post: open, history_for_new: true,
+      members: open ? [{ pubkey: 'ab'.repeat(32), role: 'member', muted: false, joined_at: Math.floor(Date.now() / 1000), is_me: true }] : [],
+      banned: [], requests: [], link: null, undecrypted: 0, key: null,
+    };
+    mockGroups = [g, ...mockGroups.filter((x) => x.id !== g.id)];
+    if (!mockChats.some((c) => c.id === g.chat_id)) {
+      mockChats = [{ id: g.chat_id, kind: 'group', peer_pubkey: null, peer_npub: null, title: g.name, picture: null, is_contact: false, is_muted: false, unread: 0, last_message_at: null, last_preview: null, pinned: false, archived: false, mode: 'group', can_send: open }, ...mockChats];
+      mockMessages[g.chat_id] = [];
+    }
+    return g;
+  },
   messenger_group_answer_request: (a) => {
     const g = mockGroup(String(a?.groupId));
     g.requests = g.requests.filter((r) => r !== a?.requester);
@@ -723,7 +789,16 @@ export const messengerApi = {
   },
   setEnabled: (enabled: boolean) => invoke<void>('messenger_set_enabled', { enabled }),
   /** Open an http(s) link in the system browser. */
-  openUrl: (url: string) => invoke<void>('messenger_open_url', { url }),
+  openUrl: (url: ExternalUrl) => invoke<void>('messenger_open_url', { url }),
+
+  links: {
+    /** One answer per link, in the order asked. Asks nothing of the network. */
+    inspect: (links: InternalLinkText[]) => invoke<LinkView[]>('messenger_links_inspect', { links }),
+    /** The link of a person, to share. */
+    contact: (pubkey: string) => invoke<string>('messenger_contact_link', { pubkey }),
+    /** Asks the page: only when the user said so. */
+    preview: (url: ExternalUrl) => invoke<LinkPreview>('messenger_link_preview', { url }),
+  },
 
   relays: {
     list: () => invoke<MessengerRelay[]>('messenger_relays_list'),
@@ -793,8 +868,9 @@ export const messengerApi = {
       }),
     /** Must run before the first `getUserMedia` (desktop webviews deny otherwise). */
     grantAccess: () => invoke<void>('messenger_media_grant_access'),
-    sendFile: (to: string, path: string, caption?: string) =>
-      invoke<MessengerMessage>('messenger_dm_send_file', { to, path, caption: caption?.trim() || null }),
+    /** `batch`: the same for files picked together. */
+    sendFile: (to: string, path: string, caption?: string, batch?: string) =>
+      invoke<MessengerMessage>('messenger_dm_send_file', { to, path, caption: caption?.trim() || null, batch: batch ?? null }),
     download: (messageId: string, manual: boolean) => invoke<string | null>('messenger_media_download', { messageId, manual }),
     transfer: (messageId: string) => invoke<MessengerTransfer | null>('messenger_media_transfer', { messageId }),
     pause: (transferId: string) => invoke<void>('messenger_media_pause', { transferId }),

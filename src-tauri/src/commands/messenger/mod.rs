@@ -25,7 +25,7 @@ use messenger_core::{MessengerConfig, MessengerError, SecretStore};
 use messenger_core::PubKey;
 use messenger_runtime::{
     ChatView, ContactPatch, ContactView, CreatedIdentity, DmAction, GroupKind, GroupOp, GroupView, Identity, InviteView,
-    ManifestInfo, MessageView,
+    LinkPreview, LinkView, ManifestInfo, MessageView,
     MediaKind, MediaServerInput, MediaServerView, MessengerRuntime, Recording, RelationView, TransferView,
     ProfileView, RelayView,
     RuntimeStatus,
@@ -735,12 +735,14 @@ pub async fn messenger_dm_send_file(
     to: String,
     path: String,
     caption: Option<String>,
+    // The same for files picked together: they are shown as one album.
+    batch: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<MessageView> {
     let rt = state.messenger.runtime()?;
     let local = import_picked(&app, &path, rt.config().data_dir()).await?;
-    rt.dm_send_file(&to, &local, caption.as_deref()).await.map_err(map_err)
+    rt.dm_send_file(&to, &local, caption.as_deref(), batch.as_deref()).await.map_err(map_err)
 }
 
 /// A picked file as a local path. Desktop pickers give paths. Android gives
@@ -879,6 +881,28 @@ pub async fn messenger_open_url(url: String, app: tauri::AppHandle) -> CmdResult
         return Err(AppError::Other("only http(s) links can be opened".into()));
     }
     open_external(&app, url, false)
+}
+
+// ─── Links ──────────────────────────────────────────────────────────────────
+
+/// What each link leads to, in the order asked. Takes `veydan://…`,
+/// `npub1…` and `nostr:npub1…`; anything else comes back as `invalid`.
+#[tauri::command]
+pub async fn messenger_links_inspect(links: Vec<String>, state: tauri::State<'_, AppState>) -> CmdResult<Vec<LinkView>> {
+    state.messenger.runtime()?.links_inspect(&links).await.map_err(map_err)
+}
+
+/// The `veydan://contact/…` link of a person, to share.
+#[tauri::command]
+pub async fn messenger_contact_link(pubkey: String, state: tauri::State<'_, AppState>) -> CmdResult<String> {
+    state.messenger.runtime()?.contact_link(&parse_pubkey(&pubkey)?).await.map_err(map_err)
+}
+
+/// Title, description and picture of an https page. Asks the page: call
+/// it when the user pressed the button, never when a message is shown.
+#[tauri::command]
+pub async fn messenger_link_preview(url: String, state: tauri::State<'_, AppState>) -> CmdResult<LinkPreview> {
+    state.messenger.runtime()?.link_preview(&url).await.map_err(map_err)
 }
 
 /// Open the attachment of a message with the system's default application.

@@ -24,6 +24,8 @@ allowed() {
   case "$1" in
     core)      echo "" ;;
     http)      echo "messenger-core" ;;
+    links)     echo "messenger-core" ;;
+    preview)   echo "messenger-core messenger-http" ;;
     store)     echo "messenger-core" ;;
     transport) echo "messenger-core" ;;
     identity)  echo "messenger-core messenger-store" ;;
@@ -31,8 +33,8 @@ allowed() {
     contacts)  echo "messenger-core messenger-store messenger-http" ;;
     dm)        echo "messenger-core messenger-store messenger-contacts" ;;
     media)     echo "messenger-core messenger-store messenger-http" ;;
-    groups)    echo "messenger-core messenger-store messenger-media messenger-dm" ;;
-    runtime)   echo "messenger-core messenger-store messenger-transport messenger-identity messenger-ingress messenger-contacts messenger-dm messenger-media messenger-groups" ;;
+    groups)    echo "messenger-core messenger-store messenger-media messenger-dm messenger-links" ;;
+    runtime)   echo "messenger-core messenger-store messenger-transport messenger-identity messenger-ingress messenger-contacts messenger-dm messenger-media messenger-groups messenger-links messenger-preview" ;;
     testkit)   echo "messenger-core messenger-store messenger-runtime" ;;
     *)         echo "__unknown__" ;;
   esac
@@ -51,12 +53,13 @@ for toml in src-tauri/crates/messenger/*/Cargo.toml; do
   done
 done
 
-# 3. Messenger UI may import only its own files, ui primitives, i18n, Icon and Svelte/Tauri APIs.
+# 3. Messenger UI may import only its own files, ui primitives, i18n, Icon and Svelte/Tauri APIs
+#    (and vitest, in its tests).
 while IFS= read -r line; do
   file=${line%%:*}
   spec=$(echo "$line" | sed -nE "s/.*from ['\"]([^'\"]+)['\"].*/\1/p")
   case "$spec" in
-    ""|./*|../*|\$lib/messenger/*|\$lib/components/ui/*|\$lib/i18n|\$lib/Icon.svelte|\$app/*|svelte|svelte/*|@tauri-apps/*) ;;
+    ""|./*|../*|\$lib/messenger/*|\$lib/components/ui/*|\$lib/i18n|\$lib/Icon.svelte|\$app/*|svelte|svelte/*|@tauri-apps/*|vitest) ;;
     *) say "$file imports '$spec' (messenger UI may not depend on host modules)" ;;
   esac
 done < <(grep -rnE "^\s*import .* from ['\"]" src/lib/messenger --include='*.ts' --include='*.svelte' || true)

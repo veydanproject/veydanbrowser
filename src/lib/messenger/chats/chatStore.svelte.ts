@@ -149,12 +149,20 @@ class ChatStore {
     return m;
   }
 
-  /** Attach a local file; the placeholder appears at once. */
-  async sendFile(path: string, caption?: string) {
+  /** A message into a chat that need not be the open one. */
+  async sendTo(chat: MessengerChat, text: string) {
+    const m = await messengerApi.dm.sendText(this.target(chat), text);
+    if (this.activeId === chat.id) this.upsert(m);
+    this.scheduleChatsRefresh();
+    return m;
+  }
+
+  /** Attach a local file; the placeholder appears at once. Files of one `batch` are shown together. */
+  async sendFile(path: string, caption?: string, batch?: string) {
     const chat = this.active;
     const to = this.target(chat);
     if (!chat) throw new Error("no chat");
-    const m = await messengerApi.media.sendFile(to, path, caption);
+    const m = await messengerApi.media.sendFile(to, path, caption, batch);
     if (this.activeId === chat.id) this.upsert(m);
     this.scheduleChatsRefresh();
     return m;

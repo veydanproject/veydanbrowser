@@ -18,6 +18,7 @@ pub mod dm_routes;
 pub mod events_raw;
 pub mod groups;
 pub mod identity;
+pub mod link_previews;
 pub mod media;
 pub mod messages;
 pub mod outbox;

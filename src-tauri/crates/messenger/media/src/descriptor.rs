@@ -162,6 +162,9 @@ impl MediaDescriptor {
         if self.waveform.as_ref().is_some_and(|w| w.len() > MAX_WAVEFORM) {
             return bad("waveform is too long");
         }
+        if self.batch.as_ref().is_some_and(|b| !valid_batch(b)) {
+            return bad("batch is not an identifier");
+        }
         if self.duration_ms.is_some_and(|d| d > 24 * 3600 * 1000) {
             return bad("duration out of range");
         }
@@ -197,6 +200,13 @@ impl MediaDescriptor {
     pub fn chunk_url(server: &str, sha256: &str) -> String {
         format!("{}/{}", server.trim_end_matches('/'), sha256)
     }
+}
+
+/// What says that files were sent by one action: 8 to 64 characters of
+/// `0-9 a-z A-Z - _`. Made by the sender, compared by the receiver, never
+/// shown.
+pub fn valid_batch(batch: &str) -> bool {
+    (8..=64).contains(&batch.len()) && batch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// A file name that cannot escape a directory: no separators, no leading
@@ -282,6 +292,20 @@ pub(crate) mod tests {
         };
         d.set_key(&FileKey { key: [1; 32], base_nonce: [2; 12] });
         d
+    }
+
+    #[test]
+    fn batch_is_an_identifier_or_nothing() {
+        let mut d = sample();
+        for ok in ["0123abcd", "b3f1c2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d", "A_b-9xyz"] {
+            d.batch = Some(ok.into());
+            assert!(d.validate().is_ok(), "{ok}");
+            assert_eq!(MediaDescriptor::from_envelope(&d.to_envelope()).unwrap().batch.as_deref(), Some(ok));
+        }
+        for bad in ["", "short", "has space", "semi;colon", "путь", &"a".repeat(65)] {
+            d.batch = Some(bad.to_string());
+            assert!(d.validate().is_err(), "{bad}");
+        }
     }
 
     #[test]

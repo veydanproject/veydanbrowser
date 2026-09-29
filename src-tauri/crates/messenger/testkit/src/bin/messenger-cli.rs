@@ -304,7 +304,7 @@ async fn main() {
             let caption = if args.is_empty() { None } else { Some(args.join(" ")) };
             wait_connect(&rt).await;
             let started = std::time::Instant::now();
-            let ph = rt.dm_send_file(&to, &path, caption.as_deref()).await.unwrap_or_else(die);
+            let ph = rt.dm_send_file(&to, &path, caption.as_deref(), None).await.unwrap_or_else(die);
             let tid = ph.media.as_ref().and_then(|m| m["transfer_id"].as_str().map(String::from)).unwrap_or_default();
             let mut last = 0u64;
             loop {

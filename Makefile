@@ -30,6 +30,10 @@ dev-msg:
 dev-profile:
 	@bash scripts/run-profile.sh "$(WORKDIR)"
 
+# TypeScript types of what the messenger runtime hands to the UI, from the Rust types.
+msg-types:
+	@bash -c 'source build-env.sh >/dev/null && UPDATE_TS_BINDINGS=1 cargo test --manifest-path src-tauri/crates/messenger/Cargo.toml -p messenger-runtime bindings -- --quiet'
+
 # Messenger crates: Tauri-free workspace, testable without the app.
 msg-test:
 	@bash -c 'source build-env.sh >/dev/null && cargo test --workspace --manifest-path src-tauri/crates/messenger/Cargo.toml'

@@ -20,6 +20,7 @@ import { chatStore } from './chats/chatStore.svelte';
 import { transferStore } from './media/transferStore.svelte';
 import { groupStore } from "./groups/groupStore.svelte";
 import { nameStore } from "./groups/names.svelte";
+import { linkStore } from "./content/linkStore.svelte";
 
 export interface FeedEntry extends MessengerUiEvent {
   at: number;
@@ -104,6 +105,7 @@ class MessengerStore {
         this.ownProfile = null;
         chatStore.reset();
         groupStore.reset();
+        linkStore.reset();
       }
       this.loaded = true;
     } finally {
@@ -124,6 +126,7 @@ class MessengerStore {
         chatStore.handleEvent(e.payload);
         transferStore.handleEvent(e.payload);
         groupStore.handleEvent(e.payload);
+        linkStore.handleEvent(e.payload);
         if (e.payload.name === 'transfer.progress') return;
         this.feed = [{ ...e.payload, at: Date.now() }, ...this.feed].slice(0, FEED_LIMIT);
         if (e.payload.name === 'dm.message' || e.payload.name === 'history.synced') this.scheduleStatusRefresh();

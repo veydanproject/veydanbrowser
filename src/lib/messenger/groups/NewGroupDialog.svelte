@@ -10,6 +10,8 @@
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import { groupStore } from './groupStore.svelte';
   import { chatStore } from '../chats/chatStore.svelte';
+  import { linkStore } from '../content/linkStore.svelte';
+  import { tokenize } from '../content/tokenize';
   import { type MessengerGroup } from '../api';
 
   const tr = (key: string, params?: Record<string, string>) => get(t)(key as "msg_you", params);
@@ -42,11 +44,19 @@
     wasOpen = open;
   });
 
-  const parsed = $derived.by(() => {
-    const m = /^veydan:\/\/group\/([0-9a-f]{64})\?(.+)$/i.exec(url.trim());
-    if (!m) return null;
-    const p = new URLSearchParams(m[2]);
-    return { kind: p.get('t') === 'public' ? 'public' : 'private', name: p.get('n') ?? '' } as const;
+  // What the text is, is for the runtime to say: a link is never taken apart here.
+  let parsed = $state<{ kind: 'public' | 'private'; name: string; link: string } | null>(null);
+  $effect(() => {
+    const text = url.trim();
+    parsed = null;
+    const parts = tokenize(text);
+    const only = parts.length === 1 && parts[0].type === 'internal' ? parts[0] : null;
+    if (!only) return;
+    let stale = false;
+    linkStore.resolve(only.link)
+      .then((v) => { if (!stale && v.kind === 'group') parsed = { kind: v.group_kind, name: v.name, link: v.link }; })
+      .catch(() => {});
+    return () => { stale = true; };
   });
 
   function explain(e: unknown): string {
@@ -68,8 +78,9 @@
   }
 
   async function join() {
+    if (!parsed) return;
     error = ''; busy = true;
-    try { await finish(await groupStore.openLink(url.trim(), note.trim())); }
+    try { await finish(await groupStore.openLink(parsed.link, note.trim())); linkStore.refresh(); }
     catch (e) { error = explain(e); }
     finally { busy = false; }
   }

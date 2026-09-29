@@ -13,7 +13,10 @@ pub mod media;
 
 /// Region used when the stored one cannot be read.
 pub(crate) const REGION_FALLBACK: &str = "default";
+pub mod bindings;
 pub mod groups;
+pub mod links;
+pub mod preview;
 pub mod relays;
 pub mod session;
 
@@ -41,6 +44,8 @@ pub use messenger_contacts::book::{parse_key, ContactPatch};
 pub use messenger_contacts::{ContactView, ProfileInput, ProfileView};
 pub use messenger_identity::{CreatedIdentity, Identity};
 pub use messenger_groups::{GroupKind, GroupView, InviteView, KeyView as GroupKeyView, MemberView, OpBody as GroupOp, Role as GroupRole};
+pub use links::LinkView;
+pub use messenger_preview::Preview as LinkPreview;
 pub use relays::{ManifestInfo, RelayService, RelayView};
 
 /// Facts for the host's status screen. Never contains secrets.
@@ -83,6 +88,7 @@ pub struct MessengerRuntime {
     nip05: Nip05Service,
     dm: DmService,
     media: MediaService,
+    previews: preview::LinkPreviews,
     group_driver: groups::GroupsDriver,
     group_signals: tokio::task::JoinHandle<()>,
     outbox: Outbox,
@@ -122,6 +128,12 @@ impl MessengerRuntime {
                     Arc::new(DmRoutesHandler::new(store.clone())),
                 ]))),
         );
+        let previews = preview::LinkPreviews::new(
+            store.clone(),
+            relays.clone(),
+            messenger_preview::PreviewService::new(Arc::new(messenger_preview::ReqwestFetcher::new()?)),
+            Arc::new(SystemClock),
+        );
         let (ui, _) = broadcast::channel(256);
         let group_driver =
             groups::GroupsDriver::new(group_service, store.clone(), relays.clone(), outbox.clone(), ui.clone());
@@ -137,6 +149,7 @@ impl MessengerRuntime {
             nip05,
             dm,
             media,
+            previews,
             group_driver,
             group_signals,
             outbox,

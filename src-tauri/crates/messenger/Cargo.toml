@@ -9,7 +9,7 @@
 
 [workspace]
 resolver = "2"
-members = ["core", "http", "store", "identity", "transport", "ingress", "contacts", "dm", "media", "groups", "runtime", "testkit"]
+members = ["core", "http", "links", "preview", "store", "identity", "transport", "ingress", "contacts", "dm", "media", "groups", "runtime", "testkit"]
 
 [workspace.package]
 version = "0.1.0"
@@ -39,10 +39,13 @@ hex = "0.4"
 base64 = "0.22"
 getrandom = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+ts-rs = { version = "12", default-features = false, features = ["serde-compat"] }
 nostr = { version = "0.45", default-features = false, features = ["std", "nip06", "nip44", "nip49", "nip59", "os-rng"] }
 
 messenger-core = { path = "core" }
 messenger-http = { path = "http" }
+messenger-links = { path = "links" }
+messenger-preview = { path = "preview" }
 messenger-store = { path = "store" }
 messenger-identity = { path = "identity" }
 messenger-transport = { path = "transport" }

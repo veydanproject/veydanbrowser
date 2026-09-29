@@ -16,7 +16,7 @@
   async function pick() {
     if (!isTauriHost) {
       // Browser preview: there are no paths; send a sample so the UI can be seen.
-      onfiles(['/home/dev/Pictures/sample.png']);
+      onfiles(['/home/dev/Pictures/sample-1.png', '/home/dev/Pictures/sample-2.png', '/home/dev/Pictures/sample-3.png']);
       return;
     }
     const { open } = await import('@tauri-apps/plugin-dialog');

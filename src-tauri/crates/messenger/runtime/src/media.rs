@@ -134,6 +134,7 @@ impl UploadJob {
                         descriptor.mime = m.to_string();
                     }
                     descriptor.duration_ms = ph.get("duration_ms").and_then(|v| v.as_u64());
+                    descriptor.batch = ph.get("batch").and_then(|v| v.as_str()).map(String::from);
                     descriptor.waveform = ph
                         .get("waveform")
                         .and_then(|v| v.as_array())
@@ -267,8 +268,11 @@ impl MessengerRuntime {
 
     /// Attach a file to the chat with `to` (a person, or `group:<id>`). Returns the placeholder
     /// message at once; the upload continues in the background.
-    pub async fn dm_send_file(&self, to: &str, path: &Path, caption: Option<&str>) -> Result<MessageView> {
-        self.send_attachment(to, path, caption, None).await
+    pub async fn dm_send_file(&self, to: &str, path: &Path, caption: Option<&str>, batch: Option<&str>) -> Result<MessageView> {
+        if batch.is_some_and(|b| !messenger_media::descriptor::valid_batch(b)) {
+            return Err(MessengerError::Invalid("err.bad_batch".into()));
+        }
+        self.send_attachment(to, path, caption, None, batch).await
     }
 
     /// Send something recorded in the app (voice message, video circle).
@@ -305,7 +309,7 @@ impl MessengerRuntime {
         tokio::fs::write(&path, &rec.bytes).await?;
         let waveform = rec.waveform.map(|w| w.into_iter().take(messenger_media::descriptor::MAX_WAVEFORM).collect::<Vec<u8>>());
         let meta = AttachmentMeta { kind: rec.kind, mime, duration_ms: rec.duration_ms, waveform };
-        let result = self.send_attachment(to, &path, caption, Some(meta)).await;
+        let result = self.send_attachment(to, &path, caption, Some(meta), None).await;
         if result.is_err() {
             let _ = tokio::fs::remove_dir_all(&dir).await;
         }
@@ -318,6 +322,7 @@ impl MessengerRuntime {
         path: &Path,
         caption: Option<&str>,
         meta_override: Option<AttachmentMeta>,
+        batch: Option<&str>,
     ) -> Result<MessageView> {
         let keys = self.session_keys().await?;
         let group = to.strip_prefix("group:").map(String::from);
@@ -347,6 +352,10 @@ impl MessengerRuntime {
             if let Some(w) = m.waveform {
                 fields["waveform"] = serde_json::json!(w);
             }
+        }
+        // Files picked together stay together on the other side.
+        if let Some(b) = batch {
+            fields["batch"] = b.into();
         }
         let placeholder = match (&group, &peer) {
             (Some(g), _) => self.groups().media_placeholder(&keys, g, fields, caption).await?,

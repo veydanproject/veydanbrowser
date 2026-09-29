@@ -14,6 +14,7 @@
   import ContextMenu, { type MenuEntry } from '$lib/components/ui/ContextMenu.svelte';
   import Avatar from '../contacts/Avatar.svelte';
   import GroupLink from './GroupLink.svelte';
+  import MessageContent from '../content/MessageContent.svelte';
   import InvitePicker from './InvitePicker.svelte';
   import { groupStore } from './groupStore.svelte';
   import { nameStore, shortKey } from './names.svelte';
@@ -176,7 +177,7 @@
           {$t(group.kind === 'public' ? 'msg_group_kind_public' : 'msg_group_kind_private')} ·
           {$t('msg_group_members_n', { n: String(group.members.length) })}
         </div>
-        {#if group.about}<p class="about">{group.about}</p>{/if}
+        {#if group.about}<div class="about"><MessageContent text={group.about} cards={false} /></div>{/if}
         <p class="note">
           {#if group.kind === 'public'}{$t('msg_group_note_public')}
           {:else if group.history_for_new}{$t('msg_group_note_history_on')}
@@ -297,7 +298,7 @@
   .card-top { display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); text-align: center; }
   .name { font-size: var(--fs-md); font-weight: var(--fw-extrabold); letter-spacing: -0.2px; overflow-wrap: anywhere; }
   .kind { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--text-3); }
-  .about { margin: 0; font-size: var(--fs-sm); color: var(--text-body); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .about { color: var(--text-body); }
   .note, .hint { margin: 0; font-size: var(--fs-xs); color: var(--text-3); line-height: 1.45; }
   .field {
     width: 100%; font: inherit; font-size: var(--fs-sm); color: var(--text); background: var(--surface-2);

@@ -6,16 +6,19 @@
   import { t } from '$lib/i18n';
   import Icon from '$lib/Icon.svelte';
   import { clock } from '../shared/time';
-  import { linkify } from '../shared/linkify';
+  import MessageContent from '../content/MessageContent.svelte';
   import { longpress } from '../shared/longpress';
-  import { messengerApi } from '../api';
+  import { tint } from '../shared/tint';
   import type { MessengerMessage } from '../api';
 
   interface Props {
     message: MessengerMessage;
-    /** First bubble of a run from the same sender: gets the tail corner. */
+    /** First and last bubble of a run from the same sender: the corners between bubbles of a run are small. */
     first: boolean;
+    last?: boolean;
     peerTitle: string;
+    /** Chats of many: the name is shown above this message. */
+    showAuthor?: boolean;
     /** Chats of many: name of whoever wrote a message. */
     author?: (pubkey: string) => string;
     highlighted?: boolean;
@@ -25,31 +28,24 @@
     /** Renders the attachment of a `media` message (stage 6). */
     media?: Snippet<[MessengerMessage]>;
   }
-  let { message: m, first, peerTitle, author, highlighted = false, onmenu, onreplyclick, onretry, media }: Props = $props();
+  let { message: m, first, last = true, peerTitle, showAuthor = false, author, highlighted = false, onmenu, onreplyclick, onretry, media }: Props = $props();
 
   const out = $derived(m.direction === 'out');
   const statusIcon = $derived(
     m.status === 'sent' ? 'check' : m.status === 'failed' ? 'alert-triangle' : m.status === 'uploading' ? 'upload' : 'clock',
   );
   const statusTitle = $derived($t(`msg_status_${m.status}` as 'msg_status_sent'));
-
-  /** A steady colour per person, readable on both themes. */
-  function tint(pubkey: string): string {
-    let h = 0;
-    for (let i = 0; i < pubkey.length; i++) h = (h * 31 + pubkey.charCodeAt(i)) >>> 0;
-    return `hsl(${h % 360} 55% 50%)`;
-  }
 </script>
 
-<div class="line" class:out class:first class:highlighted data-mid={m.id}>
+<div class="line" class:out class:first class:last class:highlighted data-mid={m.id}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="bubble" class:deleted={m.deleted} class:failed={m.status === 'failed'} oncontextmenu={(e) => onmenu(e, m)}
     use:longpress={{ onpress: (p) => onmenu(new MouseEvent('contextmenu', { clientX: p.x, clientY: p.y }), m) }}>
-    {#if author && !out && first}<span class="author" style="color: {tint(m.sender_pubkey)}">{author(m.sender_pubkey)}</span>{/if}
+    {#if author && showAuthor}<span class="author" style="color: {tint(m.sender_pubkey)}">{author(m.sender_pubkey)}</span>{/if}
     {#if m.reply_to && !m.deleted}
       <button class="reply" onclick={() => onreplyclick(m.reply_to!.id)}>
         <span class="reply-who">{author ? author(m.reply_to.sender_pubkey) : m.reply_to.sender_pubkey === m.sender_pubkey && out || m.reply_to.sender_pubkey !== m.sender_pubkey && !out ? $t("msg_you") : peerTitle}</span>
-        <span class="reply-text">{m.reply_to.text ?? $t('msg_message_deleted')}</span>
+        <span class="reply-text">{#if m.reply_to.text}<MessageContent text={m.reply_to.text} plain />{:else}{$t('msg_message_deleted')}{/if}</span>
       </button>
     {/if}
 
@@ -57,9 +53,9 @@
       <span class="tomb"><Icon name="ban" size={12} /> {$t('msg_message_deleted')}</span>
     {:else if m.content_type === 'media' && media}
       {@render media(m)}
-      {#if m.text}<span class="text">{m.text}</span>{/if}
+      {#if m.text}<MessageContent text={m.text} />{/if}
     {:else if m.text}
-      <span class="text">{#each linkify(m.text) as p}{#if p.href}<a href={p.href} onclick={(e) => { e.preventDefault(); messengerApi.openUrl(p.href!).catch(() => {}); }}>{p.text}</a>{:else}{p.text}{/if}{/each}</span>
+      <MessageContent text={m.text} />
     {:else}
       <span class="tomb">{$t('msg_message_unsupported', { type: m.content_type })}</span>
     {/if}
@@ -87,17 +83,18 @@
   .bubble {
     position: relative; max-width: min(620px, 78%); padding: 7px 11px 6px;
     background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
-    border-radius: 14px; display: flex; flex-direction: column; gap: 3px; min-width: 64px;
+    --r: 14px; --r-joined: 5px;
+    border-radius: var(--r); display: flex; flex-direction: column; gap: 3px; min-width: 64px;
   }
-  .line.first .bubble { border-top-left-radius: 5px; }
-  .line.out .bubble { background: var(--accent-tint); border-color: var(--accent-tint-border); }
-  .line.out.first .bubble { border-top-left-radius: 14px; border-top-right-radius: 5px; }
+  /* A run of one author: the corners that touch the next bubble are small. */
+  .line:not(.first) .bubble { border-top-left-radius: var(--r-joined); }
+  .line:not(.last) .bubble { border-bottom-left-radius: var(--r-joined); }
+  .line.out .bubble { background: var(--accent-tint); border-color: var(--accent-tint-border); border-top-left-radius: var(--r); border-bottom-left-radius: var(--r); }
+  .line.out:not(.first) .bubble { border-top-right-radius: var(--r-joined); }
+  .line.out:not(.last) .bubble { border-bottom-right-radius: var(--r-joined); }
   .bubble.failed { border-color: var(--danger-border); }
-  .text { font-size: var(--fs-sm); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-  .text a { color: var(--accent-text-2); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
   /* Touch: a long press opens the menu, so it must not start a selection. */
   @media (pointer: coarse) {
-    .text { user-select: none; -webkit-user-select: none; }
     .bubble { max-width: 86%; -webkit-touch-callout: none; }
     .line { padding-inline: var(--sp-3); }
   }
@@ -115,6 +112,7 @@
   .line.out .reply { background: color-mix(in srgb, var(--accent) 10%, transparent); }
   .reply-who { font-size: var(--fs-2xs); font-weight: var(--fw-bold); color: var(--accent-text-2); }
   .reply-text { font-size: var(--fs-xs); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
+  .reply-text :global(.text) { font-size: inherit; line-height: inherit; white-space: inherit; user-select: none; }
   .retry {
     display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; border: none; background: none;
     color: var(--danger-text); font: inherit; font-size: var(--fs-2xs); cursor: pointer; padding: 2px 4px;

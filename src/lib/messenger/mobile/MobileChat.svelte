@@ -11,7 +11,8 @@
   import ChatWindow from '../dm/ChatWindow.svelte';
   import GroupChat from "../groups/GroupChat.svelte";
   import MobileFrame from './MobileFrame.svelte';
-  import { BASE } from './routes';
+  import { BASE, chatHref } from './routes';
+  import { onChatOpened } from '../content/actions';
 
   const id = $derived(page.url.searchParams.get('id') ?? '');
   let missing = $state(false);
@@ -32,6 +33,9 @@
   }
 
   $effect(() => { if (id) load(id); });
+
+  // A card opened another chat: a phone shows a chat on its own page.
+  onMount(() => onChatOpened((chatId) => { if (chatId !== id) goto(chatHref(chatId)); }));
 
   onMount(() => {
     // Coming back from the background: catch up on what arrived meanwhile.

@@ -7,8 +7,13 @@
 //!
 //! The cache is keyed by the plaintext SHA-256 (`<cache>/<sha256>/<name>`),
 //! so the same file received twice is stored once and names never collide.
-//! Verified chunks are kept as `<cache>/tmp/<sha256>/<index>` until the
+//! Verified chunks are kept as `<cache>/tmp/<sha256>-<ciphertext id>/<index>`
+//! until the
 //! file is complete: an interrupted download continues where it stopped.
+//! The same picture sent twice is encrypted twice with different keys: the
+//! two downloads have the same plaintext hash and must not share chunks,
+//! so the folder is named by the ciphertext too, and one download at a time
+//! works in a folder.
 
 use crate::crypto::sha256_hex;
 use crate::descriptor::{safe_name, MediaDescriptor};
@@ -16,7 +21,9 @@ use crate::upload::{CANCEL, PAUSE};
 use async_trait::async_trait;
 use messenger_core::{MessengerError, Result};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::sync::atomic::{AtomicU8, Ordering};
 use tokio::io::AsyncWriteExt;
 
@@ -73,8 +80,42 @@ pub fn cached_path(cache_dir: &Path, d: &MediaDescriptor) -> PathBuf {
     cache_dir.join(&d.sha256).join(safe_name(&d.name))
 }
 
-fn tmp_dir(cache_dir: &Path, d: &MediaDescriptor) -> PathBuf {
-    cache_dir.join("tmp").join(&d.sha256)
+/// Where the chunks of this one encrypted copy wait. Named by the plaintext
+/// (to find it by eye) and by the chunk table, which only this copy has.
+pub(crate) fn tmp_dir(cache_dir: &Path, d: &MediaDescriptor) -> PathBuf {
+    let mut h = Sha256::new();
+    for c in &d.chunks {
+        h.update(c.sha256.as_bytes());
+    }
+    let copy = hex::encode(h.finalize());
+    cache_dir.join("tmp").join(format!("{}-{}", d.sha256, &copy[..16]))
+}
+
+/// One download at a time per folder, in this process.
+fn folder_lock(dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<StdMutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut map = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|_, w| w.strong_count() > 0);
+    if let Some(lock) = map.get(dir).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    map.insert(dir.to_path_buf(), Arc::downgrade(&lock));
+    lock
+}
+
+/// Folders of the old naming (`tmp/<sha256>`) were shared by every copy of
+/// a file and may hold a mix of them: nothing in them can be trusted to
+/// resume from. Downloads start again in folders of their own.
+pub async fn drop_shared_folders(cache_dir: &Path) {
+    let Ok(mut dir) = tokio::fs::read_dir(cache_dir.join("tmp")).await else { return };
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit()) {
+            let _ = tokio::fs::remove_dir_all(entry.path()).await;
+        }
+    }
 }
 
 /// The file when it is already in the cache and intact in size.
@@ -137,6 +178,13 @@ where
         }
     }
     let tmp = tmp_dir(cache_dir, d);
+    let lock = folder_lock(&tmp);
+    let _guard = lock.lock().await;
+    // Whoever held the folder before may have finished the file.
+    if let Some(p) = cached(cache_dir, d).await {
+        on_progress(d.size, d.size);
+        return Ok(DownloadOutcome::Done(p));
+    }
     tokio::fs::create_dir_all(&tmp).await?;
 
     // Phase 1: every chunk verified on disk (still encrypted).
