@@ -7,7 +7,8 @@
   `m-page` class only to take the height the mobile shell gives a page.
 -->
 <script lang="ts">
-  import type { Snippet } from 'svelte';
+  import { onMount, type Snippet } from 'svelte';
+  import { onKeyboard } from '../shared/keyboard';
   import { t } from '$lib/i18n';
   import Icon from '$lib/Icon.svelte';
   import ConfirmHost from '../shared/ConfirmHost.svelte';
@@ -25,9 +26,13 @@
     children: Snippet;
   }
   let { title = '', onback, lead, actions, scroll = true, bare = false, children }: Props = $props();
+
+  // The keyboard covers the bottom of the screen: lift everything above it.
+  let kb = $state(0);
+  onMount(() => onKeyboard((inset) => (kb = inset)));
 </script>
 
-<div class="m-page msg-m">
+<div class="m-page msg-m" class:kb-open={kb > 0} style:padding-bottom="{kb}px">
   {#if !bare}
     <header class="bar">
       {#if onback}
@@ -60,6 +65,8 @@
   }
   .bar :global(.ibtn:active), .ibtn:active { background: var(--surface-3); }
   .bar :global(.ibtn.accent) { color: var(--accent-text-2); }
+  /* With the keyboard up the home-indicator inset is under the keyboard. */
+  .kb-open { --sab: 0px; }
   .content { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .content.scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--sp-3) var(--sp-3) calc(var(--sp-5) + var(--sab, 0px)); gap: var(--sp-3); }
   .content.scroll :global(.card) { max-width: none; width: 100%; }

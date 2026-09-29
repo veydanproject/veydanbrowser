@@ -16,6 +16,7 @@
   import { messengerStore } from '../store.svelte';
   import { dayKey, dayLabel } from '../shared/time';
   import { confirmStore } from '../shared/confirm.svelte';
+  import { onKeyboard } from '../shared/keyboard';
   import { dmErrorCode, mediaErrorCode, messengerError, type DmAction, type MessengerChat, type MessengerMessage } from '../api';
 
   interface Props {
@@ -52,6 +53,9 @@
     void chatStore.tailTick;
     if (atBottom) tick().then(scrollToBottom);
   });
+
+  // The keyboard takes height away: keep the latest message in view.
+  $effect(() => onKeyboard(() => { if (atBottom) tick().then(scrollToBottom); }));
 
   function scrollToBottom() {
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
