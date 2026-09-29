@@ -1,0 +1,6 @@
+/target/
+/dist/
+/.tools/
+# Where the server lives and how to reach it; copy deploy/deploy.example.
+/deploy.env
+/vpush.toml

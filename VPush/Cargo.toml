@@ -1,0 +1,43 @@
+# VPush (Veydan Push): push notification server for Nostr relays.
+#
+# Self-contained on purpose: no path dependency leaves this folder, so the
+# whole thing moves to its own repository by moving the folder.
+[workspace]
+resolver = "2"
+members = ["crates/vpush-proto", "crates/vpush-server", "crates/vpush"]
+
+[workspace.package]
+version = "0.0.2"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+vpush-proto = { path = "crates/vpush-proto" }
+vpush-server = { path = "crates/vpush-server" }
+
+anyhow = "1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "query"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "io-util", "fs"] }
+toml = "0.9"
+tower-http = { version = "0.6", features = ["timeout", "limit"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "registry", "fmt", "ansi"] }
+url = "2"
+base64 = "0.22"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "http2"] }
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+webpki-roots = "1"
+wiremock = "0.6"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "abort"

@@ -1,0 +1,35 @@
+[Unit]
+Description=VPush (Veydan push server)
+# After docker too: when the reverse proxy runs in a container, VPush listens
+# on the docker bridge address, which exists only once docker is up. Where
+# there is no docker this orders nothing.
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=vpush
+Group=vpush
+ExecStart=/opt/vpush/current/vpush serve --config /opt/vpush/etc/vpush.toml
+# Re-reads the config; log levels are applied without a restart.
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+
+# /run/vpush, where the admin socket lives.
+RuntimeDirectory=vpush
+RuntimeDirectoryMode=0750
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/vpush/data /opt/vpush/log
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

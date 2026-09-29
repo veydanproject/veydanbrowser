@@ -1,0 +1,29 @@
+# Where VPush is deployed. Copy to ../deploy.env (it is never committed):
+#
+#   cp deploy/deploy.example deploy.env
+
+# Address of the server.
+VPUSH_HOST=203.0.113.10
+
+# Login. Anything but root needs sudo on the server.
+VPUSH_USER=root
+
+VPUSH_PORT=22
+
+# How to get in: a password or a key. With neither, ssh asks for the
+# password itself, once per command.
+#
+# In quotes of this kind, so that $ and ! in the password stay as they are.
+#VPUSH_PASSWORD='the password'
+#
+# A key is safer than a password in a file: nothing secret is stored here.
+#VPUSH_SSH_KEY=~/.ssh/id_ed25519
+
+VPUSH_REMOTE_DIR=/opt/vpush
+
+# How many releases and database copies stay on the server.
+#VPUSH_KEEP_RELEASES=5
+#VPUSH_KEEP_BACKUPS=10
+
+# How long a new release may take to answer before it is rolled back.
+#VPUSH_HEALTH_SECS=30

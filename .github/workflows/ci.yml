@@ -55,6 +55,24 @@ jobs:
       - name: Clippy (messenger workspace, blocking)
         run: cargo clippy --workspace --all-targets --manifest-path src-tauri/crates/messenger/Cargo.toml -- -D warnings
 
+  # VPush is a server of its own with its own workspace and lock file; it
+  # shares nothing with the app, so it moves out by moving the folder.
+  vpush:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: VPush
+          key: vpush
+      - name: Tests (vpush workspace)
+        run: cargo test --workspace --all-targets --locked --manifest-path VPush/Cargo.toml
+      - name: Clippy (vpush workspace, blocking)
+        run: cargo clippy --workspace --all-targets --locked --manifest-path VPush/Cargo.toml -- -D warnings
+
   rust:
     runs-on: ubuntu-22.04
     steps:

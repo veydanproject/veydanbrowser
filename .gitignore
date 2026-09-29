@@ -48,3 +48,6 @@ latest.json.sig
 *.db-wal
 src-tauri/crates/messenger/target/
 user1/
+# VPush build output (the folder has its own .gitignore too)
+VPush/target/
+VPush/dist/

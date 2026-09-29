@@ -78,3 +78,8 @@ push:
 		exit 1; \
 	fi
 	@bash scripts/push.sh "$(PUSH_CHANNEL)" "$(PUSH_PLATFORMS)" "$(VERSION)" "$(MSG)"
+
+# VPush (push server) lives in VPush/ with its own Makefile:
+# make vpush-test, make vpush-deploy, make vpush-logs ...
+vpush-%:
+	@$(MAKE) --no-print-directory -C VPush $* ARGS="$(ARGS)"

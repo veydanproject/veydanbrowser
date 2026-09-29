@@ -1,0 +1,48 @@
+# VPush configuration.
+#
+# Check it without starting anything:   vpush check-config --config <this file>
+# An unknown key or a wrong type is an error, never silently ignored.
+
+# The address clients use, exactly as they see it. No trailing slash.
+public_url = "https://push.example.org"
+
+[server]
+# TLS is done by the reverse proxy (nginx, caddy) in front, so VPush listens
+# on the loopback only.
+listen = "127.0.0.1:8090"
+request_timeout_secs = 15
+max_body_bytes = 65536
+
+[admin]
+# Socket of `vpush ctl`. Only the vpush user and group can open it.
+socket = "/run/vpush/admin.sock"
+
+[log]
+# text | json
+format = "text"
+# Level of everything not named below: off, error, warn, info, debug, trace.
+level = "info"
+
+# Level per module, or per crate. Changed on the running server with
+#   vpush ctl log set relay=debug --for 15m
+# and re-read from this file on `systemctl reload vpush`.
+[log.targets]
+#relay = "debug"
+#nostr_sdk = "warn"
+
+# Apps whose devices are served. A token of FCM or APNs belongs to one app,
+# so every app brings its own keys. The id is what the app sends when it
+# registers.
+#
+#[apps."net.veydan.mobile".fcm]
+# The service account file of the Firebase project:
+# Firebase console -> Project settings -> Service accounts -> Generate new private key.
+# Put it in /opt/vpush/etc/secrets/, readable by the vpush user only.
+#service_account = "/opt/vpush/etc/secrets/fcm-veydan.json"
+#
+# Reserved. The section is read and checked; delivery to iOS is not built yet.
+#[apps."net.veydan.mobile".apns]
+#key_file = "/opt/vpush/etc/secrets/apns-veydan.p8"
+#key_id = "ABC123DEFG"
+#team_id = "TEAM123456"
+#topic = "net.veydan.mobile"
