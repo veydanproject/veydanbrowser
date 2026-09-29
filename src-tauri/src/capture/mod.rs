@@ -27,20 +27,38 @@ pub fn is_host_invocation() -> bool {
     std::env::args().skip(1).any(|a| a == EXTENSION_ID)
 }
 
-/// Per-user local IPC endpoint shared by the host and the app.
+/// Set by the app on the browsers it launches and inherited by the native host,
+/// so the host reaches the app instance (`--workdir` profile) that owns the browser.
+pub const ENDPOINT_ENV: &str = "VEYDAN_CAPTURE_ENDPOINT";
+
+/// Per-user local IPC endpoint the app listens on; per profile under `--workdir`.
 pub fn ipc_endpoint() -> String {
+    let suffix = crate::workdir::current()
+        .map(|w| format!("-{}", w.tag))
+        .unwrap_or_default();
     #[cfg(windows)]
     {
-        r"\\.\pipe\veydan-capture".to_string()
+        format!(r"\\.\pipe\veydan-capture{suffix}")
     }
     #[cfg(not(windows))]
     {
         // XDG_RUNTIME_DIR is already per-user; the /tmp fallback is suffixed with the user name.
         if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
-            return format!("{}/veydan-capture.sock", dir.trim_end_matches('/'));
+            return format!("{}/veydan-capture{suffix}.sock", dir.trim_end_matches('/'));
         }
         let dir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
         let user = std::env::var("USER").unwrap_or_else(|_| "default".to_string());
-        format!("{}/veydan-capture-{user}.sock", dir.trim_end_matches('/'))
+        format!(
+            "{}/veydan-capture-{user}{suffix}.sock",
+            dir.trim_end_matches('/')
+        )
     }
+}
+
+/// Endpoint the native host connects to: the one its browser was launched with.
+pub fn host_endpoint() -> String {
+    std::env::var(ENDPOINT_ENV)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(ipc_endpoint)
 }

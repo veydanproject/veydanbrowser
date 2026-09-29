@@ -90,7 +90,9 @@ pub async fn launch(
         .arg("--new-instance")
         // Safety net: if the monitor task is ever dropped without an explicit
         // kill (e.g. runtime teardown), take the child down with it.
-        .kill_on_drop(true);
+        .kill_on_drop(true)
+        // The capture native host is started by the browser and inherits this.
+        .env(crate::capture::ENDPOINT_ENV, crate::capture::ipc_endpoint());
 
     if let Some(tz) = timezone {
         cmd.env("TZ", tz);

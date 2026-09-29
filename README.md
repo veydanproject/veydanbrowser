@@ -132,6 +132,18 @@ make clean        # stop running instances and remove build artifacts
 make update       # run the update script
 ```
 
+### Several profiles side by side
+`--workdir <dir>` runs the app as an independent profile: all data (databases, browser profiles, notes, messenger, UI settings) lives in that directory, and profiles with different directories run at the same time. Works on Windows, macOS and Linux, in any build.
+```bash
+veydanspace --workdir vasa                  # relative to the current directory
+veydanspace --workdir /home/user/vasadir
+VEYDAN_WORKDIR=/home/user/vasadir veydanspace
+
+make dev WORKDIR=vasa                       # dev build as a profile (also: make dev-msg WORKDIR=vasa)
+```
+In development the first `make dev` / `make dev-msg` builds the app and starts the dev server; every further one with `WORKDIR` joins it as one more instance. Run without `WORKDIR` it restarts the whole environment.
+Without the flag the app uses its default data directory. Starting a profile that is already running brings its window to the front. Moving a profile directory is not supported: paths inside it are stored absolute.
+
 ### Migrating from Veydan Browser
 Veydan Browser was renamed to Veydan Space; the desktop app id changed from
 `net.veydan.browser` to `net.veydan.space`, so the data folder moved.

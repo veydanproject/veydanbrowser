@@ -23,7 +23,7 @@ pub fn show_quick_capture(app: &tauri::AppHandle) {
             let _ = w.emit("quick-capture://shown", ());
             return;
         }
-        let mut builder =
+        let builder =
             WebviewWindowBuilder::new(&app2, WINDOW_LABEL, WebviewUrl::App("/notes/quick".into()))
                 .title("Quick capture")
                 .inner_size(480.0, 340.0)
@@ -31,6 +31,7 @@ pub fn show_quick_capture(app: &tauri::AppHandle) {
                 .always_on_top(true)
                 .skip_taskbar(true)
                 .center();
+        let mut builder = crate::workdir::apply_to_window(builder);
         #[cfg(target_os = "linux")]
         {
             builder = builder.decorations(false).transparent(true);

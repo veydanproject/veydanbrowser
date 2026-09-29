@@ -31,7 +31,7 @@ fn write_frame(stdout: &mut impl Write, payload: &[u8]) {
 
 #[cfg(not(windows))]
 fn connect() -> std::io::Result<Box<dyn ReadWrite>> {
-    let s = std::os::unix::net::UnixStream::connect(super::ipc_endpoint())?;
+    let s = std::os::unix::net::UnixStream::connect(super::host_endpoint())?;
     s.set_read_timeout(Some(std::time::Duration::from_secs(15)))?;
     Ok(Box::new(s))
 }
@@ -41,7 +41,7 @@ fn connect() -> std::io::Result<Box<dyn ReadWrite>> {
     let f = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(super::ipc_endpoint())?;
+        .open(super::host_endpoint())?;
     Ok(Box::new(f))
 }
 

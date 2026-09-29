@@ -1,4 +1,4 @@
-.PHONY: dev update push clean \
+.PHONY: dev dev-profile update push clean \
 	alpha beta rc release linux windows macos android ios \
 	android-dev android-test android-release android-devices android-screenshot
 
@@ -24,6 +24,11 @@ dev:
 # Dev build with the messenger module compiled in (4.0.1-alpha).
 dev-msg:
 	@MESSENGER=1 bash dev.sh
+
+# One more dev instance with its own data directory, next to a running
+# `make dev` / `make dev-msg`. usage: make dev-profile WORKDIR=<dir>
+dev-profile:
+	@bash scripts/run-profile.sh "$(WORKDIR)"
 
 # Messenger crates: Tauri-free workspace, testable without the app.
 msg-test:

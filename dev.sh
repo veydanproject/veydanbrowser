@@ -4,6 +4,19 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export SCRIPT_DIR
 
+# WORKDIR=<dir>: run this instance as a separate profile (--workdir). Resolved
+# here because `tauri dev` starts the app from src-tauri/.
+if [ -n "${WORKDIR:-}" ]; then
+  VEYDAN_WORKDIR="$(realpath -m "$WORKDIR")"
+  export VEYDAN_WORKDIR
+  # A dev environment is already up: join it as one more instance instead of
+  # replacing it (there is one dev server on 1420 and one debug build).
+  if (exec 3<>/dev/tcp/127.0.0.1/1420) 2>/dev/null &&
+    [ -x "$SCRIPT_DIR/src-tauri/target/debug/veydanspace" ]; then
+    exec bash "$SCRIPT_DIR/scripts/run-profile.sh" "$VEYDAN_WORKDIR"
+  fi
+fi
+
 # One-time .dev-prefix setup + build env vars + project-local toolchain.
 source "$SCRIPT_DIR/build-env.sh"
 

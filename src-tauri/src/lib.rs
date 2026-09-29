@@ -26,6 +26,8 @@ mod sync;
 #[cfg(desktop)]
 mod tray;
 mod vault;
+#[cfg(desktop)]
+pub mod workdir;
 
 #[cfg(desktop)]
 use browser::launch::BrowserState;
@@ -742,8 +744,19 @@ fn run_desktop() {
         capture::host::run();
         return;
     }
-    // Before any window exists: the new identifier's webview profile is still empty.
-    legacy_migration::migrate_webview_profile();
+    let workdir = match workdir::init() {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("veydanspace: {e}");
+            std::process::exit(2);
+        }
+    };
+    let mut context = tauri::generate_context!();
+    match workdir {
+        Some(w) => w.apply_to_context(&mut context),
+        // Before any window exists: the new identifier's webview profile is still empty.
+        None => legacy_migration::migrate_webview_profile(),
+    }
     tauri::Builder::default()
         // Must be first: second launch is closed here before other plugins run.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -755,7 +768,15 @@ fn run_desktop() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .setup(|app| {
+        .setup(move |app| {
+            // --workdir profile: its own directory, no legacy data to look for.
+            if let Some(workdir) = workdir {
+                workdir.create_config_windows(app.handle())?;
+                app.manage(legacy_migration::MigrationState::none());
+                init_desktop(app.handle(), workdir.path.clone())?;
+                return Ok(());
+            }
+
             let app_data_dir = app.path().app_data_dir()?;
             let data_dir = app_data_dir.join("VeydanSpace");
 
@@ -1162,7 +1183,7 @@ fn run_desktop() {
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_contacts_set_followed,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {

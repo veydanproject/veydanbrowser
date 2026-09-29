@@ -24,6 +24,19 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const TRAY_ID: &str = "veydan-main-tray";
 
+/// Per profile under `--workdir`: every running instance owns its tray item.
+fn tray_id() -> String {
+    match crate::workdir::current() {
+        Some(w) => format!("{TRAY_ID}-{}", w.tag),
+        None => TRAY_ID.into(),
+    }
+}
+
+/// Tooltip with the live running count (and the profile name under `--workdir`).
+fn tooltip_text(labels: &TrayLabels, running: usize) -> String {
+    crate::workdir::caption(labels.tooltip.replace("{n}", &running.to_string()))
+}
+
 /// Localized labels for the static tray entries. Supplied by the frontend via
 /// `tray_set_labels` so we never duplicate the i18n catalog in Rust. English
 /// defaults are used until the frontend hands over the active locale.
@@ -269,11 +282,11 @@ mod imp {
 
     impl Tray for VeydanTray {
         fn id(&self) -> String {
-            TRAY_ID.into()
+            tray_id()
         }
 
         fn title(&self) -> String {
-            "Veydan Space".into()
+            crate::workdir::caption("Veydan Space".into())
         }
 
         fn category(&self) -> Category {
@@ -295,7 +308,7 @@ mod imp {
         fn tool_tip(&self) -> ToolTip {
             let n = self.data.running.len();
             ToolTip {
-                title: self.labels.tooltip.replace("{n}", &n.to_string()),
+                title: tooltip_text(&self.labels, n),
                 description: String::new(),
                 icon_name: String::new(),
                 icon_pixmap: Vec::new(),
@@ -570,11 +583,9 @@ mod imp {
         let labels = labels_of(app);
         let data = tauri::async_runtime::block_on(load_menu_data(app));
         let menu = build_menu(app, &labels, &data)?;
-        let tooltip = labels
-            .tooltip
-            .replace("{n}", &data.running.len().to_string());
+        let tooltip = tooltip_text(&labels, data.running.len());
 
-        let mut builder = TrayIconBuilder::with_id(TRAY_ID)
+        let mut builder = TrayIconBuilder::with_id(tray_id())
             .tooltip(&tooltip)
             .menu(&menu)
             .show_menu_on_left_click(false)
@@ -613,9 +624,7 @@ mod imp {
         let data = tauri::async_runtime::block_on(load_menu_data(app));
         if let Ok(menu) = build_menu(app, &labels, &data) {
             let _ = tray.set_menu(Some(menu));
-            let tooltip = labels
-                .tooltip
-                .replace("{n}", &data.running.len().to_string());
+            let tooltip = tooltip_text(&labels, data.running.len());
             let _ = tray.set_tooltip(Some(&tooltip));
         }
     }
