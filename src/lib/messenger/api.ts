@@ -90,11 +90,13 @@ export function profileLabel(p: MessengerProfile | null): string {
 export type ChatMode =
   | 'full_chat' | 'first_contact' | 'request_sent' | 'request_received' | 'request_declined'
   | 'request_declined_by_me' | 'request_revoked_by_peer' | 'removed_by_peer' | 'both_removed'
-  | 'mutual_reconnect' | 'blocked' | 'blocked_by_peer';
+  | 'mutual_reconnect' | 'blocked' | 'blocked_by_peer'
+  /** Not a relationship: the chat is a group. */
+  | 'group';
 
 export interface MessengerChat {
   id: string;
-  kind: 'dm' | string;
+  kind: 'dm' | 'group' | string;
   peer_pubkey: string | null;
   peer_npub: string | null;
   title: string;
@@ -134,6 +136,76 @@ export interface MessengerMessage {
   media: Record<string, unknown> | null;
 }
 
+
+
+export type GroupRole = 'owner' | 'admin' | 'moderator' | 'member';
+export type GroupMembership =
+  | 'joined' | 'joining' | 'requested' | 'rejected' | 'left' | 'removed' | 'banned' | 'disbanded' | 'stale_link';
+
+export interface MessengerGroupMember {
+  pubkey: string;
+  role: GroupRole;
+  muted: boolean;
+  joined_at: number;
+  is_me: boolean;
+}
+
+export interface MessengerGroup {
+  id: string;
+  chat_id: string;
+  kind: 'public' | 'private';
+  name: string;
+  about: string;
+  picture: string;
+  relay: string;
+  owner: string;
+  membership: GroupMembership;
+  my_role: GroupRole | null;
+  muted: boolean;
+  can_post: boolean;
+  history_for_new: boolean;
+  members: MessengerGroupMember[];
+  /** Managers only. */
+  banned: string[];
+  /** Managers only: who asks to be let in. */
+  requests: string[];
+  /** For those who may share it. */
+  link: string | null;
+  /** Events this device has no key for (yet). */
+  undecrypted: number;
+}
+
+export interface MessengerGroupInvite {
+  invite_id: string;
+  group_id: string;
+  name: string;
+  about: string;
+  picture: string;
+  members: number;
+  peer: string;
+  direction: 'in' | 'out';
+  status: string;
+  created_at: number;
+  expires_at: number;
+}
+
+/** An operation on a group, as its log writes it. */
+export type GroupAction =
+  | { op: 'remove' | 'ban' | 'unban'; who: string }
+  | { op: 'set_role'; who: string; role: GroupRole }
+  | { op: 'set_muted'; who: string; muted: boolean }
+  | { op: 'edit_settings'; name?: string; about?: string; picture?: string; history_for_new?: boolean }
+  | { op: 'transfer_ownership'; to: string }
+  | { op: 'leave' | 'disband' };
+
+const ROLE_RANK: Record<GroupRole, number> = { member: 0, moderator: 1, admin: 2, owner: 3 };
+export const roleRank = (r: GroupRole | null | undefined): number => (r ? ROLE_RANK[r] : -1);
+
+/** Stable refusal code inside an error (`group_not_permitted`, …), if any. */
+export function groupErrorCode(e: unknown): string | null {
+  const m = /\bgroup_[a-z_]+\b/.exec(messengerError(e));
+  return m ? m[0] : null;
+}
 
 export type DmAction = 'request' | 'accept' | 'decline' | 'block' | 'unblock' | 'remove';
 
@@ -352,7 +424,18 @@ let mockMediaServers: MessengerMediaServer[] = [
   { id: 'veydan-node-1-s3', kind: 's3', url: 'https://node-1.veydan.net:9000', bucket: 'veydan-media', region: 'us-east-1', access_key: null, has_secret: false, priority: 10, enabled: true, source: 'manifest', public_base: 'https://node-1.veydan.net:9000/veydan-media' },
 ];
 const mockMessages: Record<string, MessengerMessage[]> = demo?.messages ?? {};
+let mockGroups: MessengerGroup[] = demo?.groups ?? [];
+let mockInvites: MessengerGroupInvite[] = demo?.invites ?? [];
+function mockGroup(id: string): MessengerGroup {
+  const g = mockGroups.find((x) => x.id === id);
+  if (!g) throw new Error("group_unknown");
+  return g;
+}
 function mockChat(peer: string): MessengerChat {
+  if (peer.startsWith('group:')) {
+    const g = mockChats.find((x) => x.id === peer);
+    if (g) return g;
+  }
   const hex = peer.startsWith('npub') ? 'ef'.repeat(32) : peer;
   const id = `dm:${hex}`;
   let c = mockChats.find((x) => x.id === id);
@@ -466,6 +549,70 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
     const [mode, can_send] = next[String(a?.action)] ?? ['full_chat', true];
     mockChats = mockChats.map((x) => (x.id === c.id ? { ...x, mode, can_send } : x));
     return { peer_pubkey: c.peer_pubkey, mode, my_contact: 'approved', blocked: mode === 'blocked', peer_signal: 'approved', was_ever_mutual: true, can_send };
+  },
+  messenger_groups_list: () => mockGroups,
+  messenger_group_get: (a) => mockGroup(String(a?.groupId)),
+  messenger_group_create: (a) => {
+    const id = Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+    const kind = a?.kind === 'public' ? 'public' : 'private';
+    const g: MessengerGroup = {
+      id, chat_id: `group:${id}`, kind, name: String(a?.name), about: String(a?.about ?? ''), picture: '', relay: 'wss://relay.example',
+      owner: 'ab'.repeat(32), membership: 'joined', my_role: 'owner', muted: false, can_post: true, history_for_new: kind === 'public' || Boolean(a?.historyForNew),
+      members: [{ pubkey: 'ab'.repeat(32), role: 'owner', muted: false, joined_at: Math.floor(Date.now() / 1000), is_me: true }],
+      banned: [], requests: [], undecrypted: 0,
+      link: `veydan://group/${id}?t=${kind}&r=wss%3A%2F%2Frelay.example&o=${'ab'.repeat(32)}&n=${encodeURIComponent(String(a?.name))}${kind === 'public' ? '&s=demo&e=0' : ''}`,
+    };
+    mockGroups = [g, ...mockGroups];
+    mockChats = [{ id: g.chat_id, kind: 'group', peer_pubkey: null, peer_npub: null, title: g.name, picture: null, is_contact: false, is_muted: false, unread: 0, last_message_at: null, last_preview: null, pinned: false, archived: false, mode: 'group', can_send: true }, ...mockChats];
+    mockMessages[g.chat_id] = [];
+    return g;
+  },
+  messenger_group_invite: (a) => ({ invite_id: 'demo', group_id: String(a?.groupId), name: mockGroup(String(a?.groupId)).name, about: '', picture: '', members: 1, peer: String(a?.who), direction: 'out', status: 'sent', created_at: Date.now() / 1000, expires_at: Date.now() / 1000 + 7 * 86400 }),
+  messenger_group_invites: (a) => (a?.direction === 'in' ? mockInvites : []),
+  messenger_group_answer_invite: (a) => { mockInvites = mockInvites.filter((i) => i.invite_id !== a?.inviteId); },
+  messenger_group_open_link: () => { throw new Error('group_unknown'); },
+  messenger_group_answer_request: (a) => {
+    const g = mockGroup(String(a?.groupId));
+    g.requests = g.requests.filter((r) => r !== a?.requester);
+    if (a?.approve) g.members = [...g.members, { pubkey: String(a?.requester), role: 'member', muted: false, joined_at: Math.floor(Date.now() / 1000), is_me: false }];
+    return g;
+  },
+  messenger_group_act: (a) => {
+    const g = mockGroup(String(a?.groupId));
+    const act = (a?.action ?? {}) as GroupAction;
+    switch (act.op) {
+      case 'remove': g.members = g.members.filter((m) => m.pubkey !== act.who); break;
+      case 'ban': g.members = g.members.filter((m) => m.pubkey !== act.who); g.banned = [...g.banned, act.who]; break;
+      case 'unban': g.banned = g.banned.filter((b) => b !== act.who); break;
+      case 'set_role': g.members = g.members.map((m) => (m.pubkey === act.who ? { ...m, role: act.role } : m)); break;
+      case 'set_muted': g.members = g.members.map((m) => (m.pubkey === act.who ? { ...m, muted: act.muted } : m)); break;
+      case 'edit_settings':
+        if (act.name) g.name = act.name;
+        if (act.about !== undefined) g.about = act.about;
+        if (act.history_for_new !== undefined) g.history_for_new = act.history_for_new;
+        mockChats = mockChats.map((c) => (c.id === g.chat_id ? { ...c, title: g.name } : c));
+        break;
+      case 'leave': g.membership = 'left'; g.can_post = false; g.my_role = null; break;
+      case 'disband': g.membership = 'disbanded'; g.can_post = false; break;
+      case 'transfer_ownership':
+        g.members = g.members.map((m) => (m.pubkey === act.to ? { ...m, role: 'owner' } : m.is_me ? { ...m, role: 'admin' } : m));
+        g.my_role = 'admin';
+        break;
+    }
+    if (g.membership !== 'joined') mockChats = mockChats.map((c) => (c.id === g.chat_id ? { ...c, can_send: false } : c));
+    return g;
+  },
+  messenger_group_rotate_link: (a) => {
+    const g = mockGroup(String(a?.groupId));
+    const e = Number(/&e=(\d+)/.exec(g.link ?? '')?.[1] ?? 0) + 1;
+    g.link = (g.link ?? '').replace(/&e=\d+/, `&e=${e}`).replace(/&s=[^&]+/, `&s=demo${e}`);
+    return g;
+  },
+  messenger_group_link_qr: () =>
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 29 29" shape-rendering="crispEdges"><rect width="29" height="29" fill="#fff"/><path fill="#000" d="M4 4h7v7H4zM18 4h7v7h-7zM4 18h7v7H4zM6 6v3h3V6zM20 6v3h3V6zM6 20v3h3v-3zM13 4h2v2h-2zM13 8h3v2h-3zM12 12h2v2h-2zM16 13h3v2h-3zM21 13h4v2h-4zM4 13h5v2H4zM13 17h2v3h-2zM17 18h2v2h-2zM21 17h2v2h-2zM18 22h3v3h-3zM23 21h2v2h-2zM13 22h3v2h-3z"/></svg>',
+  messenger_group_forget: (a) => {
+    mockGroups = mockGroups.filter((g) => g.id !== a?.groupId);
+    mockChats = mockChats.filter((c) => c.id !== `group:${a?.groupId}`);
   },
   messenger_dm_blocked: () => mockChats.filter((c) => c.mode === 'blocked').map((c) => c.peer_pubkey),
   /** Dev only: put the open mock chat into a given screen mode. */
@@ -588,6 +735,25 @@ export const messengerApi = {
     relation: (peer: string) => invoke<MessengerRelation>('messenger_dm_relation', { peer }),
     action: (peer: string, action: DmAction) => invoke<MessengerRelation>('messenger_dm_action', { peer, action }),
     blocked: () => invoke<string[]>('messenger_dm_blocked'),
+  },
+
+
+  groups: {
+    list: () => invoke<MessengerGroup[]>('messenger_groups_list'),
+    get: (groupId: string) => invoke<MessengerGroup>('messenger_group_get', { groupId }),
+    create: (kind: 'public' | 'private', name: string, about: string, historyForNew: boolean) =>
+      invoke<MessengerGroup>('messenger_group_create', { kind, name, about, historyForNew }),
+    invite: (groupId: string, who: string) => invoke<MessengerGroupInvite>('messenger_group_invite', { groupId, who }),
+    invites: (direction: 'in' | 'out') => invoke<MessengerGroupInvite[]>('messenger_group_invites', { direction }),
+    answerInvite: (inviteId: string, accept: boolean) => invoke<void>('messenger_group_answer_invite', { inviteId, accept }),
+    openLink: (link: string, note?: string) => invoke<MessengerGroup>('messenger_group_open_link', { link, note: note ?? null }),
+    answerRequest: (groupId: string, requester: string, approve: boolean) =>
+      invoke<MessengerGroup>('messenger_group_answer_request', { groupId, requester, approve }),
+    act: (groupId: string, action: GroupAction) => invoke<MessengerGroup>('messenger_group_act', { groupId, action }),
+    rotateLink: (groupId: string) => invoke<MessengerGroup>('messenger_group_rotate_link', { groupId }),
+    /** SVG of the QR code of the link. */
+    linkQr: (groupId: string) => invoke<string>('messenger_group_link_qr', { groupId }),
+    forget: (groupId: string) => invoke<void>('messenger_group_forget', { groupId }),
   },
 
   media: {

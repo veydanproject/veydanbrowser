@@ -132,10 +132,18 @@ class ChatStore {
     if (atTail) this.tailTick++;
   }
 
+  /** Where a message for this chat goes: the peer, or the group. */
+  private target(chat: MessengerChat | null): string {
+    const to = chat?.peer_pubkey ?? (chat?.kind === "group" ? chat.id : null);
+    if (!to) throw new Error("no chat");
+    return to;
+  }
+
   async send(text: string, replyTo?: string) {
     const chat = this.active;
-    if (!chat?.peer_pubkey) throw new Error('no chat');
-    const m = await messengerApi.dm.sendText(chat.peer_pubkey, text, replyTo);
+    const to = this.target(chat);
+    if (!chat) throw new Error("no chat");
+    const m = await messengerApi.dm.sendText(to, text, replyTo);
     if (this.activeId === chat.id) this.upsert(m);
     this.scheduleChatsRefresh();
     return m;
@@ -144,8 +152,9 @@ class ChatStore {
   /** Attach a local file; the placeholder appears at once. */
   async sendFile(path: string, caption?: string) {
     const chat = this.active;
-    if (!chat?.peer_pubkey) throw new Error('no chat');
-    const m = await messengerApi.media.sendFile(chat.peer_pubkey, path, caption);
+    const to = this.target(chat);
+    if (!chat) throw new Error("no chat");
+    const m = await messengerApi.media.sendFile(to, path, caption);
     if (this.activeId === chat.id) this.upsert(m);
     this.scheduleChatsRefresh();
     return m;
@@ -153,8 +162,9 @@ class ChatStore {
 
   async sendRecording(rec: MessengerRecording) {
     const chat = this.active;
-    if (!chat?.peer_pubkey) throw new Error('no chat');
-    const m = await messengerApi.media.sendRecording(chat.peer_pubkey, rec);
+    const to = this.target(chat);
+    if (!chat) throw new Error("no chat");
+    const m = await messengerApi.media.sendRecording(to, rec);
     if (this.activeId === chat.id) this.upsert(m);
     this.scheduleChatsRefresh();
     return m;
@@ -226,6 +236,12 @@ class ChatStore {
         if (p.chat_id === this.activeId) this.scheduleWindowReload();
         this.scheduleChatsRefresh();
         break;
+      case "group.updated":
+        if (p.chat_id === this.activeId) this.scheduleWindowReload();
+        this.scheduleChatsRefresh();
+        break;
+      case "group.invite":
+      case "group.request":
       case 'chats.updated':
       case 'profile.updated':
       case 'history.synced':

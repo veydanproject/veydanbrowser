@@ -35,12 +35,16 @@
   const items = $derived.by((): MenuEntry[] => {
     const c = menu.chat;
     if (!c) return [];
+    const group = c.kind === "group";
+    const removal: MenuEntry[] = group
+      // A group I am in is left from its own panel, not thrown away here.
+      ? (c.can_send ? [] : [{ type: "separator" }, { label: $t("msg_group_forget"), icon: "trash-2", danger: true, onselect: async () => { if (await confirmStore.ask($t("msg_group_forget_confirm", { name: c.title }), $t("msg_group_forget"), true)) chatStore.deleteChat(c.id).catch(() => {}); } }])
+      : [{ type: "separator" }, { label: $t("msg_chat_delete"), icon: "trash-2", danger: true, onselect: async () => { if (await confirmStore.ask($t("msg_chat_delete_confirm", { name: c.title }), $t("msg_chat_delete"), true)) chatStore.deleteChat(c.id); } }];
     return [
       { label: c.pinned ? $t('msg_chat_unpin') : $t('msg_chat_pin'), icon: 'pin', onselect: () => chatStore.setPinned(c.id, !c.pinned) },
       { label: $t('msg_chat_mark_read'), icon: 'check-check', disabled: c.unread === 0, onselect: () => chatStore.markRead(c.id) },
       { label: c.archived ? $t('msg_chat_unarchive') : $t('msg_chat_archive'), icon: c.archived ? 'archive-restore' : 'archive', onselect: () => chatStore.setArchived(c.id, !c.archived) },
-      { type: 'separator' },
-      { label: $t('msg_chat_delete'), icon: 'trash-2', danger: true, onselect: async () => { if (await confirmStore.ask($t('msg_chat_delete_confirm', { name: c.title }), $t('msg_chat_delete'), true)) chatStore.deleteChat(c.id); } },
+      ...removal,
     ];
   });
 </script>
@@ -49,9 +53,10 @@
   <li>
     <button class="chat" class:active={chatStore.activeId === c.id} onclick={() => onopen(c)} oncontextmenu={(e) => openMenu(e, c)}
       use:longpress={{ onpress: (p) => (menu = { open: true, x: p.x, y: p.y, chat: c }) }}>
-      <Avatar url={c.picture} label={c.title} seed={c.peer_pubkey} size={42} />
+      <Avatar url={c.picture} label={c.title} seed={c.peer_pubkey ?? c.id} size={42} />
       <span class="body">
         <span class="top">
+          {#if c.kind === "group"}<span class="dim"><Icon name="users" size={12} /></span>{/if}
           <span class="title">{c.title}</span>
           {#if c.is_muted}<span class="dim"><Icon name="bell-off" size={12} /></span>{/if}
           {#if c.pinned}<span class="dim"><Icon name="pin" size={12} /></span>{/if}

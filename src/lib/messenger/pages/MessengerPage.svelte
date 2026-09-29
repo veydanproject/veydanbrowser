@@ -12,6 +12,9 @@
   import ChatList from '../chats/ChatList.svelte';
   import NewChatDialog from '../chats/NewChatDialog.svelte';
   import ChatWindow from '../dm/ChatWindow.svelte';
+  import GroupChat from "../groups/GroupChat.svelte";
+  import NewGroupDialog from "../groups/NewGroupDialog.svelte";
+  import InvitesBar from "../groups/InvitesBar.svelte";
   import ContactsPanel from '../contacts/ContactsPanel.svelte';
   import SettingsView from './SettingsView.svelte';
   import ConfirmHost from '../shared/ConfirmHost.svelte';
@@ -21,6 +24,7 @@
   let view = $state<View>('chat');
   let query = $state('');
   let newChat = $state(false);
+  let newGroup = $state(false);
 
   onMount(() => {
     messengerStore.refresh().catch(() => {});
@@ -69,6 +73,7 @@
           <span class="spacer"></span>
           <button class="icon" class:active={view === 'contacts'} onclick={() => show(view === 'contacts' ? 'chat' : 'contacts')} title={$t('msg_contacts_title')}><Icon name="users" size={16} /></button>
           <button class="icon" class:active={view === 'settings'} onclick={() => show(view === 'settings' ? 'chat' : 'settings')} title={$t('msg_settings_title')}><Icon name="settings" size={16} /></button>
+          <button class="icon" onclick={() => (newGroup = true)} title={$t("msg_group_new_title")}><Icon name="user-plus" size={16} /></button>
           <button class="icon accent" onclick={() => (newChat = true)} title={$t('msg_newchat_title')}><Icon name="edit" size={16} /></button>
         </div>
         <div class="search">
@@ -76,6 +81,7 @@
           <input type="text" bind:value={query} placeholder={$t('msg_chats_search')} spellcheck="false" />
           {#if query}<button class="icon sm" onclick={() => (query = '')}><Icon name="x" size={12} /></button>{/if}
         </div>
+        <InvitesBar />
         <ChatList {query} onopen={openChat} />
       </aside>
 
@@ -90,6 +96,8 @@
             <button class="back-narrow btn btn-ghost btn-sm" onclick={() => show('chat')}><Icon name="arrow-left" size={12} />{$t('msg_back')}</button>
             <SettingsView />
           </div>
+        {:else if chatStore.active?.kind === "group"}
+          <GroupChat chat={chatStore.active} onback={() => chatStore.close()} />
         {:else if chatStore.active}
           <ChatWindow chat={chatStore.active} onback={() => chatStore.close()} />
         {:else}
@@ -97,13 +105,17 @@
             <div class="welcome-icon"><Icon name="message-circle" size={34} /></div>
             <p>{$t('msg_welcome_title')}</p>
             <span>{$t('msg_welcome_text')}</span>
-            <button class="btn btn-primary" onclick={() => (newChat = true)}><Icon name="edit" size={14} />{$t('msg_newchat_title')}</button>
+            <div class="welcome-actions">
+                <button class="btn btn-primary" onclick={() => (newChat = true)}><Icon name="edit" size={14} />{$t('msg_newchat_title')}</button>
+              <button class="btn btn-ghost" onclick={() => (newGroup = true)}><Icon name="users" size={14} />{$t("msg_group_new_title")}</button>
+            </div>
           </div>
         {/if}
       </main>
     </div>
   </div>
   <NewChatDialog bind:open={newChat} onopened={() => (view = 'chat')} />
+  <NewGroupDialog bind:open={newGroup} onopened={() => (view = "chat")} />
   <ConfirmHost />
 {/if}
 
@@ -146,6 +158,7 @@
   .welcome-icon { width: 72px; height: 72px; border-radius: 50%; background: var(--accent-tint); color: var(--accent-text-2); display: flex; align-items: center; justify-content: center; }
   .welcome p { margin: 0; font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--text); }
   .welcome span { font-size: var(--fs-sm); max-width: 360px; line-height: 1.5; color: var(--text-2); }
+  .welcome-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; justify-content: center; }
 
   @media (max-width: 860px) {
     .shell { grid-template-columns: minmax(0, 1fr); }

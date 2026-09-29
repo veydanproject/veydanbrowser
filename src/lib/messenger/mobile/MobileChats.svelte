@@ -10,6 +10,8 @@
   import { chatStore } from '../chats/chatStore.svelte';
   import ChatList from '../chats/ChatList.svelte';
   import NewChatDialog from '../chats/NewChatDialog.svelte';
+  import NewGroupDialog from "../groups/NewGroupDialog.svelte";
+  import InvitesBar from "../groups/InvitesBar.svelte";
   import IdentityOnboarding from '../identity/IdentityOnboarding.svelte';
   import MobileFrame from './MobileFrame.svelte';
   import { chatHref } from './routes';
@@ -17,6 +19,7 @@
 
   let query = $state('');
   let newChat = $state(false);
+  let newGroup = $state(false);
 
   onMount(() => {
     chatStore.close();
@@ -42,6 +45,7 @@
 
 {#snippet actions()}
   {#if !needsIdentity && s?.runtime}
+    <button class="ibtn" onclick={() => (newGroup = true)} aria-label={$t("msg_group_new_title")}><Icon name="user-plus" size={21} /></button>
     <button class="ibtn" onclick={() => goto('/messenger/contacts')} aria-label={$t('msg_contacts_title')}><Icon name="users" size={21} /></button>
     <button class="ibtn" onclick={() => goto('/messenger/settings')} aria-label={$t('msg_settings_title')}><Icon name="settings" size={21} /></button>
   {/if}
@@ -68,12 +72,14 @@
       <input type="search" bind:value={query} placeholder={$t('msg_chats_search')} spellcheck="false" enterkeyhint="search" />
       {#if query}<button class="clear" onclick={() => (query = '')} aria-label={$t('msg_back')}><Icon name="x" size={14} /></button>{/if}
     </div>
+    <InvitesBar />
     <ChatList {query} onopen={open} />
     <button class="fab" onclick={() => (newChat = true)} aria-label={$t('msg_newchat_title')}><Icon name="edit" size={22} /></button>
   {/if}
 </MobileFrame>
 
 <NewChatDialog bind:open={newChat} onopened={() => { if (chatStore.activeId) goto(chatHref(chatStore.activeId)); }} />
+<NewGroupDialog bind:open={newGroup} onopened={(id) => goto(chatHref(id))} />
 
 <style>
   .alpha {

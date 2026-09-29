@@ -16,6 +16,8 @@
     /** First bubble of a run from the same sender: gets the tail corner. */
     first: boolean;
     peerTitle: string;
+    /** Chats of many: name of whoever wrote a message. */
+    author?: (pubkey: string) => string;
     highlighted?: boolean;
     onmenu: (e: MouseEvent, m: MessengerMessage) => void;
     onreplyclick: (id: string) => void;
@@ -23,22 +25,30 @@
     /** Renders the attachment of a `media` message (stage 6). */
     media?: Snippet<[MessengerMessage]>;
   }
-  let { message: m, first, peerTitle, highlighted = false, onmenu, onreplyclick, onretry, media }: Props = $props();
+  let { message: m, first, peerTitle, author, highlighted = false, onmenu, onreplyclick, onretry, media }: Props = $props();
 
   const out = $derived(m.direction === 'out');
   const statusIcon = $derived(
     m.status === 'sent' ? 'check' : m.status === 'failed' ? 'alert-triangle' : m.status === 'uploading' ? 'upload' : 'clock',
   );
   const statusTitle = $derived($t(`msg_status_${m.status}` as 'msg_status_sent'));
+
+  /** A steady colour per person, readable on both themes. */
+  function tint(pubkey: string): string {
+    let h = 0;
+    for (let i = 0; i < pubkey.length; i++) h = (h * 31 + pubkey.charCodeAt(i)) >>> 0;
+    return `hsl(${h % 360} 55% 50%)`;
+  }
 </script>
 
 <div class="line" class:out class:first class:highlighted data-mid={m.id}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="bubble" class:deleted={m.deleted} class:failed={m.status === 'failed'} oncontextmenu={(e) => onmenu(e, m)}
     use:longpress={{ onpress: (p) => onmenu(new MouseEvent('contextmenu', { clientX: p.x, clientY: p.y }), m) }}>
+    {#if author && !out && first}<span class="author" style="color: {tint(m.sender_pubkey)}">{author(m.sender_pubkey)}</span>{/if}
     {#if m.reply_to && !m.deleted}
       <button class="reply" onclick={() => onreplyclick(m.reply_to!.id)}>
-        <span class="reply-who">{m.reply_to.sender_pubkey === m.sender_pubkey && out || m.reply_to.sender_pubkey !== m.sender_pubkey && !out ? $t('msg_you') : peerTitle}</span>
+        <span class="reply-who">{author ? author(m.reply_to.sender_pubkey) : m.reply_to.sender_pubkey === m.sender_pubkey && out || m.reply_to.sender_pubkey !== m.sender_pubkey && !out ? $t("msg_you") : peerTitle}</span>
         <span class="reply-text">{m.reply_to.text ?? $t('msg_message_deleted')}</span>
       </button>
     {/if}
@@ -91,6 +101,7 @@
     .bubble { max-width: 86%; -webkit-touch-callout: none; }
     .line { padding-inline: var(--sp-3); }
   }
+  .author { font-size: var(--fs-2xs); font-weight: var(--fw-bold); line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
   .tomb { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--text-3); font-style: italic; }
   .meta { display: inline-flex; align-items: center; gap: 5px; align-self: flex-end; font-size: var(--fs-2xs); color: var(--text-3); line-height: 1; }
   .status { display: inline-flex; }

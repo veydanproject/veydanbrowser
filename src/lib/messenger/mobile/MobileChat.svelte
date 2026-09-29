@@ -9,6 +9,7 @@
   import { messengerStore } from '../store.svelte';
   import { chatStore } from '../chats/chatStore.svelte';
   import ChatWindow from '../dm/ChatWindow.svelte';
+  import GroupChat from "../groups/GroupChat.svelte";
   import MobileFrame from './MobileFrame.svelte';
   import { BASE } from './routes';
 
@@ -47,7 +48,11 @@
 
 {#if chatStore.active && chatStore.active.id === id}
   <MobileFrame bare scroll={false}>
-    <ChatWindow chat={chatStore.active} onback={back} />
+    {#if chatStore.active.kind === "group"}
+      <GroupChat chat={chatStore.active} onback={back} />
+    {:else}
+      <ChatWindow chat={chatStore.active} onback={back} />
+    {/if}
   </MobileFrame>
 {:else}
   <MobileFrame title={$t('msg_title')} onback={back}>

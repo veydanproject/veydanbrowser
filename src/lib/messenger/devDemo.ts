@@ -4,7 +4,10 @@
 // Demo data for the browser preview (`pnpm dev` without Tauri). Enabled by
 // `localStorage['messenger.demo'] = '1'`. Never used inside the app.
 
-import type { ChatMode, MessengerChat, MessengerContact, MessengerIdentity, MessengerMessage, MessengerProfile } from './api';
+import type {
+  ChatMode, MessengerChat, MessengerContact, MessengerGroup, MessengerGroupInvite, MessengerGroupMember, MessengerIdentity,
+  MessengerMessage, MessengerProfile,
+} from './api';
 
 const ME = 'ab'.repeat(32);
 const hex = (c: string) => c.repeat(64).slice(0, 64);
@@ -23,6 +26,8 @@ export interface DemoData {
   contacts: MessengerContact[];
   chats: MessengerChat[];
   messages: Record<string, MessengerMessage[]>;
+  groups: MessengerGroup[];
+  invites: MessengerGroupInvite[];
 }
 
 export function demoEnabled(): boolean {
@@ -110,7 +115,69 @@ export function buildDemo(): DemoData {
     msg(d, '', now - day * 6, 'contact_left', { content_type: 'system', direction: 'out' }),
   );
 
-  const unread: Record<string, number> = { [b]: 2, [v]: 1 };
+
+  // Groups: one private that I own, one public where I am a member.
+  const gid = (c: string) => c.repeat(64).slice(0, 64);
+  const member = (pubkey: string, role: MessengerGroupMember['role'], at: number, muted = false): MessengerGroupMember =>
+    ({ pubkey, role, muted, joined_at: at, is_me: pubkey === ME });
+  const sys = (chat: string, at: number, what: string, actor: string, target: string | null = null, role: string | null = null) =>
+    msg(chat, actor, at, what, { content_type: 'system', direction: 'out', media: { actor, target, role } });
+  const team: MessengerGroup = {
+    id: gid('7a'), chat_id: `group:${gid('7a')}`, kind: 'private', name: 'Команда Veydan', about: 'Рабочие вопросы по мессенджеру и реле.',
+    picture: '', relay: 'wss://node-1.veydan.net', owner: ME, membership: 'joined', my_role: 'owner', muted: false, can_post: true, history_for_new: true,
+    members: [member(ME, 'owner', now - day * 20), member(boris, 'admin', now - day * 19), member(alice, 'moderator', now - day * 18), member(daria, 'member', now - day * 3, true)],
+    banned: [bot], requests: [vera], undecrypted: 0,
+    link: `veydan://group/${gid('7a')}?t=private&r=wss%3A%2F%2Fnode-1.veydan.net&o=${ME}&n=%D0%9A%D0%BE%D0%BC%D0%B0%D0%BD%D0%B4%D0%B0&m=${ME},${boris}`,
+  };
+  const square: MessengerGroup = {
+    id: gid('8b'), chat_id: `group:${gid('8b')}`, kind: 'public', name: 'Veydan: открытый чат', about: 'Вход по ссылке. Вежливость обязательна.',
+    picture: '', relay: 'wss://node-1.veydan.net', owner: boris, membership: 'joined', my_role: 'member', muted: false, can_post: true, history_for_new: true,
+    members: [member(boris, 'owner', now - day * 40), member(alice, 'admin', now - day * 39), member(ME, 'member', now - day * 2), member(gleb, 'member', now - day)],
+    banned: [], requests: [], undecrypted: 3,
+    link: `veydan://group/${gid('8b')}?t=public&r=wss%3A%2F%2Fnode-1.veydan.net&o=${boris}&n=Veydan&s=M_ASAN9VOjsg94VjUdQvzIk-0vXXcmv_mjLOLp-neys&e=0`,
+  };
+  const left: MessengerGroup = {
+    ...square, id: gid('9c'), chat_id: `group:${gid('9c')}`, name: 'Старая группа', about: '', membership: 'removed', my_role: null, can_post: false,
+    members: [member(boris, 'owner', now - day * 40)], undecrypted: 0, link: null,
+  };
+  const groups = [team, square, left];
+  for (const g of groups) {
+    chats.push({ id: g.chat_id, kind: 'group', peer_pubkey: null, peer_npub: null, title: g.name, picture: null, is_contact: false, is_muted: false, unread: 0, last_message_at: null, last_preview: null, pinned: false, archived: false, mode: 'group', can_send: g.membership === 'joined' });
+    messages[g.chat_id] = [];
+  }
+  const tm = team.chat_id;
+  const t1 = msg(tm, boris, now - day - 3000, 'Коллеги, реле обновил. Группы теперь шифруются одним ключом на группу, реле не видит ни автора, ни текста.');
+  messages[tm].push(
+    sys(tm, now - day * 20, 'group_created', ME),
+    sys(tm, now - day * 19, 'group_admitted', ME, boris),
+    sys(tm, now - day * 19 + 60, 'group_role', ME, boris, 'admin'),
+    sys(tm, now - day * 18, 'group_admitted', boris, alice),
+    t1,
+    msg(tm, alice, now - day - 2900, 'Отлично. А история для новых участников?'),
+    msg(tm, alice, now - day - 2890, 'В приватных по настройке группы, в публичных всегда.'),
+    msg(tm, ME, now - day - 2700, 'Да, именно так.', { reply_to: { id: t1.id, sender_pubkey: boris, text: t1.text } }),
+    sys(tm, now - day * 3, 'group_admitted', boris, daria),
+    msg(tm, daria, now - day * 3 + 500, 'Всем привет!'),
+    sys(tm, now - 7000, 'group_muted', alice, daria),
+    msg(tm, boris, now - 900, 'Схема ключей', { content_type: 'media', media: { name: 'keys.png', mime: 'image/png', size: 311_204, kind: 'image' } }),
+    msg(tm, ME, now - 400, 'Принято, смотрю.'),
+  );
+  messages[tm].sort((x, y) => x.created_at - y.created_at);
+  const sq = square.chat_id;
+  messages[sq].push(
+    sys(sq, now - day * 2, 'group_joined', ME),
+    msg(sq, boris, now - day * 2 + 100, 'Добро пожаловать!'),
+    sys(sq, now - day, 'group_joined', gleb),
+    msg(sq, gleb, now - 3000, 'Подскажите, где взять сборку под Android?'),
+    msg(sq, alice, now - 2800, 'Пока только тестовая, ссылка в закрепе.'),
+  );
+  messages[left.chat_id].push(sys(left.chat_id, now - day * 8, 'group_removed', boris, ME));
+  const invites: MessengerGroupInvite[] = [{
+    invite_id: 'inv1', group_id: gid('ad'), name: 'Книжный клуб', about: 'Читаем по книге в месяц.', picture: '', members: 12,
+    peer: alice, direction: 'in', status: 'received', created_at: now - 3600, expires_at: now + day * 6,
+  }];
+
+  const unread: Record<string, number> = { [b]: 2, [v]: 1, [sq]: 2 };
   for (const c of chats) {
     const list = messages[c.id].filter((x) => x.content_type !== 'system');
     const last = list[list.length - 1];
@@ -124,6 +191,6 @@ export function buildDemo(): DemoData {
   const ownProfile = profile(ME, 'Виталий', 'Строю Veydan Space.', null);
   return {
     identity: { npub: ownProfile.npub, pubkey: ME, created_at: now - day * 30 },
-    ownProfile, contacts, chats, messages,
+    ownProfile, contacts, chats, messages, groups, invites,
   };
 }

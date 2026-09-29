@@ -24,7 +24,8 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use messenger_core::{MessengerConfig, MessengerError, SecretStore};
 use messenger_core::PubKey;
 use messenger_runtime::{
-    ChatView, ContactPatch, ContactView, CreatedIdentity, DmAction, Identity, ManifestInfo, MessageView,
+    ChatView, ContactPatch, ContactView, CreatedIdentity, DmAction, GroupKind, GroupOp, GroupView, Identity, InviteView,
+    ManifestInfo, MessageView,
     MediaKind, MediaServerInput, MediaServerView, MessengerRuntime, Recording, RelationView, TransferView,
     ProfileView, RelayView,
     RuntimeStatus,
@@ -468,7 +469,7 @@ pub async fn messenger_chats_list(
     include_archived: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<Vec<ChatView>> {
-    state.messenger.runtime()?.dm().list_chats(include_archived.unwrap_or(false)).await.map_err(map_err)
+    state.messenger.runtime()?.chats(include_archived.unwrap_or(false)).await.map_err(map_err)
 }
 
 /// Open (creating if needed) the chat with `peer` (npub or hex).
@@ -514,7 +515,7 @@ pub async fn messenger_chat_set_archived(
 /// Removes the chat and its messages from this device only.
 #[tauri::command]
 pub async fn messenger_chat_delete(chat_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
-    state.messenger.runtime()?.dm().delete_chat(&chat_id).await.map_err(map_err)
+    state.messenger.runtime()?.chat_delete(&chat_id).await.map_err(map_err)
 }
 
 /// Send a text DM to an npub/hex key; returns the stored message.
@@ -575,6 +576,114 @@ pub async fn messenger_dm_action(
         other => return Err(AppError::Other(format!("unknown action: {other}"))),
     };
     state.messenger.runtime()?.dm_act(&peer, action).await.map_err(map_err)
+}
+
+// ─── Groups ─────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn messenger_groups_list(state: tauri::State<'_, AppState>) -> CmdResult<Vec<GroupView>> {
+    state.messenger.runtime()?.group_list().await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_group_get(group_id: String, state: tauri::State<'_, AppState>) -> CmdResult<GroupView> {
+    state.messenger.runtime()?.group_get(&group_id).await.map_err(map_err)
+}
+
+/// `kind`: public | private.
+#[tauri::command]
+pub async fn messenger_group_create(
+    kind: String,
+    name: String,
+    about: Option<String>,
+    history_for_new: Option<bool>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<GroupView> {
+    let kind = match kind.as_str() {
+        "public" => GroupKind::Public,
+        "private" => GroupKind::Private,
+        other => return Err(AppError::Other(format!("unknown group kind: {other}"))),
+    };
+    state
+        .messenger
+        .runtime()?
+        .group_create(kind, &name, about.as_deref().unwrap_or(""), history_for_new.unwrap_or(true))
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_group_invite(
+    group_id: String,
+    who: String,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<InviteView> {
+    state.messenger.runtime()?.group_invite(&group_id, &who).await.map_err(map_err)
+}
+
+/// `direction`: in (for me) | out (sent by me).
+#[tauri::command]
+pub async fn messenger_group_invites(direction: String, state: tauri::State<'_, AppState>) -> CmdResult<Vec<InviteView>> {
+    state.messenger.runtime()?.group_invites(&direction).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_group_answer_invite(
+    invite_id: String,
+    accept: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<()> {
+    state.messenger.runtime()?.group_answer_invite(&invite_id, accept).await.map_err(map_err)
+}
+
+/// Open a `veydan://group/…` link: join a public group, ask a private one.
+#[tauri::command]
+pub async fn messenger_group_open_link(
+    link: String,
+    note: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<GroupView> {
+    state.messenger.runtime()?.group_open_link(&link, note.as_deref().unwrap_or("")).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_group_answer_request(
+    group_id: String,
+    requester: String,
+    approve: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<GroupView> {
+    state.messenger.runtime()?.group_answer_request(&group_id, &requester, approve).await.map_err(map_err)
+}
+
+/// `action` is an operation as the log writes it: `{"op":"remove","who":…}`,
+/// `ban`, `unban`, `set_role` (+ `role`), `set_muted` (+ `muted`),
+/// `edit_settings`, `transfer_ownership` (+ `to`), `leave`, `disband`.
+#[tauri::command]
+pub async fn messenger_group_act(
+    group_id: String,
+    action: serde_json::Value,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<GroupView> {
+    let body: GroupOp = serde_json::from_value(action).map_err(|e| AppError::Other(format!("group action: {e}")))?;
+    state.messenger.runtime()?.group_act(&group_id, body).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn messenger_group_rotate_link(group_id: String, state: tauri::State<'_, AppState>) -> CmdResult<GroupView> {
+    state.messenger.runtime()?.group_rotate_link(&group_id).await.map_err(map_err)
+}
+
+/// The link of the group as a QR code (SVG).
+#[tauri::command]
+pub async fn messenger_group_link_qr(group_id: String, state: tauri::State<'_, AppState>) -> CmdResult<String> {
+    state.messenger.runtime()?.group_link_qr(&group_id).await.map_err(map_err)
+}
+
+/// Remove from this device a group I am no longer in.
+#[tauri::command]
+pub async fn messenger_group_forget(group_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.group_forget(&group_id).await.map_err(map_err)
 }
 
 /// Hex keys of everyone I block.

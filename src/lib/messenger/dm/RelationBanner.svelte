@@ -21,7 +21,7 @@
   interface Cta { action: DmAction; label: string; kind: 'primary' | 'ghost' | 'danger' }
   interface Spec { tone: Tone; icon: string; ctas: Cta[] }
 
-  const specs: Record<Exclude<ChatMode, 'full_chat'>, Spec> = {
+  const specs: Record<Exclude<ChatMode, 'full_chat' | 'group'>, Spec> = {
     first_contact: { tone: 'info', icon: 'info', ctas: [] },
     mutual_reconnect: { tone: 'info', icon: 'info', ctas: [] },
     both_removed: { tone: 'info', icon: 'info', ctas: [] },
@@ -54,7 +54,7 @@
     blocked_by_peer: { tone: 'warn', icon: 'ban', ctas: [] },
   };
 
-  const spec = $derived(chat.mode === 'full_chat' ? null : specs[chat.mode]);
+  const spec = $derived(chat.mode === 'full_chat' || chat.mode === 'group' ? null : specs[chat.mode]);
 </script>
 
 {#if spec}

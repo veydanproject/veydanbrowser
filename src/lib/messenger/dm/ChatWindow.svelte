@@ -28,8 +28,23 @@
     banner?: Snippet;
     /** Replaces the composer when the chat cannot be written to. */
     footer?: Snippet;
+    /** Replaces the line under the title (a group: how many members). */
+    subtitle?: Snippet;
+    /** Chats of many: who wrote a message. */
+    author?: (pubkey: string) => string;
+    /** Text of a system line, when it is not about the relationship. */
+    systemText?: (m: MessengerMessage) => string | null;
+    /** Entries of the chat menu that replace the relationship ones. */
+    chatEntries?: MenuEntry[];
+    /** May this message of someone else be removed for everyone? */
+    canModerate?: (m: MessengerMessage) => boolean;
+    /** Explains refusals this window does not know. */
+    explainError?: (e: unknown) => string | null;
+    ontitle?: () => void;
   }
-  let { chat, onback, actions, banner, footer }: Props = $props();
+  let { chat, onback, actions, banner, footer, subtitle, author, systemText, chatEntries, canModerate, explainError, ontitle }: Props = $props();
+  const isGroup = $derived(chat.kind === "group");
+  const canAttach = $derived(chat.mode === "full_chat" || chat.mode === "group");
 
   let scroller = $state<HTMLDivElement | null>(null);
   let replyTo = $state<MessengerMessage | null>(null);
@@ -77,6 +92,8 @@
 
   /** Relationship refusals arrive as stable codes; everything else as text. */
   function explain(e: unknown): string {
+    const own = explainError?.(e);
+    if (own) return own;
     const code = dmErrorCode(e);
     if (code) return $t(`msg_err_${code}` as "msg_err_dm_blocked", { name: chat.title });
     const media = mediaErrorCode(e);
@@ -99,7 +116,8 @@
 
   const chatItems = $derived.by((): MenuEntry[] => {
     const list: MenuEntry[] = [];
-    if (chat.mode === "blocked") list.push({ label: $t("msg_rel_cta_unblock"), icon: "lock-open", onselect: () => act("unblock") });
+    if (chatEntries) list.push(...chatEntries);
+    else if (chat.mode === "blocked") list.push({ label: $t("msg_rel_cta_unblock"), icon: "lock-open", onselect: () => act("unblock") });
     else {
       if (chat.is_contact) list.push({ label: $t("msg_rel_cta_remove"), icon: "user", onselect: () => act("remove") });
       else if (chat.mode !== "request_received") list.push({ label: $t("msg_rel_cta_add"), icon: "user-plus", onselect: () => act("request") });
@@ -108,7 +126,8 @@
     list.push({ type: "separator" });
     list.push({ label: chat.pinned ? $t("msg_chat_unpin") : $t("msg_chat_pin"), icon: "pin", onselect: () => chatStore.setPinned(chat.id, !chat.pinned) });
     list.push({ label: chat.archived ? $t("msg_chat_unarchive") : $t("msg_chat_archive"), icon: "archive", onselect: () => chatStore.setArchived(chat.id, !chat.archived) });
-    list.push({ label: $t("msg_chat_delete"), icon: "trash-2", danger: true, onselect: async () => { if (await confirmStore.ask($t("msg_chat_delete_confirm", { name: chat.title }), $t("msg_chat_delete"), true)) { await chatStore.deleteChat(chat.id); onback?.(); } } });
+    // A group is left, not deleted: its own entries say how.
+    if (!isGroup) list.push({ label: $t("msg_chat_delete"), icon: "trash-2", danger: true, onselect: async () => { if (await confirmStore.ask($t("msg_chat_delete_confirm", { name: chat.title }), $t("msg_chat_delete"), true)) { await chatStore.deleteChat(chat.id); onback?.(); } } });
     return list;
   });
 
@@ -182,7 +201,7 @@
       if (own && m.status === 'failed') list.push({ label: $t('msg_message_retry'), icon: 'refresh-cw', onselect: () => guard(() => chatStore.retry(m.id)) });
       list.push({ type: 'separator' });
       list.push({ label: $t('msg_message_delete_me'), icon: 'trash-2', danger: true, onselect: () => guard(() => chatStore.remove(m.id, false)) });
-      if (own) list.push({ label: $t('msg_message_delete_all'), icon: 'trash-2', danger: true, onselect: () => guard(() => chatStore.remove(m.id, true)) });
+      if (own || canModerate?.(m)) list.push({ label: $t("msg_message_delete_all"), icon: "trash-2", danger: true, onselect: () => guard(() => chatStore.remove(m.id, true)) });
     }
     return list;
   });
@@ -211,26 +230,30 @@
 {/snippet}
 
 {#snippet composerTools()}
-  <AttachButton disabled={!sessionActive || chat.mode !== "full_chat" || !!editing} onfiles={attach} />
+  <AttachButton disabled={!sessionActive || !canAttach || !!editing} onfiles={attach} />
 {/snippet}
 
 <section class="window">
   <header class="head">
     {#if onback}<button class="icon back narrow-only" onclick={onback} title={$t('msg_back')}><Icon name="arrow-left" size={16} /></button>{/if}
-    <Avatar url={chat.picture} label={chat.title} seed={chat.peer_pubkey} size={36} />
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div class="ident" class:clickable={!!ontitle} onclick={() => ontitle?.()}>
+    <Avatar url={chat.picture} label={chat.title} seed={chat.peer_pubkey ?? chat.id} size={36} />
     <div class="who">
       <div class="title">{chat.title}{#if chat.is_muted}<span class="dim"><Icon name="bell-off" size={12} /></span>{/if}</div>
       <div class="sub">
         {#if !sessionActive}{$t('msg_chat_locked')}
         {:else if !online}<span class="offline">{$t('msg_chat_offline')}</span>
+        {:else if subtitle}{@render subtitle()}
         {:else}<code>{chat.peer_npub ? `${chat.peer_npub.slice(0, 14)}…${chat.peer_npub.slice(-6)}` : ''}</code>{/if}
       </div>
+    </div>
     </div>
     {#if actions}{@render actions()}{/if}
     <button class="icon" onclick={openChatMenu} title={$t("msg_chat_menu")}><Icon name="more-vertical" size={16} /></button>
   </header>
 
-  <RelationBanner {chat} busy={acting} onaction={act} />
+  {#if !isGroup}<RelationBanner {chat} busy={acting} onaction={act} />{/if}
   {#if banner}{@render banner()}{/if}
 
   <div class="scroll" bind:this={scroller} {onscroll}>
@@ -247,9 +270,9 @@
       {#each rows as r (r.m.id)}
         {#if r.day}<div class="day"><span>{r.day}</span></div>{/if}
         {#if r.m.content_type === 'system'}
-          <div class="system"><span>{$t(`msg_sys_${r.m.text}` as 'msg_sys_request_sent', { name: chat.title })}</span></div>
+          <div class="system"><span>{systemText?.(r.m) ?? $t(`msg_sys_${r.m.text}` as "msg_sys_request_sent", { name: chat.title })}</span></div>
         {:else}
-          <MessageBubble message={r.m} first={r.first} peerTitle={chat.title} highlighted={highlighted === r.m.id}
+          <MessageBubble message={r.m} first={r.first} peerTitle={chat.title} {author} highlighted={highlighted === r.m.id}
             onmenu={openMenu} onreplyclick={jumpTo} onretry={(m) => guard(() => chatStore.retry(m.id))}  media={attachment} />
         {/if}
       {/each}
@@ -265,7 +288,7 @@
   {#if error}<div class="error-line">{error}</div>{/if}
 
   {#if chat.can_send}
-    <Composer {replyTo} {editing} peerTitle={chat.title} disabled={!sessionActive} draftKey={chat.id} oneditlast={editLast} onrecording={record} canRecord={chat.mode === 'full_chat'}
+    <Composer {replyTo} {editing} peerTitle={chat.title} disabled={!sessionActive} draftKey={chat.id} oneditlast={editLast} onrecording={record} canRecord={canAttach}
       oncancel={() => { replyTo = null; editing = null; }} onsend={send} tools={composerTools} />
   {:else if footer}
     {@render footer()}
@@ -281,6 +304,8 @@
 <style>
   .window { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
   .head { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; min-height: 56px; }
+  .ident { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; flex: 1; }
+  .ident.clickable { cursor: pointer; }
   .who { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
   .title { display: flex; align-items: center; gap: 6px; font-weight: var(--fw-bold); font-size: var(--fs-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dim { color: var(--text-3); display: inline-flex; }

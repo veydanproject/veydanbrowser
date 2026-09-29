@@ -18,6 +18,8 @@ import {
 } from './api';
 import { chatStore } from './chats/chatStore.svelte';
 import { transferStore } from './media/transferStore.svelte';
+import { groupStore } from "./groups/groupStore.svelte";
+import { nameStore } from "./groups/names.svelte";
 
 export interface FeedEntry extends MessengerUiEvent {
   at: number;
@@ -89,6 +91,7 @@ class MessengerStore {
         this.ownProfile = ownProfile;
         if (identity) {
           chatStore.loadChats().catch(() => {});
+          groupStore.load().catch(() => {});
           // Events must flow as soon as the module is visible, not only
           // while its page is open (unread badge, statuses).
           this.startListeners().catch(() => {});
@@ -100,6 +103,7 @@ class MessengerStore {
         this.contacts = [];
         this.ownProfile = null;
         chatStore.reset();
+        groupStore.reset();
       }
       this.loaded = true;
     } finally {
@@ -119,9 +123,14 @@ class MessengerStore {
       await listen<MessengerUiEvent>(RUNTIME_EVENT, (e) => {
         chatStore.handleEvent(e.payload);
         transferStore.handleEvent(e.payload);
+        groupStore.handleEvent(e.payload);
         if (e.payload.name === 'transfer.progress') return;
         this.feed = [{ ...e.payload, at: Date.now() }, ...this.feed].slice(0, FEED_LIMIT);
         if (e.payload.name === 'dm.message' || e.payload.name === 'history.synced') this.scheduleStatusRefresh();
+        if (e.payload.name === "profile.updated") {
+          const pk = (e.payload.payload as { pubkey?: string } | null)?.pubkey;
+          if (pk) nameStore.refresh(pk);
+        }
         if (e.payload.name === 'profile.updated' || e.payload.name === 'follows.updated') {
           this.refreshContacts().catch(() => {});
         }
