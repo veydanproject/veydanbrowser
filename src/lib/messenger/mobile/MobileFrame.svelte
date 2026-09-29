@@ -8,6 +8,7 @@
 -->
 <script lang="ts">
   import { onMount, type Snippet } from 'svelte';
+  import '../shared/emoji/font.css';
   import { onKeyboard } from '../shared/keyboard';
   import { t } from '$lib/i18n';
   import Icon from '$lib/Icon.svelte';

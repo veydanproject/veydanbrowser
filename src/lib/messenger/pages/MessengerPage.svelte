@@ -3,6 +3,7 @@
 
 <script lang="ts">
   import { onMount } from 'svelte';
+  import '../shared/emoji/font.css';
   import { t } from '$lib/i18n';
   import Icon from '$lib/Icon.svelte';
   import { messengerStore } from '../store.svelte';

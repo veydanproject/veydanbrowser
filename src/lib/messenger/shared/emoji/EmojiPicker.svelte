@@ -48,7 +48,7 @@
   const keep = (e: Event) => e.preventDefault();
 </script>
 
-<div class="picker" bind:this={root} role="dialog" aria-label={$t('msg_emoji_title')}>
+<div class="picker msg-font" bind:this={root} role="dialog" aria-label={$t('msg_emoji_title')}>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="tabs" onpointerdown={keep}>
     {#if recent.length}
