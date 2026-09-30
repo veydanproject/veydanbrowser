@@ -7,6 +7,7 @@
 //! - Linux: `org.freedesktop.Notifications` over D-Bus.
 //! - Windows: WinRT toasts under the app's AppUserModelID, registered for
 //!   the current user so that a build without an installer shows them too.
+//! - macOS: `UNUserNotificationCenter`, from an app bundle only.
 //!
 //! Where the system cannot show anything (no notification daemon, no app
 //! bundle on macOS), the notifier says so through [`Notifier::available`]
@@ -20,6 +21,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod mac;
 #[cfg(windows)]
 mod win;
 #[cfg(any(windows, test))]
@@ -89,12 +92,17 @@ impl Notifier {
         let (up, available) = watch::channel(false);
         #[cfg(target_os = "linux")]
         tokio::spawn(linux::run(app, rx, up, on_click, bus));
+        #[cfg(target_os = "macos")]
+        {
+            let _ = bus;
+            mac::start(app, rx, up, on_click);
+        }
         #[cfg(windows)]
         {
             let _ = bus;
             win::start(app, rx, up, on_click);
         }
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
         {
             let _ = (app, on_click, up, bus);
             tokio::spawn(drain(rx));
@@ -139,7 +147,7 @@ impl Notifier {
 }
 
 /// Nothing can be shown: commands are taken and dropped, a shutdown answered.
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 pub(crate) async fn drain(mut rx: mpsc::UnboundedReceiver<Command>) {
     while let Some(cmd) = rx.recv().await {
         if let Command::Shutdown(done) = cmd {
@@ -175,9 +183,30 @@ pub(crate) fn short_tag(key: &str) -> String {
     format!("{h:016x}")
 }
 
+/// The extension of a picture by its first bytes, for systems that tell
+/// a file's type by its name (macOS). None: not a picture they show.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn image_extension(bytes: &[u8]) -> Option<&'static str> {
+    match bytes {
+        [0x89, b'P', b'N', b'G', ..] => Some("png"),
+        [0xFF, 0xD8, 0xFF, ..] => Some("jpg"),
+        [b'G', b'I', b'F', b'8', ..] => Some("gif"),
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("webp"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pictures_are_told_by_their_first_bytes() {
+        assert_eq!(image_extension(b"\x89PNG\r\n\x1a\n"), Some("png"));
+        assert_eq!(image_extension(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("jpg"));
+        assert_eq!(image_extension(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(image_extension(b"<svg"), None);
+    }
 
     #[test]
     fn escapes_markup() {
