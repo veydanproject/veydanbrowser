@@ -50,9 +50,9 @@
 
 {#snippet actions()}
   {#if !needsIdentity && s?.runtime}
-    <button class="ibtn" onclick={() => (newGroup = true)} aria-label={$t("msg_group_new_title")}><Icon name="user-plus" size={21} /></button>
-    <button class="ibtn" onclick={() => goto('/messenger/contacts')} aria-label={$t('msg_contacts_title')}><Icon name="users" size={21} /></button>
     <button class="ibtn" onclick={() => goto('/messenger/settings')} aria-label={$t('msg_settings_title')}><Icon name="settings" size={21} /></button>
+    <button class="ibtn" onclick={() => goto('/messenger/contacts')} aria-label={$t('msg_contacts_title')}><Icon name="book-user" size={21} /></button>
+    <button class="ibtn" onclick={() => (newGroup = true)} aria-label={$t("msg_group_new_title")}><Icon name="users-plus" size={21} /></button>
   {/if}
 {/snippet}
 
@@ -80,7 +80,7 @@
     <PushOffer />
     <InvitesBar />
     <ChatList {query} onopen={open} />
-    <button class="fab" onclick={() => (newChat = true)} aria-label={$t('msg_newchat_title')}><Icon name="edit" size={22} /></button>
+    <button class="fab" onclick={() => (newChat = true)} aria-label={$t('msg_newchat_title')}><Icon name="message-circle-plus" size={22} /></button>
   {/if}
 </MobileFrame>
 

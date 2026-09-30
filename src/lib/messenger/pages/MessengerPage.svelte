@@ -74,10 +74,10 @@
           <span class="rail-title">{$t('msg_title')} <span class="alpha-badge">{$t('msg_alpha_badge')}</span></span>
           <span class="net {netState}" title={$t(`msg_net_${netState}` as 'msg_net_on', { connected: String(connected), total: String(total) })}></span>
           <span class="spacer"></span>
-          <button class="icon" class:active={view === 'contacts'} onclick={() => show(view === 'contacts' ? 'chat' : 'contacts')} title={$t('msg_contacts_title')}><Icon name="users" size={16} /></button>
           <button class="icon" class:active={view === 'settings'} onclick={() => show(view === 'settings' ? 'chat' : 'settings')} title={$t('msg_settings_title')}><Icon name="settings" size={16} /></button>
-          <button class="icon" onclick={() => (newGroup = true)} title={$t("msg_group_new_title")}><Icon name="user-plus" size={16} /></button>
-          <button class="icon accent" onclick={() => (newChat = true)} title={$t('msg_newchat_title')}><Icon name="edit" size={16} /></button>
+          <button class="icon" class:active={view === 'contacts'} onclick={() => show(view === 'contacts' ? 'chat' : 'contacts')} title={$t('msg_contacts_title')}><Icon name="book-user" size={16} /></button>
+          <button class="icon" onclick={() => (newGroup = true)} title={$t("msg_group_new_title")}><Icon name="users-plus" size={16} /></button>
+          <button class="icon accent" onclick={() => (newChat = true)} title={$t('msg_newchat_title')}><Icon name="message-circle-plus" size={16} /></button>
         </div>
         <div class="search">
           <Icon name="search" size={14} />
@@ -109,8 +109,8 @@
             <p>{$t('msg_welcome_title')}</p>
             <span>{$t('msg_welcome_text')}</span>
             <div class="welcome-actions">
-                <button class="btn btn-primary" onclick={() => (newChat = true)}><Icon name="edit" size={14} />{$t('msg_newchat_title')}</button>
-              <button class="btn btn-ghost" onclick={() => (newGroup = true)}><Icon name="users" size={14} />{$t("msg_group_new_title")}</button>
+                <button class="btn btn-primary" onclick={() => (newChat = true)}><Icon name="message-circle-plus" size={14} />{$t('msg_newchat_title')}</button>
+              <button class="btn btn-ghost" onclick={() => (newGroup = true)}><Icon name="users-plus" size={14} />{$t("msg_group_new_title")}</button>
             </div>
           </div>
         {/if}
