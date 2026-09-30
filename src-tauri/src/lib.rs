@@ -491,7 +491,6 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_set_prefs,
             #[cfg(feature = "messenger")]
-            #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_refresh,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_test,
@@ -499,7 +498,9 @@ fn run_mobile() {
             commands::messenger::push::messenger_push_take_tap,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_clear,
+            #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_notify_get,
+            #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_notify_set,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
@@ -519,6 +520,7 @@ fn run_mobile() {
             commands::messenger::messenger_chat_set_pinned,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_set_archived,
+            #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_set_muted,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_delete,
@@ -1121,7 +1123,6 @@ fn run_desktop() {
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_set_prefs,
             #[cfg(feature = "messenger")]
-            #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_refresh,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_test,
@@ -1129,7 +1130,9 @@ fn run_desktop() {
             commands::messenger::push::messenger_push_take_tap,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_clear,
+            #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_notify_get,
+            #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_notify_set,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
@@ -1149,6 +1152,7 @@ fn run_desktop() {
             commands::messenger::messenger_chat_set_pinned,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_set_archived,
+            #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_set_muted,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_delete,

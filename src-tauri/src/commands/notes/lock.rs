@@ -109,6 +109,7 @@ pub struct LockSetResult {
 /// Whether a PIN or password guards the app. What is kept behind it stays
 /// out of reach of anything that runs without the user: the push handler
 /// gets no keys while this is true.
+#[cfg(feature = "messenger")]
 pub(crate) async fn lock_enabled(state: &AppState) -> bool {
     read_setting(state, HASH_KEY).await.is_some()
 }
