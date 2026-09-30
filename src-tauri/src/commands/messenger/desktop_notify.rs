@@ -338,6 +338,74 @@ impl DesktopNotify {
     }
 }
 
+// ─── Waiting messages on the icon and in the tray ───────────────────────────
+
+static UNREAD_KICK: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Something changed what waits (a chat read, muted, archived): count again now.
+pub fn unread_changed() {
+    UNREAD_KICK.notify_one();
+}
+
+/// Counts the messages waiting in chats that are not muted, after the
+/// runtime's events (a burst counts once) and when kicked, and shows the
+/// number on the app's icon and in the tray. A hidden module shows nothing.
+pub fn spawn_unread(app: tauri::AppHandle, rt: Arc<MessengerRuntime>) {
+    tauri::async_runtime::spawn(async move {
+        let mut rx = rt.ui_events();
+        let mut shown: Option<i64> = None;
+        loop {
+            let enabled = match app.try_state::<AppState>() {
+                Some(state) => super::read_enabled(&state.db).await,
+                None => false,
+            };
+            let n = if enabled { rt.dm().total_unread().await.unwrap_or(0) } else { 0 };
+            if shown != Some(n) {
+                shown = Some(n);
+                show_unread(&app, n);
+            }
+            tokio::select! {
+                ev = rx.recv() => {
+                    if let Err(tokio::sync::broadcast::error::RecvError::Closed) = ev { break }
+                }
+                _ = UNREAD_KICK.notified() => {}
+                _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+            }
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            while !matches!(rx.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty | tokio::sync::broadcast::error::TryRecvError::Closed)) {}
+        }
+    });
+}
+
+fn show_unread(app: &tauri::AppHandle, n: i64) {
+    crate::tray::set_unread(app, n.max(0) as usize);
+    let Some(w) = app.get_webview_window("main") else { return };
+    // macOS: the Dock; Linux: launchers that read the Unity count (KDE, Ubuntu).
+    #[cfg(not(windows))]
+    let _ = w.set_badge_count((n > 0).then_some(n));
+    // Windows has no count on the taskbar button, only a small overlay icon.
+    #[cfg(windows)]
+    let _ = w.set_overlay_icon((n > 0).then(dot_image));
+}
+
+/// A red dot for the taskbar button.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn dot_image() -> tauri::image::Image<'static> {
+    const SIZE: u32 = 16;
+    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
+    let c = SIZE as f32 / 2.0;
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let d = ((x as f32 + 0.5 - c).powi(2) + (y as f32 + 0.5 - c).powi(2)).sqrt();
+            if d <= c - 0.5 {
+                let i = ((y * SIZE + x) * 4) as usize;
+                rgba[i..i + 4].copy_from_slice(&[0xE5, 0x48, 0x4D, 0xFF]);
+            }
+        }
+    }
+    tauri::image::Image::new_owned(rgba, SIZE, SIZE)
+}
+
 /// The app's icon as a file, for systems that take the source's icon from
 /// one (Windows). Written once into the cache.
 fn icon_file(cache: &std::path::Path) -> Option<PathBuf> {

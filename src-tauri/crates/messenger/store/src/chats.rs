@@ -175,8 +175,10 @@ pub async fn delete(store: &Store, id: &str) -> Result<()> {
     tx.commit().await.map_err(storage)
 }
 
+/// What the app counts as waiting: a muted or archived chat keeps its own
+/// counter but stays out of the total (the badge, the tray).
 pub async fn total_unread(store: &Store) -> Result<i64> {
-    sqlx::query_scalar::<_, i64>("SELECT COALESCE(SUM(unread), 0) FROM msg_chats WHERE archived = 0")
+    sqlx::query_scalar::<_, i64>("SELECT COALESCE(SUM(unread), 0) FROM msg_chats WHERE archived = 0 AND muted = 0")
         .fetch_one(store.pool())
         .await
         .map_err(storage)
@@ -216,6 +218,7 @@ mod tests {
         assert!(is_muted(&s, "dm:aa").await.unwrap());
         touch(&s, "dm:aa", t0 + 1, Some("still counted"), true).await.unwrap();
         assert_eq!(get(&s, "dm:aa").await.unwrap().unwrap().unread, 1, "muted chats still count unread");
+        assert_eq!(total_unread(&s).await.unwrap(), 0, "but stay out of the total");
         mark_read(&s, "dm:aa").await.unwrap();
         set_archived(&s, "dm:aa", true).await.unwrap();
         assert_eq!(list(&s, false).await.unwrap().len(), 1);

@@ -122,6 +122,7 @@
       password_generator: tt('tray_password_generator'),
       quick_capture: tt('tray_quick_capture'),
       tooltip: tt('tray_tooltip'),
+      unread: tt('tray_unread'),
     };
   }
 

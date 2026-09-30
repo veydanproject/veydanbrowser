@@ -20,6 +20,7 @@
 use crate::AppState;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
 const TRAY_ID: &str = "veydan-main-tray";
@@ -32,9 +33,51 @@ fn tray_id() -> String {
     }
 }
 
-/// Tooltip with the live running count (and the profile name under `--workdir`).
+/// Messages waiting in the messenger (chats that are not muted): a dot on
+/// the icon and a line in the tooltip.
+static UNREAD: AtomicUsize = AtomicUsize::new(0);
+
+fn unread() -> usize {
+    UNREAD.load(Ordering::Relaxed)
+}
+
+/// The messenger's count of waiting messages; the tray follows it.
+#[cfg_attr(not(feature = "messenger"), allow(dead_code))]
+pub fn set_unread(app: &AppHandle, n: usize) {
+    if UNREAD.swap(n, Ordering::Relaxed) != n {
+        imp::refresh(app);
+    }
+}
+
+/// Tooltip with the live running count (and the profile name under `--workdir`),
+/// and what waits in the messenger.
 fn tooltip_text(labels: &TrayLabels, running: usize) -> String {
-    crate::workdir::caption(labels.tooltip.replace("{n}", &running.to_string()))
+    let mut text = labels.tooltip.replace("{n}", &running.to_string());
+    let waiting = unread();
+    if waiting > 0 {
+        text = format!("{text}\n{}", labels.unread.replace("{n}", &waiting.to_string()));
+    }
+    crate::workdir::caption(text)
+}
+
+/// An RGBA icon with a dot in its lower right corner: something waits.
+fn with_dot(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    let r = (width.min(height) as f32) * 0.22;
+    let (cx, cy) = (width as f32 - r - 0.5, height as f32 - r - 0.5);
+    for y in 0..height {
+        for x in 0..width {
+            let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+            let i = ((y * width + x) * 4) as usize;
+            if d <= r {
+                out[i..i + 4].copy_from_slice(&[0xE5, 0x48, 0x4D, 0xFF]);
+            } else if d <= r + 1.0 * (width as f32 / 32.0).max(1.0) {
+                // A ring in the icon's background lets the dot stand apart.
+                out[i + 3] = 0;
+            }
+        }
+    }
+    out
 }
 
 /// Localized labels for the static tray entries. Supplied by the frontend via
@@ -61,10 +104,17 @@ pub struct TrayLabels {
     pub quick_capture: String,
     /// "Veydan Space — {n} running" — `{n}` is replaced with the live count.
     pub tooltip: String,
+    /// "{n} unread" — messages waiting in the messenger's chats that are not muted.
+    #[serde(default = "default_unread_label")]
+    pub unread: String,
 }
 
 fn default_quick_capture_label() -> String {
     "Quick note".into()
+}
+
+fn default_unread_label() -> String {
+    "{n} unread".into()
 }
 
 impl Default for TrayLabels {
@@ -86,6 +136,7 @@ impl Default for TrayLabels {
             password_generator: "Password generator".into(),
             quick_capture: default_quick_capture_label(),
             tooltip: "Veydan Space — {n} running".into(),
+            unread: default_unread_label(),
         }
     }
 }
@@ -256,6 +307,8 @@ mod imp {
         labels: TrayLabels,
         data: MenuData,
         icon: Vec<Icon>,
+        /// The same with a dot: messages wait.
+        icon_dot: Vec<Icon>,
         visible: bool,
     }
 
@@ -294,15 +347,21 @@ mod imp {
         }
 
         fn status(&self) -> Status {
-            if self.visible {
-                Status::Active
-            } else {
+            if !self.visible {
                 Status::Passive
+            } else if unread() > 0 {
+                Status::NeedsAttention
+            } else {
+                Status::Active
             }
         }
 
         fn icon_pixmap(&self) -> Vec<Icon> {
-            self.icon.clone()
+            if unread() > 0 { self.icon_dot.clone() } else { self.icon.clone() }
+        }
+
+        fn attention_icon_pixmap(&self) -> Vec<Icon> {
+            self.icon_dot.clone()
         }
 
         fn tool_tip(&self) -> ToolTip {
@@ -406,24 +465,23 @@ mod imp {
     }
 
     /// Convert the app's window icon (RGBA8) to ksni's ARGB32 network-byte-order.
-    fn build_icon(app: &AppHandle) -> Vec<Icon> {
+    /// The app's icon as SNI wants it (ARGB), plain and with the dot.
+    fn build_icons(app: &AppHandle) -> (Vec<Icon>, Vec<Icon>) {
         let Some(img) = app.default_window_icon() else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
-        let (width, height) = (img.width() as i32, img.height() as i32);
-        let rgba = img.rgba();
-        let mut data = Vec::with_capacity(rgba.len());
-        for px in rgba.chunks_exact(4) {
-            data.push(px[3]); // A
-            data.push(px[0]); // R
-            data.push(px[1]); // G
-            data.push(px[2]); // B
-        }
-        vec![Icon {
-            width,
-            height,
-            data,
-        }]
+        let argb = |rgba: &[u8]| {
+            let mut data = Vec::with_capacity(rgba.len());
+            for px in rgba.chunks_exact(4) {
+                data.push(px[3]); // A
+                data.push(px[0]); // R
+                data.push(px[1]); // G
+                data.push(px[2]); // B
+            }
+            vec![Icon { width: img.width() as i32, height: img.height() as i32, data }]
+        };
+        let dot = with_dot(img.rgba(), img.width(), img.height());
+        (argb(img.rgba()), argb(&dot))
     }
 
     fn current_handle() -> Option<Handle<VeydanTray>> {
@@ -452,11 +510,13 @@ mod imp {
                 return;
             }
             // First activation: build and register the SNI service.
+            let icons = build_icons(&app);
             let tray = VeydanTray {
                 app: app.clone(),
                 labels: labels_of(&app),
                 data: load_menu_data(&app).await,
-                icon: build_icon(&app),
+                icon: icons.0,
+                icon_dot: icons.1,
                 visible: true,
             };
             match tray.spawn().await {
@@ -600,12 +660,21 @@ mod imp {
                     win_primary(tray.app_handle());
                 }
             });
-        if let Some(icon) = app.default_window_icon().cloned() {
+        if let Some(icon) = current_icon(app) {
             builder = builder.icon(icon);
         }
         let tray = builder.build(app)?;
         *state.tray.lock().unwrap() = Some(tray);
         Ok(())
+    }
+
+    /// The app's icon, with the dot while messages wait.
+    fn current_icon(app: &AppHandle) -> Option<tauri::image::Image<'static>> {
+        let img = app.default_window_icon()?;
+        if unread() == 0 {
+            return Some(img.clone().to_owned());
+        }
+        Some(tauri::image::Image::new_owned(with_dot(img.rgba(), img.width(), img.height()), img.width(), img.height()))
     }
 
     fn hide_tray(app: &AppHandle) {
@@ -627,6 +696,7 @@ mod imp {
             let tooltip = tooltip_text(&labels, data.running.len());
             let _ = tray.set_tooltip(Some(&tooltip));
         }
+        let _ = tray.set_icon(current_icon(app));
     }
 
     pub fn apply(app: &AppHandle, want: bool) {
@@ -670,4 +740,29 @@ pub fn sync_taskbar_to_visibility(app: &AppHandle) {
             let _ = w.set_skip_taskbar(skip);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_dot_sits_in_the_lower_right_corner() {
+        let (w, h) = (32u32, 32u32);
+        let icon = vec![0x10u8; (w * h * 4) as usize];
+        let out = with_dot(&icon, w, h);
+        let px = |x: u32, y: u32| &out[((y * w + x) * 4) as usize..((y * w + x) * 4 + 4) as usize];
+        assert_eq!(px(w - 4, h - 4), &[0xE5, 0x48, 0x4D, 0xFF], "the dot");
+        assert_eq!(px(2, 2), &[0x10; 4], "the icon elsewhere is as it was");
+    }
+
+    #[test]
+    fn the_tooltip_says_what_waits() {
+        let labels = TrayLabels::default();
+        UNREAD.store(0, Ordering::Relaxed);
+        assert!(!tooltip_text(&labels, 1).contains("unread"));
+        UNREAD.store(3, Ordering::Relaxed);
+        assert!(tooltip_text(&labels, 1).ends_with("3 unread"));
+        UNREAD.store(0, Ordering::Relaxed);
+    }
 }

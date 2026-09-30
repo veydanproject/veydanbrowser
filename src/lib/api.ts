@@ -756,4 +756,6 @@ export interface TrayLabels {
   password_generator: string;
   quick_capture: string;
   tooltip: string;
+  /** "{n} unread": messages waiting in the messenger. */
+  unread: string;
 }

@@ -91,6 +91,8 @@ impl MessengerState {
                 #[cfg(desktop)]
                 let desktop = desktop_notify::DesktopNotify::start(app.clone(), rt.clone());
                 #[cfg(desktop)]
+                desktop_notify::spawn_unread(app.clone(), rt.clone());
+                #[cfg(desktop)]
                 spawn_ui_event_forwarder(app, rt.clone(), desktop.clone());
                 #[cfg(not(desktop))]
                 spawn_ui_event_forwarder(app, rt.clone());
@@ -134,6 +136,7 @@ impl MessengerState {
 
     /// The chat was read, or the page was seen: its notifications go.
     pub(crate) fn notices_seen(&self, key: Option<&str>) {
+        unread_changed();
         #[cfg(desktop)]
         if let Some(d) = &self.desktop {
             d.clear(key);
@@ -141,6 +144,12 @@ impl MessengerState {
         #[cfg(not(desktop))]
         let _ = key;
     }
+}
+
+/// What waits in the chats changed: the count on the icon follows.
+fn unread_changed() {
+    #[cfg(desktop)]
+    desktop_notify::unread_changed();
 }
 
 /// Polls relay state and emits `EVENT_RELAY_STATUS` when it changes. The
@@ -592,19 +601,25 @@ pub async fn messenger_chat_set_archived(
     archived: bool,
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
-    state.messenger.runtime()?.dm().set_archived(&chat_id, archived).await.map_err(map_err)
+    state.messenger.runtime()?.dm().set_archived(&chat_id, archived).await.map_err(map_err)?;
+    unread_changed();
+    Ok(())
 }
 
 /// Direct chats and groups alike: a muted chat is still counted and shown, only quietly.
 #[tauri::command]
 pub async fn messenger_chat_set_muted(chat_id: String, muted: bool, state: tauri::State<'_, AppState>) -> CmdResult<()> {
-    state.messenger.runtime()?.dm().set_muted(&chat_id, muted).await.map_err(map_err)
+    state.messenger.runtime()?.dm().set_muted(&chat_id, muted).await.map_err(map_err)?;
+    unread_changed();
+    Ok(())
 }
 
 /// Removes the chat and its messages from this device only.
 #[tauri::command]
 pub async fn messenger_chat_delete(chat_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
-    state.messenger.runtime()?.chat_delete(&chat_id).await.map_err(map_err)
+    state.messenger.runtime()?.chat_delete(&chat_id).await.map_err(map_err)?;
+    unread_changed();
+    Ok(())
 }
 
 /// Send a text DM to an npub/hex key; returns the stored message.

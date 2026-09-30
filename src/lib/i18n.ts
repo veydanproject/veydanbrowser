@@ -1314,6 +1314,7 @@ const translations = {
     tray_no_profiles: 'No profiles',
     tray_password_generator: 'Password generator',
     tray_tooltip: 'Veydan Space — {n} running',
+    tray_unread: 'Unread messages: {n}',
     // Legacy Veydan Browser data migration. Remove in 4.0.
     migration_title: 'Veydan Browser is now Veydan Space',
     migration_intro:
@@ -2651,6 +2652,7 @@ const translations = {
     tray_no_profiles: 'Нет профилей',
     tray_password_generator: 'Генератор паролей',
     tray_tooltip: 'Veydan Space — запущено: {n}',
+    tray_unread: 'Непрочитанных сообщений: {n}',
     // Legacy Veydan Browser data migration. Remove in 4.0.
     migration_title: 'Veydan Browser теперь Veydan Space',
     migration_intro:
