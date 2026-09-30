@@ -22,7 +22,9 @@ pub enum PushError {
     /// The server answered with a refusal.
     Refused {
         status: u16,
-        /// The server's word for the reason: `unknown_app`, `auth_expired`.
+        /// The server's word for the reason: `unknown_app`, `auth_expired`,
+        /// `token_invalid`. Kept as the server wrote it, so a word of a
+        /// newer server is told apart like the ones known today.
         code: String,
         message: String,
         /// Id of the request in the server's log.
@@ -236,6 +238,30 @@ impl VpushClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The app tells refusals apart by the server's word in the error.
+    #[test]
+    fn a_refusal_is_named_by_the_servers_word_for_it() {
+        let refused = |code: &str| PushError::Refused {
+            status: 422,
+            code: code.into(),
+            message: "why".into(),
+            request_id: "5f3a9c1e".into(),
+        };
+        // The push service does not know the token the phone registered.
+        assert_eq!(
+            refused("token_invalid").to_string(),
+            "push_refused_token_invalid: why (request 5f3a9c1e)"
+        );
+        assert_eq!(
+            refused("limit_devices_total").to_string(),
+            "push_refused_limit_devices_total: why (request 5f3a9c1e)"
+        );
+        assert!(matches!(
+            MessengerError::from(refused("token_invalid")),
+            MessengerError::Transport(text) if text.starts_with("push_refused_token_invalid")
+        ));
+    }
 
     #[test]
     fn addresses() {

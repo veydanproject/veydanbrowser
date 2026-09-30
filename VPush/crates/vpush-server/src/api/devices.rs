@@ -5,6 +5,8 @@
 //! other way to name an owner, so nobody can register, read or remove a
 //! device of another.
 
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
@@ -19,12 +21,16 @@ use vpush_proto::{
     TestAnswer,
 };
 
-use super::{error, now, Api, RequestId};
+use super::{error, now, Api, RequestId, NEW_DEVICES_PER_HOUR, PUTS_PER_MINUTE};
 use crate::auth::AuthError;
-use crate::delivery::{mask, test_push, Outcome, ProviderKind, Target};
-use crate::store::{Device, DeviceInput, StoreError, WatchedRelay};
+use crate::delivery::{
+    check_token, mask, test_push, Outcome, ProviderKind, PushProvider, Target, TokenCheck,
+};
+use crate::store::{Device, DeviceInput, DeviceLimits, StoreError, WatchedRelay};
 
 const MAX_TOKEN: usize = 4096;
+/// The header in which the reverse proxy says whom a request came from.
+const REAL_IP: &str = "x-real-ip";
 
 /// A refusal, on its way to become an answer.
 struct Refusal {
@@ -46,6 +52,15 @@ impl Refusal {
 
     fn bad(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, ErrorCode::BadRequest, message)
+    }
+
+    fn too_often(message: impl Into<String>, wait: Duration) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: ErrorCode::RateLimited,
+            message: message.into(),
+            retry_after: Some(wait),
+        }
     }
 
     fn internal(e: impl std::fmt::Display, request_id: &str) -> Self {
@@ -75,12 +90,7 @@ impl From<AuthError> for Refusal {
             // Nothing is wrong with the signature; the server has no room
             // to remember one more.
             AuthError::Busy(wait) => {
-                return Self {
-                    status: StatusCode::TOO_MANY_REQUESTS,
-                    code: ErrorCode::RateLimited,
-                    message: "too many requests at once; come back later".to_string(),
-                    retry_after: Some(wait),
-                }
+                return Self::too_often("too many requests at once; come back later", wait)
             }
             AuthError::Missing => (
                 ErrorCode::AuthMissing,
@@ -184,12 +194,34 @@ fn judge(api: &Api, url: &str) -> (String, RelayStatus, Option<String>) {
     (url, status, detail)
 }
 
-/// The request as the store takes it, and what to tell about each relay.
-fn accepted(
-    api: &Api,
-    asked: &Asked,
-    put: DevicePut,
-) -> Result<(DeviceInput, Vec<RelayAnswer>), Refusal> {
+/// Whom a request came from, as the reverse proxy in front says. `None`
+/// when there is no proxy to say it: what a client writes into a header is
+/// no address.
+fn client(api: &Api, headers: &HeaderMap) -> Option<IpAddr> {
+    if !api.config.server.trusted_proxy {
+        return None;
+    }
+    let said = headers
+        .get(REAL_IP)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse().ok());
+    // The proxy names somebody in every request it passes on. One that
+    // names nobody came past the proxy, and all such are counted as one
+    // client.
+    Some(said.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)))
+}
+
+/// A registration that may be written down.
+struct Accepted {
+    /// The request as the store takes it.
+    input: DeviceInput,
+    /// What to tell about each relay.
+    relays: Vec<RelayAnswer>,
+    /// The service that pushes to the device.
+    provider: Arc<dyn PushProvider>,
+}
+
+fn accepted(api: &Api, asked: &Asked, put: DevicePut) -> Result<Accepted, Refusal> {
     let limits = &api.config.limits;
 
     let kind: ProviderKind = put
@@ -204,13 +236,13 @@ fn accepted(
             format!("this server does not serve the app `{}`", put.app_id.chars().take(100).collect::<String>()),
         ));
     }
-    if api.providers.get(&put.app_id, kind).is_err() {
-        return Err(Refusal::new(
+    let provider = api.providers.get(&put.app_id, kind).map_err(|_| {
+        Refusal::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             ErrorCode::ProviderDisabled,
             format!("this server does not push through {} for this app", kind.as_str()),
-        ));
-    }
+        )
+    })?;
 
     let (token, channel_json) = match &put.channel {
         Channel::Fcm { token } => (token.clone(), None),
@@ -297,8 +329,13 @@ fn accepted(
         groups,
         now: at,
         expires_at: at + u64::from(limits.registration_days) * 86_400,
+        token_checked_at: None,
     };
-    Ok((input, answers))
+    Ok(Accepted {
+        input,
+        relays: answers,
+        provider,
+    })
 }
 
 fn view(api: &Api, device: Device) -> DeviceView {
@@ -346,33 +383,108 @@ pub async fn put(
 ) -> Response {
     let done = async {
         let asked = asked(&api, &method, &uri, &headers, device_id, body)?;
+        api.limits.registration(&asked.pubkey).map_err(|wait| {
+            api.counters.refused_rate_owner.add();
+            Refusal::too_often(
+                format!("{PUTS_PER_MINUTE} registrations of one owner a minute; come back later"),
+                wait,
+            )
+        })?;
         let put: DevicePut = serde_json::from_slice(&asked.body)
             .map_err(|e| Refusal::bad(format!("the body is not a registration: {e}")))?;
-        let (input, relays) = accepted(&api, &asked, put)?;
+        let Accepted {
+            mut input,
+            relays,
+            provider,
+        } = accepted(&api, &asked, put)?;
+
+        let stored = api
+            .store
+            .device(&asked.pubkey, &asked.device_id)
+            .await
+            .map_err(|e| Refusal::internal(e, &rid))?;
+        let same_token = stored.as_ref().is_some_and(|d| d.token == input.token);
+
+        // A device id or a token the server has not seen with this owner
+        // costs a question to the push service and, when it is taken, a
+        // row. Renewing what is known costs neither, and is not counted.
+        if !same_token {
+            if let Some(from) = client(&api, &headers) {
+                api.limits.new_device(from).map_err(|wait| {
+                    api.counters.refused_rate_ip.add();
+                    Refusal::too_often(
+                        format!(
+                            "{NEW_DEVICES_PER_HOUR} new devices from one address an hour; come back later"
+                        ),
+                        wait,
+                    )
+                })?;
+            }
+        }
+
+        // The push service is asked about the token, unless it has vouched
+        // for this very token and has not taken its word back since: the
+        // renewal of every week asks nobody.
+        let vouched = stored.as_ref().is_some_and(|d| {
+            same_token && d.state == "active" && d.token_checked_at.is_some()
+        });
+        let check = if vouched {
+            None
+        } else {
+            let target = Target {
+                token: input.token.clone(),
+            };
+            Some(check_token(provider.as_ref(), &target).await)
+        };
+        match check {
+            Some(TokenCheck::Invalid) => {
+                api.counters.tokens_invalid.add();
+                tracing::info!(
+                    request_id = %rid,
+                    owner = %mask(&asked.pubkey),
+                    device = %asked.device_id,
+                    token = %mask(&input.token),
+                    "registration refused: the push service does not know the token"
+                );
+                return Err(Refusal::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    ErrorCode::TokenInvalid,
+                    "the push service does not know this token; ask it for a new one and register again",
+                ));
+            }
+            Some(TokenCheck::Valid) => input.token_checked_at = Some(input.now),
+            // The service could not say. The device is registered, and the
+            // first push to it tells.
+            Some(TokenCheck::Unknown) | None => {}
+        }
 
         let answer = DeviceAnswer {
             device_id: input.device_id.clone(),
             expires_at: input.expires_at,
             relays,
         };
-        tracing::info!(
-            request_id = %rid,
-            owner = %mask(&input.pubkey),
-            device = %input.device_id,
-            app = %input.app_id,
-            provider = %input.provider,
-            token = %mask(&input.token),
-            relays = input.relays.len(),
-            refused_relays = answer.relays.len() - input.relays.len(),
-            groups = input.groups.len(),
-            "device registered"
-        );
-        match api
-            .store
-            .put_device(input, api.config.limits.devices_per_pubkey)
-            .await
-        {
+        // For the log, of what the store is about to take.
+        let (owner, token) = (mask(&input.pubkey), mask(&input.token));
+        let (app, watched, groups) = (input.app_id.clone(), input.relays.len(), input.groups.len());
+        let limits = DeviceLimits {
+            per_owner: api.config.limits.devices_per_pubkey,
+            total: api.config.limits.devices_total,
+        };
+        match api.store.put_device(input, limits).await {
             Ok(()) => {
+                tracing::info!(
+                    request_id = %rid,
+                    %owner,
+                    device = %answer.device_id,
+                    %app,
+                    provider = provider.kind().as_str(),
+                    %token,
+                    token_check = check.map_or("vouched for before", TokenCheck::as_str),
+                    relays = watched,
+                    refused_relays = answer.relays.len() - watched,
+                    groups,
+                    "device registered"
+                );
                 api.watch.plan_changed();
                 Ok(answer)
             }
@@ -384,6 +496,14 @@ pub async fn put(
                     api.config.limits.devices_per_pubkey
                 ),
             )),
+            Err(StoreError::Full) => {
+                api.counters.refused_devices_total.add();
+                Err(Refusal::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    ErrorCode::LimitDevicesTotal,
+                    "this server takes no more devices",
+                ))
+            }
             Err(e) => Err(Refusal::internal(e, &rid)),
         }
     }
@@ -474,17 +594,15 @@ pub async fn test(
             .map_err(|e| Refusal::internal(e, &rid))?
             .ok_or_else(no_device)?;
 
-        api.tests
-            .take(&device.token)
-            .map_err(|wait| Refusal {
-                status: StatusCode::TOO_MANY_REQUESTS,
-                code: ErrorCode::RateLimited,
-                message: format!(
+        api.limits.test(&device.token).map_err(|wait| {
+            Refusal::too_often(
+                format!(
                     "{} test pushes an hour; come back later",
                     api.config.limits.test_per_hour
                 ),
-                retry_after: Some(wait),
-            })?;
+                wait,
+            )
+        })?;
 
         let kind: ProviderKind = device
             .provider

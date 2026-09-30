@@ -11,7 +11,9 @@ use sqlx::sqlite::{
 use sqlx::{Pool, Row, Sqlite};
 use vpush_proto::Prefs;
 
-use super::{Counts, Device, DeviceInput, Result, Store, StoreError, WatchedRelay};
+use super::{
+    Counts, Device, DeviceInput, DeviceLimits, Result, Store, StoreError, WatchedRelay,
+};
 
 fn db(e: impl std::fmt::Display) -> StoreError {
     StoreError::Database(e.to_string())
@@ -144,6 +146,10 @@ impl SqliteStore {
                 .map_err(db)?
                 .map(|v| v.max(0) as u64),
             last_outcome: row.try_get("last_outcome").map_err(db)?,
+            token_checked_at: row
+                .try_get::<Option<i64>, _>("token_checked_at")
+                .map_err(db)?
+                .map(|v| v.max(0) as u64),
             relays,
             groups,
         })
@@ -152,7 +158,7 @@ impl SqliteStore {
 
 #[async_trait]
 impl Store for SqliteStore {
-    async fn put_device(&self, d: DeviceInput, max_per_owner: u32) -> Result<()> {
+    async fn put_device(&self, d: DeviceInput, limits: DeviceLimits) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(db)?;
 
         // The address at the push service moved to this owner and device.
@@ -180,11 +186,18 @@ impl Store for SqliteStore {
 
         let id = match known {
             Some(id) => {
-                // A new address means the push service has not refused it yet.
+                // A token the push service has just vouched for is alive,
+                // whatever was said of it before. Without its word the
+                // token that stays is what it was, and a new one has not
+                // been refused yet, nor asked about.
+                let checked = d.token_checked_at.map(|at| at as i64);
                 sqlx::query(
                     "UPDATE devices SET
                         app_id = ?, provider = ?,
-                        state = CASE WHEN token = ? THEN state ELSE 'active' END,
+                        state = CASE WHEN ? IS NOT NULL THEN 'active'
+                                     WHEN token = ? THEN state ELSE 'active' END,
+                        token_checked_at = CASE WHEN ? IS NOT NULL THEN ?
+                                                WHEN token = ? THEN token_checked_at END,
                         token = ?, channel_json = ?, app_version = ?,
                         pref_dm = ?, pref_groups = ?, author_key = ?,
                         updated_at = ?, expires_at = ?
@@ -192,6 +205,10 @@ impl Store for SqliteStore {
                 )
                 .bind(&d.app_id)
                 .bind(&d.provider)
+                .bind(checked)
+                .bind(&d.token)
+                .bind(checked)
+                .bind(checked)
                 .bind(&d.token)
                 .bind(&d.token)
                 .bind(&d.channel_json)
@@ -214,15 +231,24 @@ impl Store for SqliteStore {
                         .fetch_one(&mut *tx)
                         .await
                         .map_err(db)?;
-                if owned >= i64::from(max_per_owner) {
+                if owned >= i64::from(limits.per_owner) {
                     return Err(StoreError::TooManyDevices);
+                }
+                // Counted after the row of a former owner of the token went:
+                // a phone that changes hands is not one more.
+                let all: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM devices")
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(db)?;
+                if all >= i64::from(limits.total) {
+                    return Err(StoreError::Full);
                 }
                 sqlx::query(
                     "INSERT INTO devices
                         (pubkey, device_id, app_id, provider, token, channel_json,
                          app_version, pref_dm, pref_groups, author_key,
-                         created_at, updated_at, expires_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         created_at, updated_at, expires_at, token_checked_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&d.pubkey)
                 .bind(&d.device_id)
@@ -237,6 +263,7 @@ impl Store for SqliteStore {
                 .bind(d.now as i64)
                 .bind(d.now as i64)
                 .bind(d.expires_at as i64)
+                .bind(d.token_checked_at.map(|at| at as i64))
                 .execute(&mut *tx)
                 .await
                 .map_err(db)?
@@ -326,12 +353,17 @@ impl Store for SqliteStore {
         sqlx::query(
             "UPDATE devices SET
                 last_push_at = ?, last_outcome = ?,
-                state = CASE WHEN ? = 'dead_token' THEN 'dead_token' ELSE state END
+                state = CASE WHEN ? = 'dead_token' THEN 'dead_token' ELSE state END,
+                token_checked_at = CASE WHEN ? = 'delivered'
+                                        THEN COALESCE(token_checked_at, ?)
+                                        ELSE token_checked_at END
              WHERE pubkey = ? AND device_id = ? AND token = ?",
         )
         .bind(now as i64)
         .bind(outcome)
         .bind(outcome)
+        .bind(outcome)
+        .bind(now as i64)
         .bind(pubkey)
         .bind(device_id)
         .bind(token)
@@ -394,13 +426,17 @@ mod tests_support {
             groups: vec!["11".repeat(32)],
             now: 1000,
             expires_at: 2000,
+            token_checked_at: None,
         }
     }
+
+    /// Room for ten devices of an owner, and for as many owners as come.
+    pub const ROOMY: DeviceLimits = DeviceLimits { per_owner: 10, total: 1000 };
 }
 
 #[cfg(test)]
 mod tests {
-    use super::tests_support::input;
+    use super::tests_support::{input, ROOMY};
     use super::*;
 
     const ALICE: &str = "aa";
@@ -410,10 +446,15 @@ mod tests {
         SqliteStore::in_memory().await.unwrap()
     }
 
+    /// When the push service vouched for the token of alice's phone.
+    async fn checked(s: &SqliteStore) -> Option<u64> {
+        s.device(ALICE, "phone-1").await.unwrap().unwrap().token_checked_at
+    }
+
     #[tokio::test]
     async fn a_device_reads_back_as_written() {
         let s = store().await;
-        s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
 
         let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
         assert_eq!(d.token, "t1");
@@ -428,7 +469,7 @@ mod tests {
     #[tokio::test]
     async fn the_second_put_replaces_what_is_watched() {
         let s = store().await;
-        s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
 
         let mut next = input(ALICE, "phone-1", "t1");
         next.now = 1500;
@@ -440,7 +481,7 @@ mod tests {
         }];
         next.groups = vec![];
         next.prefs.groups = false;
-        s.put_device(next, 10).await.unwrap();
+        s.put_device(next, ROOMY).await.unwrap();
 
         let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
         assert_eq!(d.created_at, 1000, "the device is the same one");
@@ -453,8 +494,8 @@ mod tests {
     #[tokio::test]
     async fn deleting_one_device_leaves_the_owners_other_device_whole() {
         let s = store().await;
-        s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
-        s.put_device(input(ALICE, "tablet", "t2"), 10).await.unwrap();
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
+        s.put_device(input(ALICE, "tablet", "t2"), ROOMY).await.unwrap();
 
         assert!(s.delete_device(ALICE, "phone-1").await.unwrap());
         assert!(!s.delete_device(ALICE, "phone-1").await.unwrap(), "already gone");
@@ -468,8 +509,8 @@ mod tests {
     #[tokio::test]
     async fn a_token_under_a_new_owner_takes_the_row_of_the_former_one() {
         let s = store().await;
-        s.put_device(input(ALICE, "phone-1", "same-token"), 10).await.unwrap();
-        s.put_device(input(BOB, "phone-1", "same-token"), 10).await.unwrap();
+        s.put_device(input(ALICE, "phone-1", "same-token"), ROOMY).await.unwrap();
+        s.put_device(input(BOB, "phone-1", "same-token"), ROOMY).await.unwrap();
 
         assert!(s.device(ALICE, "phone-1").await.unwrap().is_none());
         assert!(s.device(BOB, "phone-1").await.unwrap().is_some());
@@ -478,22 +519,23 @@ mod tests {
 
     #[tokio::test]
     async fn the_limit_of_devices_counts_new_ones_only() {
+        const TWO: DeviceLimits = DeviceLimits { per_owner: 2, total: 1000 };
         let s = store().await;
-        s.put_device(input(ALICE, "d1", "t1"), 2).await.unwrap();
-        s.put_device(input(ALICE, "d2", "t2"), 2).await.unwrap();
-        let e = s.put_device(input(ALICE, "d3", "t3"), 2).await.unwrap_err();
+        s.put_device(input(ALICE, "d1", "t1"), TWO).await.unwrap();
+        s.put_device(input(ALICE, "d2", "t2"), TWO).await.unwrap();
+        let e = s.put_device(input(ALICE, "d3", "t3"), TWO).await.unwrap_err();
         assert!(matches!(e, StoreError::TooManyDevices));
 
         // Renewing one of the two is not a third.
-        s.put_device(input(ALICE, "d1", "t1-new"), 2).await.unwrap();
+        s.put_device(input(ALICE, "d1", "t1-new"), TWO).await.unwrap();
         // Another owner has a count of their own.
-        s.put_device(input(BOB, "d1", "t4"), 2).await.unwrap();
+        s.put_device(input(BOB, "d1", "t4"), TWO).await.unwrap();
     }
 
     #[tokio::test]
     async fn a_dead_token_marks_the_device_and_a_new_token_revives_it() {
         let s = store().await;
-        s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
 
         s.record_outcome(ALICE, "phone-1", "t1", "delivered", 1100).await.unwrap();
         let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
@@ -503,22 +545,90 @@ mod tests {
         assert_eq!(s.device(ALICE, "phone-1").await.unwrap().unwrap().state, "dead_token");
         assert_eq!(s.counts().await.unwrap().dead_tokens, 1);
 
-        // The same token again: still dead.
-        s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
+        // The same token again, and nobody vouches for it: still dead.
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
         assert_eq!(s.device(ALICE, "phone-1").await.unwrap().unwrap().state, "dead_token");
 
-        s.put_device(input(ALICE, "phone-1", "t1-new"), 10).await.unwrap();
+        s.put_device(input(ALICE, "phone-1", "t1-new"), ROOMY).await.unwrap();
         assert_eq!(s.device(ALICE, "phone-1").await.unwrap().unwrap().state, "active");
+    }
+
+    #[tokio::test]
+    async fn a_token_the_push_service_vouches_for_revives_the_device_that_holds_it() {
+        let s = store().await;
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
+        s.record_outcome(ALICE, "phone-1", "t1", "dead_token", 1200).await.unwrap();
+
+        let mut vouched = input(ALICE, "phone-1", "t1");
+        vouched.token_checked_at = Some(1300);
+        s.put_device(vouched, ROOMY).await.unwrap();
+
+        let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
+        assert_eq!((d.state.as_str(), d.token_checked_at), ("active", Some(1300)));
+    }
+
+    #[tokio::test]
+    async fn what_was_said_of_a_token_stays_with_it_and_does_not_pass_to_the_next() {
+        let s = store().await;
+        let mut vouched = input(ALICE, "phone-1", "t1");
+        vouched.token_checked_at = Some(1000);
+        s.put_device(vouched, ROOMY).await.unwrap();
+        assert_eq!(checked(&s).await, Some(1000));
+
+        // The weekly renewal: the same token, and nobody is asked again.
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
+        assert_eq!(checked(&s).await, Some(1000));
+
+        // A new token the push service could not say anything of.
+        s.put_device(input(ALICE, "phone-1", "t2"), ROOMY).await.unwrap();
+        assert_eq!(checked(&s).await, None);
+    }
+
+    #[tokio::test]
+    async fn a_push_that_was_taken_vouches_for_a_token_nobody_had_vouched_for() {
+        let s = store().await;
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
+
+        s.record_outcome(ALICE, "phone-1", "t1", "retry", 1100).await.unwrap();
+        assert_eq!(checked(&s).await, None, "a busy service says nothing of the token");
+        s.record_outcome(ALICE, "phone-1", "t1", "delivered", 1200).await.unwrap();
+        assert_eq!(checked(&s).await, Some(1200));
+        s.record_outcome(ALICE, "phone-1", "t1", "delivered", 1300).await.unwrap();
+        assert_eq!(checked(&s).await, Some(1200), "the first word stands");
+    }
+
+    #[tokio::test]
+    async fn a_full_server_takes_no_new_device_and_keeps_serving_the_ones_it_has() {
+        const THREE: DeviceLimits = DeviceLimits { per_owner: 10, total: 3 };
+        let s = store().await;
+        s.put_device(input(ALICE, "d1", "t1"), THREE).await.unwrap();
+        s.put_device(input(ALICE, "d2", "t2"), THREE).await.unwrap();
+        s.put_device(input(BOB, "d1", "t3"), THREE).await.unwrap();
+
+        let e = s.put_device(input(BOB, "d2", "t4"), THREE).await.unwrap_err();
+        assert!(matches!(e, StoreError::Full), "{e}");
+        assert_eq!(s.counts().await.unwrap().devices, 3);
+
+        // Renewing is not adding, and neither is a phone that changes hands:
+        // its token leaves the former owner as it comes to the new one.
+        s.put_device(input(ALICE, "d1", "t1-new"), THREE).await.unwrap();
+        s.put_device(input("cc", "d1", "t3"), THREE).await.unwrap();
+        assert!(s.device(BOB, "d1").await.unwrap().is_none());
+        assert_eq!(s.counts().await.unwrap().devices, 3);
+
+        // One leaves, and there is room for one.
+        assert!(s.delete_device(ALICE, "d2").await.unwrap());
+        s.put_device(input(BOB, "d2", "t4"), THREE).await.unwrap();
     }
 
     #[tokio::test]
     async fn what_is_said_of_a_former_token_does_not_mark_the_new_one() {
         let s = store().await;
-        s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
         s.record_outcome(ALICE, "phone-1", "t1", "delivered", 1100).await.unwrap();
 
         // The push was on its way to `t1` when the phone registered `t2`.
-        s.put_device(input(ALICE, "phone-1", "t2"), 10).await.unwrap();
+        s.put_device(input(ALICE, "phone-1", "t2"), ROOMY).await.unwrap();
         s.record_outcome(ALICE, "phone-1", "t1", "dead_token", 1200).await.unwrap();
 
         let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
@@ -530,10 +640,10 @@ mod tests {
     #[tokio::test]
     async fn what_nobody_renewed_is_forgotten() {
         let s = store().await;
-        s.put_device(input(ALICE, "old", "t1"), 10).await.unwrap();
+        s.put_device(input(ALICE, "old", "t1"), ROOMY).await.unwrap();
         let mut fresh = input(BOB, "fresh", "t2");
         fresh.expires_at = 9000;
-        s.put_device(fresh, 10).await.unwrap();
+        s.put_device(fresh, ROOMY).await.unwrap();
 
         assert_eq!(s.purge_expired(1999).await.unwrap(), 0);
         assert_eq!(s.purge_expired(2000).await.unwrap(), 1);
@@ -548,8 +658,8 @@ mod tests {
         let path = dir.join("nested").join("vpush.db");
 
         let s = SqliteStore::open(&path).await.unwrap();
-        s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
-        assert_eq!(s.schema_version().await.unwrap(), 3);
+        s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
+        assert_eq!(s.schema_version().await.unwrap(), 4);
         s.close().await;
 
         let s = SqliteStore::open(&path).await.unwrap();
@@ -763,14 +873,14 @@ mod watch_tests {
     #[tokio::test]
     async fn the_plan_is_what_living_devices_want_watched() {
         let s = SqliteStore::in_memory().await.unwrap();
-        s.put_device(input("aa", "phone", "t1"), 10).await.unwrap();
+        s.put_device(input("aa", "phone", "t1"), ROOMY).await.unwrap();
         // A second device of the same owner: the key is watched once.
-        s.put_device(input("aa", "tablet", "t2"), 10).await.unwrap();
+        s.put_device(input("aa", "tablet", "t2"), ROOMY).await.unwrap();
         let mut bob = input("bb", "phone", "t3");
         bob.relays[0].groups = false;
         bob.relays.push(WatchedRelay { url: "wss://nos.lol".into(), dm: false, groups: true });
         bob.groups = vec!["22".repeat(32)];
-        s.put_device(bob, 10).await.unwrap();
+        s.put_device(bob, ROOMY).await.unwrap();
 
         let plan = s.watch_plan(1500).await.unwrap();
         assert_eq!(
@@ -789,13 +899,13 @@ mod watch_tests {
     #[tokio::test]
     async fn what_is_dead_expired_or_turned_off_is_not_watched() {
         let s = SqliteStore::in_memory().await.unwrap();
-        s.put_device(input("aa", "dead", "t1"), 10).await.unwrap();
+        s.put_device(input("aa", "dead", "t1"), ROOMY).await.unwrap();
         s.record_outcome("aa", "dead", "t1", "dead_token", 1100).await.unwrap();
         let mut off = input("bb", "off", "t2");
         off.prefs.dm = false;
         off.prefs.groups = false;
-        s.put_device(off, 10).await.unwrap();
-        s.put_device(input("cc", "expired", "t3"), 10).await.unwrap();
+        s.put_device(off, ROOMY).await.unwrap();
+        s.put_device(input("cc", "expired", "t3"), ROOMY).await.unwrap();
 
         assert!(s.watch_plan(2500).await.unwrap().is_empty(), "cc ran out at 2000");
         let plan = s.watch_plan(1500).await.unwrap();
@@ -812,7 +922,7 @@ mod watch_tests {
     async fn every_device_of_the_owner_is_told_and_a_group_is_told_to_every_owner() {
         let s = SqliteStore::in_memory().await.unwrap();
         for d in [input("aa", "phone", "t1"), input("aa", "tablet", "t2"), input("bb", "phone", "t3")] {
-            s.put_device(d, 10).await.unwrap();
+            s.put_device(d, ROOMY).await.unwrap();
         }
 
         let dm = s.dm_recipients("aa", 1500).await.unwrap();
@@ -900,7 +1010,7 @@ async fn migrate(pool: &Pool<Sqlite>) -> Result<()> {
 
 #[cfg(test)]
 mod migrate_tests {
-    use super::tests_support::input;
+    use super::tests_support::{input, ROOMY};
     use super::*;
 
     #[tokio::test]
@@ -910,7 +1020,7 @@ mod migrate_tests {
         let path = dir.join("vpush.db");
 
         let s = SqliteStore::open(&path).await.unwrap();
-        s.put_device(input("aa", "phone", "t1"), 10).await.unwrap();
+        s.put_device(input("aa", "phone", "t1"), ROOMY).await.unwrap();
         // What a release of the future would leave behind.
         sqlx::query("CREATE TABLE of_the_future (id INTEGER PRIMARY KEY)")
             .execute(&s.pool)
@@ -934,7 +1044,7 @@ mod migrate_tests {
 
 #[cfg(test)]
 mod snapshot_tests {
-    use super::tests_support::input;
+    use super::tests_support::{input, ROOMY};
     use super::*;
 
     #[tokio::test]
@@ -945,7 +1055,7 @@ mod snapshot_tests {
         let out = dir.join("copy.db");
 
         let s = SqliteStore::open(&path).await.unwrap();
-        s.put_device(input("aa", "phone", "t1"), 10).await.unwrap();
+        s.put_device(input("aa", "phone", "t1"), ROOMY).await.unwrap();
         // As after a stop that was not clean: the server still holds the
         // database, and what it wrote last is in the write-ahead log only.
         assert!(std::fs::metadata(dir.join("vpush.db-wal")).unwrap().len() > 0);

@@ -46,9 +46,14 @@ pub enum ErrorCode {
     UnknownApp,
     /// The server serves the app, but not through this push service.
     ProviderDisabled,
+    /// The push service says the token is none it can push to.
+    TokenInvalid,
+    /// The owner has as many devices as one owner may.
     LimitDevices,
     LimitRelays,
     LimitGroups,
+    /// The server holds as many devices as it takes.
+    LimitDevicesTotal,
     /// Too many requests; `Retry-After` says when to come back.
     RateLimited,
 }
@@ -263,7 +268,8 @@ pub enum PushType {
     Dm,
     /// A message arrived in a group.
     Group,
-    /// Something was missed; the device should look at its relays.
+    /// More came than a device is pushed about one by one. `count` says how
+    /// many; the device shows that, and looks at its relays.
     Sync,
     /// Asked for by the user or the operator, to see that pushes arrive.
     Test,
@@ -288,7 +294,7 @@ impl PushType {
     /// Handled by the device without showing anything. The rest is shown,
     /// in the device's own words: the server writes no texts.
     pub fn is_silent(self) -> bool {
-        matches!(self, Self::Sync | Self::ManifestUpdate)
+        matches!(self, Self::ManifestUpdate)
     }
 }
 
@@ -324,7 +330,8 @@ pub struct Payload {
     /// The event itself, as JSON, when it fits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<String>,
-    /// How many events this push stands for, when more than one.
+    /// How many events this push stands for: when more than one, and always
+    /// in a `sync` push.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count: Option<u32>,
     /// Payload of a service push, as JSON; its meaning depends on `type`.
@@ -425,11 +432,41 @@ mod tests {
 
     #[test]
     fn whether_a_push_is_shown_is_decided_by_its_type() {
-        for kind in [PushType::Dm, PushType::Group, PushType::Test, PushType::Broadcast] {
+        for kind in [
+            PushType::Dm,
+            PushType::Group,
+            PushType::Sync,
+            PushType::Test,
+            PushType::Broadcast,
+        ] {
             assert!(!Payload::new(kind).is_silent(), "{kind:?}");
         }
-        for kind in [PushType::Sync, PushType::ManifestUpdate] {
-            assert!(Payload::new(kind).is_silent(), "{kind:?}");
+        assert!(Payload::new(PushType::ManifestUpdate).is_silent());
+    }
+
+    /// What says how many came has nothing in it to open or to look for.
+    #[test]
+    fn a_sync_push_says_how_many_and_nothing_else() {
+        let mut p = Payload::new(PushType::Sync);
+        p.count = Some(10);
+        p.trace = Some("abcd1234".into());
+        assert_eq!(
+            serde_json::to_string(&p).unwrap(),
+            r#"{"v":2,"type":"sync","count":10,"trace":"abcd1234"}"#
+        );
+        let keys: Vec<_> = p.to_data().into_keys().collect();
+        assert_eq!(keys, ["count", "trace", "type", "v"]);
+    }
+
+    #[test]
+    fn the_codes_of_refusals_are_written_in_snake_case() {
+        for (code, word) in [
+            (ErrorCode::TokenInvalid, "token_invalid"),
+            (ErrorCode::LimitDevices, "limit_devices"),
+            (ErrorCode::LimitDevicesTotal, "limit_devices_total"),
+            (ErrorCode::RateLimited, "rate_limited"),
+        ] {
+            assert_eq!(serde_json::to_value(code).unwrap(), word);
         }
     }
 

@@ -23,6 +23,7 @@ use tokio::task::JoinHandle;
 use vpush_proto::RelayStatus;
 
 use crate::api::now;
+use crate::counters::Counters;
 use crate::pipeline::{Pipeline, SEEN_FOR};
 use crate::relays::RelayPolicy;
 use crate::store::{AllStore, RelayPlan};
@@ -31,6 +32,46 @@ use crate::store::{AllStore, RelayPlan};
 const REPLAN_EVERY: Duration = Duration::from_secs(60);
 /// Registrations come in bursts; the relays are told once about a burst.
 const SETTLE: Duration = Duration::from_secs(1);
+
+/// The numbers the lines of the relays run by. A server runs by the ones of
+/// [`Default`]; a test turns them down, to see in a second what takes a
+/// quarter of a minute, or ten thousand events.
+#[derive(Debug, Clone, Copy)]
+pub struct Tuning {
+    /// A relay is asked anew no more often than this, whether because what
+    /// is watched there changed or because its line starts over: every
+    /// asking makes the relay send two days of direct messages again, and
+    /// whoever registers a device can cause one. The first change after a
+    /// quiet time is asked for at once, and what changes after it waits.
+    pub ask_every: Duration,
+    /// How much a line holds between its relay and the pipeline: events,
+    /// and what else the relay says. More than this, and the line starts
+    /// over.
+    pub queue: usize,
+    /// The room of nostr-sdk's own channel, which everything a relay says
+    /// goes through on its way to the line.
+    pub notifications: usize,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self {
+            ask_every: Duration::from_secs(15),
+            queue: 10_000,
+            notifications: 8_192,
+        }
+    }
+}
+
+/// What every line works with.
+#[derive(Clone)]
+struct Shared {
+    watch: Arc<Watch>,
+    store: Arc<dyn AllStore>,
+    pipeline: Arc<Pipeline>,
+    counters: Arc<Counters>,
+    tuning: Tuning,
+}
 
 /// How a relay is doing, for `vpush ctl relays` and for the clients.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,8 +155,17 @@ pub async fn run(
     store: Arc<dyn AllStore>,
     policy: Arc<RelayPolicy>,
     pipeline: Arc<Pipeline>,
+    counters: Arc<Counters>,
+    tuning: Tuning,
     mut stop: watch::Receiver<bool>,
 ) {
+    let shared = Shared {
+        watch: Arc::clone(&watch),
+        store: Arc::clone(&store),
+        pipeline,
+        counters,
+        tuning,
+    };
     let mut relays: BTreeMap<String, OnTheLine> = BTreeMap::new();
     let mut purged = 0u64;
 
@@ -141,8 +191,8 @@ pub async fn run(
                     // waited for: a task on its way out may still take
                     // stock, and must not after the stock of its relay is
                     // forgotten below. The wait is short whatever the
-                    // relay does: the task waits for its relay only where
-                    // it waits for its plan too.
+                    // relay does: the line lets go of the relay first, and
+                    // only finishes the one thing it is in the middle of.
                     drop(relay.plan);
                     let _ = relay.task.await;
                     watch.forget(&url);
@@ -179,13 +229,8 @@ pub async fn run(
                         None => {
                             let Some(allowed) = policy.get(&url).cloned() else { continue };
                             let (sender, receiver) = watch::channel(plan);
-                            let task = tokio::spawn(line::run(
-                                allowed,
-                                receiver,
-                                Arc::clone(&watch),
-                                Arc::clone(&store),
-                                Arc::clone(&pipeline),
-                            ));
+                            let task =
+                                tokio::spawn(line::run(allowed, receiver, shared.clone()));
                             relays.insert(url, OnTheLine { plan: sender, task });
                         }
                     }

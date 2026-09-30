@@ -8,6 +8,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -38,6 +39,9 @@ internal object Notifier {
   private const val TAG_SUMMARY = "summary"
   /** A direct message the phone could not open is one for all of them. */
   private const val TAG_DM_PLAIN = "dm"
+  /** Messages the server only counted: one for all of them too. */
+  private const val TAG_MORE = "more"
+  private const val EXTRA_COUNT = "veydan_push_count"
   private const val MAX_LINES = 25
 
   /** Channels are what the user sees in the system settings, one switch each. */
@@ -130,6 +134,32 @@ internal object Notifier {
     ensureChannels(context)
     val tag = plain.chat ?: TAG_DM_PLAIN
     return post(context, tag, plainBuilder(context, plain)) && summary(context)
+  }
+
+  /**
+   * More came than the server pushes one by one: how many, and nothing
+   * else is known. Counted together with what such a notification already
+   * says. It comes without a sound: the phone has rung enough by then, and
+   * whether those chats are muted nobody here can tell.
+   */
+  fun showMore(context: Context, count: Int): Boolean {
+    if (!allowed(context)) return false
+    ensureChannels(context)
+    val before = shown(context, TAG_MORE)?.extras?.getInt(EXTRA_COUNT) ?: 0
+    val total = (before + count).coerceAtMost(9999)
+    val title = if (total > 1) context.getString(R.string.veydan_push_many, total)
+      else context.getString(R.string.veydan_push_one)
+    val builder = NotificationCompat.Builder(context, CHANNEL_DM)
+      .setSmallIcon(R.drawable.ic_stat_veydan)
+      .setContentTitle(title)
+      .setNumber(total)
+      .addExtras(Bundle().apply { putInt(EXTRA_COUNT, total) })
+      .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+      .setGroup(GROUP)
+      .setAutoCancel(true)
+      .setSilent(true)
+      .setContentIntent(open(context, Push.TYPE_SYNC, null))
+    return post(context, TAG_MORE, builder) && summary(context)
   }
 
   /** A word from the server itself: a test, a broadcast. */
@@ -242,6 +272,10 @@ internal object Notifier {
   /** A tag the app may ask to clear: a chat, or the one for direct messages it could not tell apart. */
   fun isClearable(key: String): Boolean = Push.isChatKey(key) || key == TAG_DM_PLAIN
 
+  /** A notification about messages, as opposed to the summary and to the server's own words. */
+  private fun aboutMessages(tag: String?): Boolean =
+    tag != null && (Push.isChatKey(tag) || tag == TAG_DM_PLAIN || tag == TAG_MORE)
+
   /**
    * Removes the notification of one chat (`dm:<pubkey>`, `group:<id>`), or
    * every notification about messages. The summary goes when nothing is
@@ -254,13 +288,15 @@ internal object Notifier {
       // A direct chat opened is also the place a message the phone could
       // not open was about.
       if (key.startsWith("dm:")) manager.cancel(TAG_DM_PLAIN, ID)
+      // The list of chats shows which of them have something new: all the
+      // count of messages nobody named could say.
+      if (key == TAG_DM_PLAIN) manager.cancel(TAG_MORE, ID)
     } else {
       for (shown in manager.activeNotifications) {
-        val tag = shown.tag ?: continue
-        if (Push.isChatKey(tag) || tag == TAG_DM_PLAIN) manager.cancel(tag, shown.id)
+        if (aboutMessages(shown.tag)) manager.cancel(shown.tag, shown.id)
       }
     }
-    val left = manager.activeNotifications.any { it.tag != null && it.tag != TAG_SUMMARY && (Push.isChatKey(it.tag) || it.tag == TAG_DM_PLAIN) }
+    val left = manager.activeNotifications.any { aboutMessages(it.tag) }
     if (!left) manager.cancel(TAG_SUMMARY, ID)
   }
 

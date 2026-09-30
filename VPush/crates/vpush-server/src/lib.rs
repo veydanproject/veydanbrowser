@@ -6,6 +6,7 @@ pub mod admin;
 pub mod auth;
 pub mod api;
 pub mod config;
+pub mod counters;
 pub mod delivery;
 pub mod limit;
 pub mod logging;

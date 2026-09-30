@@ -6,25 +6,29 @@
 mod key;
 
 use std::future::Future;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use nostr::prelude::*;
-use nostr_sdk::local_relay::LocalRelay;
+use nostr_sdk::local_relay::{LocalRelay, QueryPolicy, QueryPolicyResult};
 use serde_json::{json, Value};
 use tokio::sync::watch;
 use vpush_proto::Prefs;
 use vpush_server::config::Config;
+use vpush_server::counters::Counters;
 use vpush_server::delivery::fcm::{FcmClient, ServiceAccount};
 use vpush_server::delivery::retry::RetryPolicy;
 use vpush_server::delivery::Providers;
 use vpush_server::pipeline::classify::mark_of;
-use vpush_server::pipeline::{Dealt, Pipeline};
+use vpush_server::pipeline::{Dealt, Pipeline, Waking};
 use vpush_server::relays::{normalize, RelayPolicy};
 use vpush_server::store::{
-    AllStore, DeviceInput, Seen, SqliteStore, Store, WatchStore, WatchedRelay,
+    AllStore, DeviceInput, DeviceLimits, Seen, SqliteStore, Store, WatchStore, WatchedRelay,
 };
-use vpush_server::relay::Watch;
+use vpush_server::relay::{Tuning, Watch};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -35,6 +39,28 @@ const GROUP: &str = "11111111111111111111111111111111111111111111111111111111111
 struct Relay {
     relay: LocalRelay,
     url: String,
+    asked: Asked,
+}
+
+/// How many times a relay was asked for direct messages. The server asks
+/// for them in one request while the keys are few, so this is how many
+/// times it made its requests anew.
+#[derive(Debug, Clone, Default)]
+struct Asked(Arc<AtomicUsize>);
+
+impl QueryPolicy for Asked {
+    fn admit_query<'a>(
+        &'a self,
+        query: &'a mut Filter,
+        _addr: &'a SocketAddr,
+    ) -> Pin<Box<dyn Future<Output = QueryPolicyResult> + Send + 'a>> {
+        Box::pin(async move {
+            if query.kinds.as_ref().is_some_and(|kinds| kinds.contains(&Kind::GiftWrap)) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+            QueryPolicyResult::Accept
+        })
+    }
 }
 
 /// Left to itself, a local relay picks a random port by trying it, and a
@@ -48,11 +74,12 @@ async fn relay() -> Relay {
             .and_then(|l| l.local_addr())
             .unwrap()
             .port();
-        let relay = LocalRelay::builder().port(port).build();
+        let asked = Asked::default();
+        let relay = LocalRelay::builder().port(port).query_policy(asked.clone()).build();
         match relay.run().await {
             Ok(()) => {
                 let url = normalize(relay.url().await.as_str()).unwrap();
-                return Relay { relay, url };
+                return Relay { relay, url, asked };
             }
             Err(e) => last = Some(e),
         }
@@ -63,6 +90,10 @@ async fn relay() -> Relay {
 impl Relay {
     async fn publish(&self, event: &Event) {
         self.relay.add_event(event.clone()).await.unwrap();
+    }
+
+    fn asked_for_direct_messages(&self) -> usize {
+        self.asked.0.load(Ordering::Relaxed)
     }
 
     /// The relay goes off the line, as when it is restarted.
@@ -77,7 +108,7 @@ impl Relay {
         for _ in 0..50 {
             let relay = LocalRelay::builder().port(port).build();
             match relay.run().await {
-                Ok(()) => return Relay { relay, url: self.url.clone() },
+                Ok(()) => return Relay { relay, url: self.url.clone(), asked: Asked::default() },
                 Err(e) => last = Some(e),
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -92,7 +123,9 @@ struct Server {
     policy: Arc<RelayPolicy>,
     providers: Arc<Providers>,
     google: MockServer,
-    window: Duration,
+    waking: Waking,
+    tuning: Tuning,
+    counters: Arc<Counters>,
     running: Option<Running>,
 }
 
@@ -102,7 +135,30 @@ struct Running {
     task: tokio::task::JoinHandle<()>,
 }
 
+/// A chat is held back for `window`, and a device is not: the tests that
+/// are not about the cap of a device push as often as they like.
+fn waking(window: Duration) -> Waking {
+    Waking {
+        chat_every: window,
+        device_cap: 10_000,
+        device_window: Duration::from_secs(60),
+    }
+}
+
+/// A change of what is watched is asked for at once, as the tests that are
+/// not about the pace of asking expect.
+fn at_once() -> Tuning {
+    Tuning {
+        ask_every: Duration::ZERO,
+        ..Tuning::default()
+    }
+}
+
 async fn server(relays: &[&Relay], window: Duration) -> Server {
+    server_with(relays, waking(window), at_once()).await
+}
+
+async fn server_with(relays: &[&Relay], waking: Waking, tuning: Tuning) -> Server {
     let google = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/token"))
@@ -141,7 +197,9 @@ async fn server(relays: &[&Relay], window: Duration) -> Server {
         policy: Arc::new(RelayPolicy::from_config(&config).unwrap()),
         providers: Arc::new(providers),
         google,
-        window,
+        waking,
+        tuning,
+        counters: Arc::new(Counters::default()),
         running: None,
     };
     server.start();
@@ -154,7 +212,8 @@ impl Server {
         Pipeline::with_retry(
             self.store.clone(),
             self.providers.clone(),
-            self.window,
+            self.waking,
+            self.counters.clone(),
             RetryPolicy {
                 max_attempts: 2,
                 base: Duration::from_millis(20),
@@ -172,6 +231,8 @@ impl Server {
             store,
             self.policy.clone(),
             self.pipeline(),
+            self.counters.clone(),
+            self.tuning,
             stopped,
         ));
         self.running = Some(Running { watch, stop, task });
@@ -191,27 +252,25 @@ impl Server {
 
     /// A phone that watches direct messages and the group on every relay given.
     async fn register(&self, owner: &Keys, device: &str, relays: &[&Relay]) -> DeviceInput {
-        let input = DeviceInput {
-            pubkey: owner.public_key().to_hex(),
-            device_id: device.to_string(),
-            app_id: APP.to_string(),
-            provider: "fcm".to_string(),
-            token: format!("token-of-{device}"),
-            channel_json: None,
-            app_version: None,
-            prefs: Prefs::default(),
-            author_key: Some(author_key(owner)),
-            relays: relays
-                .iter()
-                .map(|r| WatchedRelay { url: r.url.clone(), dm: true, groups: true })
-                .collect(),
-            groups: vec![GROUP.to_string()],
-            now: Timestamp::now().as_secs(),
-            expires_at: Timestamp::now().as_secs() + 86_400,
-        };
-        self.store.put_device(input.clone(), 10).await.unwrap();
-        self.watch().plan_changed();
+        let input = phone(owner, device, relays);
+        self.put(input.clone()).await;
         input
+    }
+
+    /// Writes a registration down, as the API does when it has taken one.
+    async fn put(&self, input: DeviceInput) {
+        let roomy = DeviceLimits { per_owner: 10, total: 1000 };
+        self.store.put_device(input, roomy).await.unwrap();
+        self.watch().plan_changed();
+    }
+
+    /// How many events the pushes stand for, all together.
+    async fn told(&self) -> u64 {
+        let count = |push: &Value| match push["data"]["count"].as_str() {
+            Some(count) => count.parse().unwrap(),
+            None => 1,
+        };
+        self.pushes().await.iter().map(count).sum()
     }
 
     /// Was stock taken of a key or a group on the relay.
@@ -249,6 +308,30 @@ impl Server {
         let pushes = self.pushes().await;
         assert_eq!(pushes.len(), count, "{pushes:#?}");
         pushes
+    }
+}
+
+/// The registration of a phone that watches direct messages and the group
+/// on every relay given.
+fn phone(owner: &Keys, device: &str, relays: &[&Relay]) -> DeviceInput {
+    DeviceInput {
+        pubkey: owner.public_key().to_hex(),
+        device_id: device.to_string(),
+        app_id: APP.to_string(),
+        provider: "fcm".to_string(),
+        token: format!("token-of-{device}"),
+        channel_json: None,
+        app_version: None,
+        prefs: Prefs::default(),
+        author_key: Some(author_key(owner)),
+        relays: relays
+            .iter()
+            .map(|r| WatchedRelay { url: r.url.clone(), dm: true, groups: true })
+            .collect(),
+        groups: vec![GROUP.to_string()],
+        now: Timestamp::now().as_secs(),
+        expires_at: Timestamp::now().as_secs() + 86_400,
+        token_checked_at: None,
     }
 }
 
@@ -298,10 +381,15 @@ fn carried(data: &Value) -> Value {
 
 /// An event of the group, written by `author`.
 fn group_event(author: &Keys, tags: &[&[&str]]) -> Event {
+    event_of(GROUP, author, tags)
+}
+
+/// An event of the group `group`, written by `author`.
+fn event_of(group: &str, author: &Keys, tags: &[&[&str]]) -> Event {
     let signer = Keys::generate();
     let mark = mark_of(&author_key(author), &signer.public_key().to_hex()).unwrap();
     let mut all = vec![
-        Tag::parse(["h", GROUP]).unwrap(),
+        Tag::parse(["h", group]).unwrap(),
         Tag::parse(["k", "key-1"]).unwrap(),
         Tag::parse(["vp", mark.as_str()]).unwrap(),
     ];
@@ -716,4 +804,165 @@ async fn who_registers_while_a_relay_is_away_is_watched_when_it_is_back() {
 
     r.publish(&wrap(&bob, &[])).await;
     server.pushes_are(1).await;
+}
+
+/// Every change of what is watched makes the relay send two days of direct
+/// messages again, and whoever registers a device can cause one.
+#[tokio::test]
+async fn a_burst_of_registrations_makes_a_relay_be_asked_twice_and_no_more() {
+    let r = relay().await;
+    let tuning = Tuning {
+        ask_every: Duration::from_secs(4),
+        ..Tuning::default()
+    };
+    let server = server_with(&[&r], waking(SHORT), tuning).await;
+    let first = Keys::generate();
+    server.register(&first, "phone-0", &[&r]).await;
+    server.watching(&first, &[&r]).await;
+    assert_eq!(r.asked_for_direct_messages(), 1);
+
+    // Registrations for longer than a second. The watcher reads them
+    // every second, and what is watched on the relay is another thing
+    // every time it does.
+    let mut owners = Vec::new();
+    for n in 1..=8 {
+        let owner = Keys::generate();
+        server.register(&owner, &format!("phone-{n}"), &[&r]).await;
+        owners.push(owner);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    for owner in &owners {
+        server.watching(owner, &[&r]).await;
+    }
+    assert_eq!(
+        r.asked_for_direct_messages(),
+        2,
+        "once for the first, at once, and once for all who came after"
+    );
+
+    // Whoever came last is watched like the rest.
+    let message = wrap(owners.last().unwrap(), &[]);
+    r.publish(&message).await;
+    let pushes = server.pushes_are(1).await;
+    assert_eq!(pushes[0]["token"], "token-of-phone-8");
+    assert_eq!(r.asked_for_direct_messages(), 2);
+}
+
+#[tokio::test]
+async fn a_device_is_pushed_to_thirty_times_and_told_of_the_rest_in_one_push() {
+    let r = relay().await;
+    let cap = Waking {
+        chat_every: SHORT,
+        device_cap: 30,
+        device_window: Duration::from_secs(2),
+    };
+    let server = server_with(&[&r], cap, at_once()).await;
+    let alice = Keys::generate();
+    // Forty chats of one phone.
+    let groups: Vec<String> = (1..=40).map(|n| format!("{n:064x}")).collect();
+    let mut input = phone(&alice, "phone", &[&r]);
+    input.groups = groups.clone();
+    server.put(input).await;
+
+    // Straight to the pipeline: a message in every one of them, at once.
+    let pipeline = server.pipeline();
+    let mut pushed = Vec::new();
+    for group in &groups {
+        let event = event_of(group, &Keys::generate(), &[]);
+        pushed.push(pipeline.event(&r.url, &event, false).await);
+    }
+    let at_once = Dealt::Pushed { now: 1, later: 0, own: 0, over: 0 };
+    let counted = Dealt::Pushed { now: 0, later: 0, own: 0, over: 1 };
+    assert!(pushed[..30].iter().all(|dealt| *dealt == at_once), "{pushed:?}");
+    assert!(pushed[30..].iter().all(|dealt| *dealt == counted), "{pushed:?}");
+
+    let pushes = server.pushes_are(30).await;
+    assert!(pushes.iter().all(|p| p["data"]["type"] == "group"), "{pushes:#?}");
+    assert_eq!(server.counters.sync_pushes.get(), 0, "the rest is told when the time is up");
+
+    // The ten that came over the cap: one push, which says how many and
+    // nothing of any one of them.
+    let pushes = server.pushes_are(31).await;
+    let sync = &pushes[30];
+    assert_eq!(sync["token"], "token-of-phone");
+    let data = sync["data"].as_object().unwrap();
+    assert_eq!(data["type"], "sync");
+    assert_eq!(data["count"], "10");
+    assert_eq!(data["v"], "2");
+    let mut keys: Vec<_> = data.keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(keys, ["count", "trace", "type", "v"], "no event, no id of one, no group");
+    assert_eq!(sync["android"]["priority"], "HIGH");
+    assert_eq!(server.counters.sync_pushes.get(), 1);
+
+    // Every one of the forty was told: thirty by itself, ten by the count.
+    assert_eq!(server.told().await, 40);
+}
+
+/// Sixty messages for a line that has room for eight.
+#[tokio::test]
+async fn a_line_with_more_to_deal_with_than_it_has_room_for_starts_over_and_loses_nothing() {
+    let r = relay().await;
+    let tuning = Tuning {
+        queue: 8,
+        ask_every: Duration::from_millis(100),
+        ..Tuning::default()
+    };
+    let mut server = server_with(&[&r], waking(SHORT), tuning).await;
+    let alice = Keys::generate();
+    server.register(&alice, "phone", &[&r]).await;
+    server.watching(&alice, &[&r]).await;
+
+    // While the server is away. When it is back the relay sends them all
+    // at once.
+    server.stop().await;
+    for _ in 0..60 {
+        r.publish(&wrap(&alice, &[])).await;
+    }
+    server.start();
+
+    eventually("every message is told", || async { server.told().await >= 60 }).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(server.told().await, 60, "every one of them, and none of them twice");
+    assert!(
+        server.counters.lines_started_over.get() >= 1,
+        "sixty do not fit where there is room for eight"
+    );
+
+    // The line that started over watches as before.
+    let after = wrap(&alice, &[]);
+    r.publish(&after).await;
+    eventually("what comes after is told", || async { server.told().await >= 61 }).await;
+    assert_eq!(server.watch().status(&r.url), vpush_proto::RelayStatus::Ok);
+}
+
+/// nostr-sdk hands on what a relay says through a channel that drops the
+/// oldest when it is full, and says nothing. Here it has eight places, and
+/// the relay sends sixty messages at once.
+#[tokio::test]
+async fn a_burst_bigger_than_the_channel_of_nostr_sdk_loses_nothing() {
+    let r = relay().await;
+    let tuning = Tuning {
+        notifications: 8,
+        ..at_once()
+    };
+    let mut server = server_with(&[&r], waking(SHORT), tuning).await;
+    let alice = Keys::generate();
+    server.register(&alice, "phone", &[&r]).await;
+    server.watching(&alice, &[&r]).await;
+
+    server.stop().await;
+    for _ in 0..60 {
+        r.publish(&wrap(&alice, &[])).await;
+    }
+    server.start();
+
+    eventually("every message is told", || async { server.told().await >= 60 }).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(server.told().await, 60);
+    assert_eq!(
+        server.counters.lines_started_over.get(),
+        0,
+        "the queue had room for all of them: nothing was lost, and nothing was asked for again"
+    );
 }

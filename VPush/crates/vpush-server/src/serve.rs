@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
 use tokio::net::TcpListener;
@@ -12,12 +11,13 @@ use tokio::sync::watch;
 use crate::admin::{AdminSocket, AdminState};
 use crate::api::Api;
 use crate::config::Config;
+use crate::counters::Counters;
 use crate::delivery::Providers;
 use crate::relays::RelayPolicy;
 use crate::store::{AllStore, SqliteStore, Store};
-use crate::relay::Watch;
+use crate::relay::{Tuning, Watch};
 use crate::logging::{self, LogControl, Redactor};
-use crate::pipeline::Pipeline;
+use crate::pipeline::{Pipeline, Waking};
 use crate::{api, version};
 
 /// Runs until SIGINT or SIGTERM.
@@ -72,10 +72,12 @@ pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
     let store: Arc<dyn Store> = everything.clone();
     tokio::spawn(forget_expired(Arc::clone(&store)));
 
+    let counters = Arc::new(Counters::default());
     let pipeline = Pipeline::new(
         Arc::clone(&everything),
         Arc::clone(&providers),
-        Duration::from_secs(config.pipeline.throttle_secs),
+        Waking::from(&config.pipeline),
+        Arc::clone(&counters),
     );
     let watcher = Watch::new();
 
@@ -99,6 +101,8 @@ pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
         everything,
         Arc::clone(&relays),
         pipeline,
+        Arc::clone(&counters),
+        Tuning::default(),
         stop_rx.clone(),
     ));
 
@@ -108,11 +112,12 @@ pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
             providers: Arc::clone(&providers),
             store: Arc::clone(&store),
             watch: Arc::clone(&watcher),
+            counters: Arc::clone(&counters),
         },
         stopped(stop_rx.clone()),
     ));
 
-    let api = Api::new(Arc::new(config), store, providers, relays, watcher);
+    let api = Api::new(Arc::new(config), store, providers, relays, watcher, counters);
     axum::serve(listener, api::router(api))
         .with_graceful_shutdown(stopped(stop_rx))
         .await

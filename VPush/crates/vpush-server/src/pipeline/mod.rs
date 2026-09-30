@@ -3,7 +3,7 @@
 //! The server sees events as a relay does, sealed, so it decides little:
 //! whom the event is for, whether its author marked it as not worth a push,
 //! whether it was dealt with already, and whether the device was woken a
-//! moment ago. Everything that needs the content is the device's to decide:
+//! moment ago, or too often. Everything that needs the content is the device's to decide:
 //! the push carries the event itself, and the device opens it.
 //!
 //! Every event gets a `trace`. It is in every log line about the event and
@@ -21,11 +21,13 @@ use tokio::sync::Semaphore;
 use vpush_proto::{Payload, PushType};
 
 use crate::api::{next_request_id, now};
+use crate::config::PipelineConfig;
+use crate::counters::Counters;
 use crate::delivery::retry::{self, RetryPolicy};
 use crate::delivery::{mask, Message, Outcome, ProviderKind, Providers, Target};
 use crate::store::{AllStore, Recipient, Seen};
 use classify::Subject;
-use throttle::{Named, Throttle, Verdict};
+use throttle::{DeviceCap, Named, Room, Throttle, Verdict};
 
 /// How long the push service keeps a push for a phone that is off.
 const TTL: Duration = Duration::from_secs(24 * 3600);
@@ -61,15 +63,53 @@ pub enum Dealt {
         later: usize,
         /// Devices of the author, which are not told.
         own: usize,
+        /// Devices that were pushed to as often as a device may be:
+        /// counted, for their `sync` push.
+        over: usize,
     },
+}
+
+/// How often a device is woken.
+#[derive(Debug, Clone, Copy)]
+pub struct Waking {
+    /// About one chat: once in this long.
+    pub chat_every: Duration,
+    /// About anything: this many times within `device_window`.
+    pub device_cap: usize,
+    pub device_window: Duration,
+}
+
+impl From<&PipelineConfig> for Waking {
+    fn from(config: &PipelineConfig) -> Self {
+        Self {
+            chat_every: Duration::from_secs(config.throttle_secs),
+            device_cap: config.device_cap as usize,
+            device_window: Duration::from_secs(config.device_window_secs),
+        }
+    }
 }
 
 pub struct Pipeline {
     store: Arc<dyn AllStore>,
     providers: Arc<Providers>,
     throttle: Throttle,
+    cap: DeviceCap,
     sending: Arc<Semaphore>,
     retry: RetryPolicy,
+    counters: Arc<Counters>,
+}
+
+/// A push on its way out: what is sent, to whom, and what the log says of it.
+struct Parcel {
+    trace: String,
+    /// `dm`, `group`, `sync`.
+    kind: &'static str,
+    /// The relay the event came from. A `sync` push is about no one event.
+    relay: Option<String>,
+    to: Recipient,
+    /// How many events the push stands for.
+    count: u32,
+    message: Message,
 }
 
 /// A push that is decided on and not built yet.
@@ -98,6 +138,10 @@ impl Order {
         (self.to.pubkey.clone(), self.to.device_id.clone(), self.chat())
     }
 
+    fn device(&self) -> throttle::Device {
+        (self.to.pubkey.clone(), self.to.device_id.clone())
+    }
+
     /// The event as the push at the end of a window names it.
     fn named(&self) -> Named {
         Named {
@@ -108,22 +152,30 @@ impl Order {
 }
 
 impl Pipeline {
-    pub fn new(store: Arc<dyn AllStore>, providers: Arc<Providers>, window: Duration) -> Arc<Self> {
-        Self::with_retry(store, providers, window, RetryPolicy::default())
+    pub fn new(
+        store: Arc<dyn AllStore>,
+        providers: Arc<Providers>,
+        waking: Waking,
+        counters: Arc<Counters>,
+    ) -> Arc<Self> {
+        Self::with_retry(store, providers, waking, counters, RetryPolicy::default())
     }
 
     pub fn with_retry(
         store: Arc<dyn AllStore>,
         providers: Arc<Providers>,
-        window: Duration,
+        waking: Waking,
+        counters: Arc<Counters>,
         retry: RetryPolicy,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
             providers,
-            throttle: Throttle::new(window),
+            throttle: Throttle::new(waking.chat_every),
+            cap: DeviceCap::new(waking.device_cap, waking.device_window),
             sending: Arc::new(Semaphore::new(SENDING)),
             retry,
+            counters,
         })
     }
 
@@ -202,7 +254,7 @@ impl Pipeline {
         }
 
         let json: Arc<str> = event.as_json().into();
-        let (mut pushed, mut later, mut own) = (0, 0, 0);
+        let (mut pushed, mut later, mut own, mut over) = (0, 0, 0, 0);
         for to in recipients {
             // A group event says nothing of its author on the outside but
             // the author's mark, which only the author's device can match.
@@ -222,8 +274,11 @@ impl Pipeline {
             };
             match self.throttle.event(&order.key(), Instant::now(), order.named()) {
                 Verdict::Now => {
-                    pushed += 1;
-                    self.send(order, 1);
+                    if self.push(order, 1) {
+                        pushed += 1;
+                    } else {
+                        over += 1;
+                    }
                 }
                 Verdict::Later { wake_in } => {
                     later += 1;
@@ -233,7 +288,7 @@ impl Pipeline {
                 }
             }
         }
-        Ok(Dealt::Pushed { now: pushed, later, own })
+        Ok(Dealt::Pushed { now: pushed, later, own, over })
     }
 
     /// Comes back when the window ends and pushes once for what was counted.
@@ -246,9 +301,73 @@ impl Pipeline {
                 // that is the event of this order, and the push carries it.
                 order.event_id = due.last.event_id;
                 order.relay = due.last.relay;
-                pipeline.send(order, due.count);
+                pipeline.push(order, due.count);
             }
         });
+    }
+
+    /// Sends the push for `count` events, unless the device was pushed to
+    /// as often as a device may be. Then the events are counted, and told
+    /// in one `sync` push when the time is up. False when they were counted.
+    fn push(self: &Arc<Self>, order: Order, count: u32) -> bool {
+        match self.cap.push(&order.device(), Instant::now(), count) {
+            Room::Yes => {
+                self.send(Parcel {
+                    message: Self::message(&order, count),
+                    trace: order.trace,
+                    kind: order.subject.kind(),
+                    relay: Some(order.relay),
+                    to: order.to,
+                    count,
+                });
+                true
+            }
+            Room::No { wake_in } => {
+                if let Some(wait) = wake_in {
+                    self.sync_later(order, wait);
+                }
+                false
+            }
+        }
+    }
+
+    /// Comes back when the time is up and says, in one push, how many
+    /// events came over what the device is pushed about one by one. The
+    /// push carries the trace of the first of them.
+    fn sync_later(self: &Arc<Self>, order: Order, wait: Duration) {
+        let pipeline = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            if let Some(count) = pipeline.cap.due(&order.device()) {
+                pipeline.counters.sync_pushes.add();
+                pipeline.send(Parcel {
+                    message: Self::sync_message(&order.trace, count),
+                    trace: order.trace,
+                    kind: PushType::Sync.as_str(),
+                    relay: None,
+                    to: order.to,
+                    count,
+                });
+            }
+        });
+    }
+
+    /// The push that says how many came, and nothing of any one of them:
+    /// no event, no id, no group. The device shows the number, and takes
+    /// the messages from its relays itself.
+    fn sync_message(trace: &str, count: u32) -> Message {
+        let mut payload = Payload::new(PushType::Sync);
+        payload.count = Some(count);
+        payload.trace = Some(trace.to_string());
+        Message {
+            payload,
+            fallback: None,
+            // One number replaces another while the phone is off; the app
+            // fetches what there is, however many the last push named.
+            collapse_key: Some(Self::collapse(PushType::Sync.as_str())),
+            ttl: TTL,
+            urgent: true,
+        }
     }
 
     /// The push carries the event itself when it fits and stands for that
@@ -281,7 +400,7 @@ impl Pipeline {
         Message {
             payload,
             fallback,
-            collapse_key: Some(Self::collapse_key(order)),
+            collapse_key: Some(Self::collapse(&order.chat())),
             ttl: TTL,
             urgent: true,
         }
@@ -289,35 +408,34 @@ impl Pipeline {
 
     /// A key the push service replaces a waiting push by: the newest word
     /// about a chat is the one a phone that was off gets.
-    fn collapse_key(order: &Order) -> String {
-        mask(&order.chat()).trim_start_matches('#').to_string()
+    fn collapse(about: &str) -> String {
+        mask(about).trim_start_matches('#').to_string()
     }
 
-    fn send(self: &Arc<Self>, order: Order, count: u32) {
+    fn send(self: &Arc<Self>, parcel: Parcel) {
         let pipeline = Arc::clone(self);
         tokio::spawn(async move {
             let Ok(_permit) = pipeline.sending.acquire().await else {
                 return;
             };
-            let target = Target { token: order.to.token.clone() };
-            let provider = order
-                .to
+            let Parcel { trace, kind, relay, to, count, message } = parcel;
+            let target = Target { token: to.token.clone() };
+            let provider = to
                 .provider
                 .parse::<ProviderKind>()
-                .and_then(|kind| pipeline.providers.get(&order.to.app_id, kind));
+                .and_then(|kind| pipeline.providers.get(&to.app_id, kind));
             let provider = match provider {
                 Ok(provider) => provider,
                 Err(e) => {
                     tracing::warn!(
-                        trace = %order.trace,
-                        device = %order.to.device_id,
+                        trace = %trace,
+                        device = %to.device_id,
                         error = %e,
                         "push not sent: no way to this device"
                     );
                     return;
                 }
             };
-            let message = Self::message(&order, count);
             let delivery =
                 retry::deliver(provider.as_ref(), &target, &message, pipeline.retry).await;
             let outcome = match delivery.outcome {
@@ -328,11 +446,11 @@ impl Pipeline {
             };
             let last = delivery.attempts.last();
             tracing::info!(
-                trace = %order.trace,
-                kind = order.subject.kind(),
-                relay = %order.relay,
-                owner = %mask(&order.to.pubkey),
-                device = %order.to.device_id,
+                trace = %trace,
+                kind,
+                relay = relay.as_deref(),
+                owner = %mask(&to.pubkey),
+                device = %to.device_id,
                 token = %target.masked(),
                 count,
                 with_event = message.payload.event.is_some(),
@@ -345,16 +463,10 @@ impl Pipeline {
             );
             if let Err(e) = pipeline
                 .store
-                .record_outcome(
-                    &order.to.pubkey,
-                    &order.to.device_id,
-                    &order.to.token,
-                    outcome,
-                    now(),
-                )
+                .record_outcome(&to.pubkey, &to.device_id, &to.token, outcome, now())
                 .await
             {
-                tracing::error!(trace = %order.trace, error = %e, "outcome not recorded");
+                tracing::error!(trace = %trace, error = %e, "outcome not recorded");
             }
         });
     }

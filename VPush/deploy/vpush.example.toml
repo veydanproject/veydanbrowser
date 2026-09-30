@@ -12,6 +12,12 @@ public_url = "https://push.example.org"
 listen = "127.0.0.1:8090"
 request_timeout_secs = 15
 max_body_bytes = 65536
+# Set to true when every request comes through the reverse proxy, and the
+# proxy names the client in X-Real-IP (deploy/nginx.example.conf does). New
+# devices are then counted by the address they are registered from, 20 an
+# hour. While it is false that limit is off: the server sees only the
+# proxy's address, and a header is whatever a client wrote.
+trusted_proxy = false
 
 [admin]
 # Socket of `vpush ctl`. Only the vpush user and group can open it.
@@ -73,8 +79,16 @@ groups_per_device = 500
 registration_days = 30
 # Test pushes a device may ask for in an hour.
 test_per_hour = 3
+# Devices of all owners together. A registration that would be one more is
+# refused; those who are registered renew as before.
+devices_total = 100000
 
 [pipeline]
 # A device is woken about one chat once in this many seconds. What comes in
 # between is counted, and told in one push when the time is up.
 throttle_secs = 20
+# A device is pushed to no more than device_cap times in device_window_secs,
+# whatever the pushes are about. What comes over that is counted, and told
+# in one push ("N new messages") when the time is up.
+device_cap = 30
+device_window_secs = 60

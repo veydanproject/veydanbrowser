@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use vpush_proto::{Payload, PushType};
 use vpush_server::delivery::fcm::{FcmClient, ServiceAccount};
 use vpush_server::delivery::retry::{deliver, RetryPolicy};
-use vpush_server::delivery::{Message, Outcome, PushProvider, Target};
+use vpush_server::delivery::{Message, Outcome, PushProvider, Target, TokenCheck};
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -558,4 +558,76 @@ async fn a_server_that_is_not_there_is_tried_again() {
     let delivery = deliver(&client, &target(), &message(), fast()).await;
     assert_eq!(delivery.outcome, Outcome::Retry);
     assert_eq!(delivery.attempts[0].code.as_deref(), Some("UNREACHABLE"));
+}
+
+#[tokio::test]
+async fn asking_about_a_token_is_a_push_that_is_checked_and_not_sent() {
+    let server = MockServer::start().await;
+    mount_token(&server).await;
+    Mock::given(method("POST"))
+        .and(path(SEND))
+        .respond_with(sent_ok())
+        .mount(&server)
+        .await;
+
+    assert_eq!(client(&server).validate("device-token").await, TokenCheck::Valid);
+
+    let sent = requests_to(&server, SEND).await;
+    assert_eq!(sent.len(), 1);
+    let body: Value = serde_json::from_slice(&sent[0].body).unwrap();
+    assert_eq!(
+        body,
+        json!({
+            "validate_only": true,
+            "message": { "token": "device-token", "data": { "v": "2", "type": "test" } }
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_token_fcm_does_not_know_is_told_apart_from_a_service_that_cannot_say() {
+    for (answer, expected) in [
+        (fcm_error(400, "INVALID_ARGUMENT", Some("INVALID_ARGUMENT")), TokenCheck::Invalid),
+        (fcm_error(400, "INVALID_ARGUMENT", None), TokenCheck::Invalid),
+        (fcm_error(404, "NOT_FOUND", Some("UNREGISTERED")), TokenCheck::Invalid),
+        (fcm_error(403, "PERMISSION_DENIED", Some("SENDER_ID_MISMATCH")), TokenCheck::Invalid),
+        // None of these says anything of the token.
+        (fcm_error(503, "UNAVAILABLE", Some("UNAVAILABLE")), TokenCheck::Unknown),
+        (fcm_error(429, "RESOURCE_EXHAUSTED", Some("QUOTA_EXCEEDED")), TokenCheck::Unknown),
+        (fcm_error(401, "UNAUTHENTICATED", None), TokenCheck::Unknown),
+        (fcm_error(401, "UNAUTHENTICATED", Some("THIRD_PARTY_AUTH_ERROR")), TokenCheck::Unknown),
+        // A wrong project id: a bare 404, and no token's fault.
+        (ResponseTemplate::new(404), TokenCheck::Unknown),
+        (ResponseTemplate::new(500).set_body_string("<html>oops</html>"), TokenCheck::Unknown),
+    ] {
+        let server = MockServer::start().await;
+        mount_token(&server).await;
+        Mock::given(method("POST"))
+            .and(path(SEND))
+            .respond_with(answer)
+            .mount(&server)
+            .await;
+        let client = client(&server);
+        assert_eq!(client.validate("device-token").await, expected);
+        assert_eq!(requests_to(&server, SEND).await.len(), 1, "asked once: somebody is waiting");
+    }
+}
+
+#[tokio::test]
+async fn an_account_google_refuses_says_nothing_of_a_token() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": "invalid_grant", "error_description": "Invalid JWT Signature."
+        })))
+        .mount(&server)
+        .await;
+    assert_eq!(client(&server).validate("device-token").await, TokenCheck::Unknown);
+
+    // Neither does an FCM nobody can reach.
+    let server = MockServer::start().await;
+    mount_token(&server).await;
+    let nowhere = FcmClient::new(account(&server), "http://127.0.0.1:1").unwrap();
+    assert_eq!(nowhere.validate("device-token").await, TokenCheck::Unknown);
 }

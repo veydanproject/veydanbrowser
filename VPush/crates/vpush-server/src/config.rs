@@ -91,6 +91,9 @@ pub struct LimitsConfig {
     pub registration_days: u32,
     /// Test pushes a device may ask for in an hour.
     pub test_per_hour: u32,
+    /// Devices of all owners together. A registration that would be one
+    /// more is refused: the database and the relays' requests have an end.
+    pub devices_total: u32,
 }
 
 impl Default for LimitsConfig {
@@ -101,6 +104,7 @@ impl Default for LimitsConfig {
             groups_per_device: 500,
             registration_days: 30,
             test_per_hour: 3,
+            devices_total: 100_000,
         }
     }
 }
@@ -111,11 +115,20 @@ pub struct PipelineConfig {
     /// A device is woken about one chat once in this many seconds. What
     /// comes in between is counted and told in one push when the time is up.
     pub throttle_secs: u64,
+    /// A device is pushed to no more than this many times within
+    /// `device_window_secs`, whatever the number of its chats. What comes
+    /// over that is counted, and told in one `sync` push.
+    pub device_cap: u32,
+    pub device_window_secs: u64,
 }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
-        Self { throttle_secs: 20 }
+        Self {
+            throttle_secs: 20,
+            device_cap: 30,
+            device_window_secs: 60,
+        }
     }
 }
 
@@ -153,6 +166,10 @@ pub struct ServerConfig {
     pub listen: String,
     pub request_timeout_secs: u64,
     pub max_body_bytes: usize,
+    /// A reverse proxy is in front, and says in `X-Real-IP` whom a request
+    /// came from. Without it the server does not know: every request comes
+    /// from the proxy, or the header is whatever the client wrote.
+    pub trusted_proxy: bool,
 }
 
 impl Default for ServerConfig {
@@ -161,6 +178,7 @@ impl Default for ServerConfig {
             listen: "127.0.0.1:8090".to_string(),
             request_timeout_secs: 15,
             max_body_bytes: 64 * 1024,
+            trusted_proxy: false,
         }
     }
 }
@@ -389,6 +407,7 @@ impl Config {
             ("relays_per_device", self.limits.relays_per_device),
             ("groups_per_device", self.limits.groups_per_device),
             ("registration_days", self.limits.registration_days),
+            ("devices_total", self.limits.devices_total),
         ] {
             if value == 0 {
                 out.push(format!("limits.{name}: must be above zero"));
@@ -399,6 +418,14 @@ impl Config {
         // back, and every event of a burst wakes the phone.
         if self.pipeline.throttle_secs == 0 {
             out.push("pipeline.throttle_secs: must be above zero".to_string());
+        }
+        // Zero pushes a minute is no pushes at all, and a window of no
+        // length holds nothing back.
+        if self.pipeline.device_cap == 0 {
+            out.push("pipeline.device_cap: must be above zero".to_string());
+        }
+        if self.pipeline.device_window_secs == 0 {
+            out.push("pipeline.device_window_secs: must be above zero".to_string());
         }
 
         out
@@ -479,13 +506,17 @@ impl Config {
         out.push((
             "limits".to_string(),
             format!(
-                "devices_per_pubkey={} relays_per_device={} groups_per_device={} registration_days={} test_per_hour={}",
-                l.devices_per_pubkey, l.relays_per_device, l.groups_per_device, l.registration_days, l.test_per_hour
+                "devices_per_pubkey={} relays_per_device={} groups_per_device={} registration_days={} test_per_hour={} devices_total={}",
+                l.devices_per_pubkey, l.relays_per_device, l.groups_per_device, l.registration_days, l.test_per_hour, l.devices_total
             ),
         ));
+        let p = &self.pipeline;
         out.push((
-            "pipeline.throttle_secs".to_string(),
-            self.pipeline.throttle_secs.to_string(),
+            "pipeline".to_string(),
+            format!(
+                "throttle_secs={} device_cap={} device_window_secs={}",
+                p.throttle_secs, p.device_cap, p.device_window_secs
+            ),
         ));
         out
     }
@@ -501,6 +532,14 @@ impl Config {
             (
                 "server.max_body_bytes".to_string(),
                 self.server.max_body_bytes.to_string(),
+            ),
+            (
+                "server.trusted_proxy".to_string(),
+                if self.server.trusted_proxy {
+                    "true (whom a request came from is read from X-Real-IP)".to_string()
+                } else {
+                    "false (the limit of new devices per address is off)".to_string()
+                },
             ),
             (
                 "admin.socket".to_string(),
@@ -591,6 +630,56 @@ mod tests {
         let problems = with(0).unwrap_err();
         assert_eq!(problems, ["pipeline.throttle_secs: must be above zero"]);
         assert_eq!(with(1).unwrap().pipeline.throttle_secs, 1);
+    }
+
+    #[test]
+    fn a_device_is_pushed_to_at_least_once_in_a_window_that_lasts() {
+        let with = |keys: &str| {
+            Config::parse(&format!(
+                "public_url = \"https://push.example.org\"\n[pipeline]\n{keys}\n"
+            ))
+        };
+        let problems = with("device_cap = 0\ndevice_window_secs = 0").unwrap_err();
+        assert_eq!(
+            problems,
+            [
+                "pipeline.device_cap: must be above zero",
+                "pipeline.device_window_secs: must be above zero"
+            ]
+        );
+        let pipeline = with("device_cap = 1\ndevice_window_secs = 1").unwrap().pipeline;
+        assert_eq!((pipeline.device_cap, pipeline.device_window_secs), (1, 1));
+        let pipeline = with("").unwrap().pipeline;
+        assert_eq!((pipeline.device_cap, pipeline.device_window_secs), (30, 60));
+    }
+
+    #[test]
+    fn a_server_that_takes_no_devices_is_refused() {
+        let with = |total: u32| {
+            Config::parse(&format!(
+                "public_url = \"https://push.example.org\"\n[limits]\ndevices_total = {total}\n"
+            ))
+        };
+        assert_eq!(with(0).unwrap_err(), ["limits.devices_total: must be above zero"]);
+        assert_eq!(with(1).unwrap().limits.devices_total, 1);
+        let config = Config::parse(r#"public_url = "https://push.example.org""#).unwrap();
+        assert_eq!(config.limits.devices_total, 100_000);
+    }
+
+    #[test]
+    fn the_summary_says_whether_the_limit_per_address_is_on() {
+        let said = |config: &str| {
+            let summary = Config::parse(config).unwrap().summary();
+            let (_, value) = summary
+                .into_iter()
+                .find(|(key, _)| key == "server.trusted_proxy")
+                .expect("the summary names the key");
+            value
+        };
+        let off = said(r#"public_url = "https://push.example.org""#);
+        assert!(off.starts_with("false") && off.contains("is off"), "{off}");
+        let on = said("public_url = \"https://push.example.org\"\n[server]\ntrusted_proxy = true\n");
+        assert!(on.starts_with("true") && on.contains("X-Real-IP"), "{on}");
     }
 
     #[test]

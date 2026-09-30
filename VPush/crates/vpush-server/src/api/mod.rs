@@ -2,8 +2,9 @@
 
 mod devices;
 
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -17,8 +18,9 @@ use vpush_proto::{AppInfo, ErrorBody, ErrorCode, ErrorDetail, Info, Limits};
 
 use crate::auth::Nip98;
 use crate::config::Config;
+use crate::counters::Counters;
 use crate::delivery::Providers;
-use crate::limit::{Recent, Refused};
+use crate::limit::Limiter;
 use crate::relays::RelayPolicy;
 use crate::store::Store;
 use crate::version;
@@ -40,7 +42,8 @@ pub struct Api {
     /// How the relays are doing, and the way to say that what is watched changed.
     pub watch: Arc<Watch>,
     pub auth: Arc<Nip98>,
-    pub tests: Arc<TestLimiter>,
+    pub limits: Arc<Limiters>,
+    pub counters: Arc<Counters>,
 }
 
 impl Api {
@@ -50,10 +53,12 @@ impl Api {
         providers: Arc<Providers>,
         relays: Arc<RelayPolicy>,
         watch: Arc<Watch>,
+        counters: Arc<Counters>,
     ) -> Self {
         Self {
             auth: Arc::new(Nip98::new(&config.public_url)),
-            tests: Arc::new(TestLimiter::new(config.limits.test_per_hour)),
+            limits: Arc::new(Limiters::new(config.limits.test_per_hour)),
+            counters,
             config,
             store,
             providers,
@@ -70,36 +75,77 @@ pub fn now() -> u64 {
         .unwrap_or(0)
 }
 
-/// How many test pushes were asked for in the last hour, by the token they
-/// go to. A token is one phone, whatever it is registered as: the same
-/// token under a new device id has no allowance of its own.
-pub struct TestLimiter {
-    asked: Mutex<Recent<[u8; 32]>>,
+/// Registrations one owner may make in a minute. An app registers when
+/// something changed and once in seven days; ten a minute is a burst of
+/// changes and more, and every one past that is somebody trying the server.
+pub const PUTS_PER_MINUTE: usize = 10;
+
+/// Devices the server did not know that may be registered from one address
+/// in an hour. Each of them costs a question to the push service and a row.
+pub const NEW_DEVICES_PER_HOUR: usize = 20;
+
+/// How often what may be asked.
+pub struct Limiters {
+    /// Test pushes, by the token they go to. A token is one phone, whatever
+    /// it is registered as: the same token under a new device id has no
+    /// allowance of its own.
+    tests: Limiter<[u8; 32]>,
+    /// Registrations, by their owner.
+    puts: Limiter<String>,
+    /// Registrations of a device the server did not know, by the address
+    /// they came from.
+    new_devices: Limiter<IpAddr>,
 }
 
-impl TestLimiter {
+impl Limiters {
+    const MINUTE: Duration = Duration::from_secs(60);
     const HOUR: Duration = Duration::from_secs(3600);
-    /// Tokens remembered at one time. Past this many a token that is not
-    /// remembered is told to come back later.
-    const MAX_TOKENS: usize = 100_000;
+    /// Keys each limit remembers at one time. Past this many a key that is
+    /// not remembered is told to come back later.
+    const MAX_KEYS: usize = 100_000;
 
-    pub fn new(per_hour: u32) -> Self {
+    pub fn new(tests_per_hour: u32) -> Self {
         Self {
-            asked: Mutex::new(Recent::new(Self::HOUR, per_hour as usize, Self::MAX_TOKENS)),
+            tests: Limiter::new(Self::HOUR, tests_per_hour as usize, Self::MAX_KEYS),
+            puts: Limiter::new(Self::MINUTE, PUTS_PER_MINUTE, Self::MAX_KEYS),
+            new_devices: Limiter::new(Self::HOUR, NEW_DEVICES_PER_HOUR, Self::MAX_KEYS),
         }
     }
 
-    /// Counts one more request, or says after how long to come back.
-    pub fn take(&self, token: &str) -> Result<(), Duration> {
+    /// Counts one more test push to the token, or says after how long to
+    /// come back.
+    pub fn test(&self, token: &str) -> Result<(), Duration> {
         // Remembered by its hash: a token may be thousands of bytes long.
         let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
         let mut key = [0u8; 32];
         key.copy_from_slice(digest.as_ref());
-        self.asked
-            .lock()
-            .unwrap()
-            .take(key, Instant::now())
-            .map_err(Refused::wait)
+        self.tests.take(key)
+    }
+
+    /// Counts one more registration of the owner.
+    pub fn registration(&self, owner: &str) -> Result<(), Duration> {
+        self.puts.take(owner.to_string())
+    }
+
+    /// Counts one more new device from the address.
+    pub fn new_device(&self, from: IpAddr) -> Result<(), Duration> {
+        self.new_devices.take(network(from))
+    }
+}
+
+/// What is counted as one client. An IPv6 address is counted by its first
+/// 64 bits: the rest is the client's to choose, a new one for every request
+/// if it likes.
+fn network(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V4(_) => address,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let prefix = u128::from(v6) & !u128::from(u64::MAX);
+                IpAddr::V6(Ipv6Addr::from(prefix))
+            }
+        },
     }
 }
 
@@ -229,11 +275,43 @@ mod tests {
 
     #[test]
     fn the_test_limit_is_per_token() {
-        let limiter = TestLimiter::new(2);
-        limiter.take("token-of-the-phone").unwrap();
-        limiter.take("token-of-the-phone").unwrap();
-        let wait = limiter.take("token-of-the-phone").unwrap_err();
-        assert!(wait <= TestLimiter::HOUR && wait > Duration::from_secs(3590), "{wait:?}");
-        limiter.take("token-of-the-tablet").unwrap();
+        let limits = Limiters::new(2);
+        limits.test("token-of-the-phone").unwrap();
+        limits.test("token-of-the-phone").unwrap();
+        let wait = limits.test("token-of-the-phone").unwrap_err();
+        assert!(wait <= Limiters::HOUR && wait > Duration::from_secs(3590), "{wait:?}");
+        limits.test("token-of-the-tablet").unwrap();
+    }
+
+    #[test]
+    fn an_owner_registers_ten_times_a_minute_and_no_more() {
+        let limits = Limiters::new(3);
+        for _ in 0..PUTS_PER_MINUTE {
+            limits.registration("alice").unwrap();
+        }
+        let wait = limits.registration("alice").unwrap_err();
+        assert!(wait <= Limiters::MINUTE && wait > Duration::from_secs(50), "{wait:?}");
+        limits.registration("bob").unwrap();
+    }
+
+    #[test]
+    fn new_devices_are_counted_by_the_address_and_an_ipv6_network_is_one_address() {
+        let limits = Limiters::new(3);
+        let from = |address: &str| limits.new_device(address.parse().unwrap());
+        for _ in 0..NEW_DEVICES_PER_HOUR {
+            from("203.0.113.7").unwrap();
+        }
+        let wait = from("203.0.113.7").unwrap_err();
+        assert!(wait <= Limiters::HOUR && wait > Duration::from_secs(3590), "{wait:?}");
+        from("203.0.113.8").unwrap();
+        // The same address, written as IPv6 writes an IPv4 one.
+        assert!(from("::ffff:203.0.113.7").is_err());
+
+        // Whoever holds a /64 has as many addresses as it likes, and one allowance.
+        for host in 0..NEW_DEVICES_PER_HOUR {
+            from(&format!("2001:db8:1:2::{host:x}")).unwrap();
+        }
+        assert!(from("2001:db8:1:2:ffff:ffff:ffff:ffff").is_err());
+        from("2001:db8:1:3::1").unwrap();
     }
 }

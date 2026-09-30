@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::counters::Counters;
 use crate::delivery::{self, mask, ProviderKind, Providers, Target, TEST_DEADLINE};
-use crate::store::{Device, Store};
+use crate::store::{Counts, Device, Store};
 use crate::relay::Watch;
 use crate::logging::{LogControl, LogSpec};
 use crate::version;
@@ -43,7 +44,8 @@ pub enum Request {
     },
     /// The devices of one owner, and what is watched for each.
     Devices { owner: String },
-    /// How many devices and owners there are.
+    /// How many devices and owners there are, and what the server has
+    /// counted since it started.
     Stats,
     /// The relays on the line, and how each is doing.
     Relays,
@@ -122,6 +124,8 @@ pub struct DeviceLine {
     pub expires_at: u64,
     pub last_push_at: Option<u64>,
     pub last_outcome: Option<String>,
+    /// When the push service vouched for the token. `None`: it has not yet.
+    pub token_checked_at: Option<u64>,
     pub relays: Vec<String>,
     pub watched_groups: Vec<String>,
 }
@@ -163,6 +167,7 @@ impl From<Device> for DeviceLine {
             expires_at: d.expires_at,
             last_push_at: d.last_push_at,
             last_outcome: d.last_outcome,
+            token_checked_at: d.token_checked_at,
         }
     }
 }
@@ -174,6 +179,16 @@ pub struct AdminState {
     pub providers: Arc<Providers>,
     pub store: Arc<dyn Store>,
     pub watch: Arc<Watch>,
+    pub counters: Arc<Counters>,
+}
+
+/// What `vpush ctl stats` shows: what is in the database, and what was
+/// counted since the server started.
+#[derive(Serialize)]
+struct Stats<'a> {
+    #[serde(flatten)]
+    counts: Counts,
+    since_start: &'a Counters,
 }
 
 /// The socket file; removed when dropped.
@@ -302,7 +317,10 @@ async fn handle(request: Request, state: &AdminState) -> Response {
         }
         Request::Relays => Response::ok(state.watch.health()),
         Request::Stats => match state.store.counts().await {
-            Ok(counts) => Response::ok(counts),
+            Ok(counts) => Response::ok(Stats {
+                counts,
+                since_start: &state.counters,
+            }),
             Err(e) => Response::err(e.to_string()),
         },
     }
@@ -378,6 +396,27 @@ pub async fn call(socket: &Path, request: &Request) -> anyhow::Result<serde_json
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stats_keep_their_shape_and_add_what_was_counted_since_the_start() {
+        let counters = Counters::default();
+        counters.lines_started_over.add();
+        let stats = Stats {
+            counts: Counts { devices: 3, owners: 2, dead_tokens: 1 },
+            since_start: &counters,
+        };
+        assert_eq!(
+            serde_json::to_value(stats).unwrap(),
+            serde_json::json!({
+                "devices": 3, "owners": 2, "dead_tokens": 1,
+                "since_start": {
+                    "refused_rate_owner": 0, "refused_rate_ip": 0,
+                    "refused_devices_total": 0, "tokens_invalid": 0,
+                    "sync_pushes": 0, "lines_started_over": 1,
+                },
+            })
+        );
+    }
 
     #[test]
     fn requests_have_a_stable_wire_form() {

@@ -75,7 +75,7 @@ enum Ctl {
     },
     /// The relays on the line, and how each is doing.
     Relays,
-    /// How many devices and owners there are.
+    /// How many devices and owners there are, and what was counted since the start.
     Stats,
     /// Send one push to one token, to see that pushes arrive.
     TestPush {

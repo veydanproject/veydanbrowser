@@ -18,6 +18,18 @@ pub enum StoreError {
     /// The owner already has as many devices as the server allows.
     #[error("too many devices")]
     TooManyDevices,
+    /// The server holds as many devices as it takes.
+    #[error("the server is full")]
+    Full,
+}
+
+/// How many devices there may be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceLimits {
+    /// Of one owner.
+    pub per_owner: u32,
+    /// Of all owners together.
+    pub total: u32,
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
@@ -50,6 +62,10 @@ pub struct DeviceInput {
     /// Unix seconds.
     pub now: u64,
     pub expires_at: u64,
+    /// When the push service said, for this registration, that the token
+    /// is one it can push to. `None`: it was not asked, since it had said
+    /// so of this very token before, or it could not say.
+    pub token_checked_at: Option<u64>,
 }
 
 /// A device as it is remembered.
@@ -70,6 +86,9 @@ pub struct Device {
     pub expires_at: u64,
     pub last_push_at: Option<u64>,
     pub last_outcome: Option<String>,
+    /// When the push service said the token is one it can push to, or took
+    /// a push for it. `None`: nothing is known of the token yet.
+    pub token_checked_at: Option<u64>,
     pub relays: Vec<WatchedRelay>,
     pub groups: Vec<String>,
 }
@@ -89,7 +108,12 @@ pub trait Store: Send + Sync + 'static {
     ///
     /// A device of another owner with the same address at the push service
     /// is removed: the phone has changed hands, or identities.
-    async fn put_device(&self, device: DeviceInput, max_per_owner: u32) -> Result<()>;
+    ///
+    /// A token the push service has just vouched for makes the device
+    /// `active`, whatever it was. Without that a token that stays is what it
+    /// was, dead when it was dead, and a new one is `active` and not yet
+    /// asked about.
+    async fn put_device(&self, device: DeviceInput, limits: DeviceLimits) -> Result<()>;
 
     async fn device(&self, pubkey: &str, device_id: &str) -> Result<Option<Device>>;
 
@@ -100,7 +124,8 @@ pub trait Store: Send + Sync + 'static {
     async fn delete_device(&self, pubkey: &str, device_id: &str) -> Result<bool>;
 
     /// Notes what became of the last push to the device. `dead_token` also
-    /// marks the device so that nothing more is sent to it.
+    /// marks the device so that nothing more is sent to it, and `delivered`
+    /// says of a token nobody had vouched for that it is one.
     ///
     /// `token` is the one the push went to. A device that has registered a
     /// new token since is left as it is: what the push service said of the

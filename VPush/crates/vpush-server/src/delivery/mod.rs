@@ -180,12 +180,53 @@ impl Attempt {
 
 pub type SendFuture<'a> = Pin<Box<dyn Future<Output = Attempt> + Send + 'a>>;
 
+/// What a push service says of a token before anything is sent to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenCheck {
+    /// The service knows the token, and would push to it.
+    Valid,
+    /// The token is none the service can push to: made up, gone, or of
+    /// another project.
+    Invalid,
+    /// The service could not say: it is busy, out of reach, or refuses us.
+    /// Nothing is known of the token.
+    Unknown,
+}
+
+impl TokenCheck {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Valid => "valid",
+            Self::Invalid => "invalid",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+pub type CheckFuture<'a> = Pin<Box<dyn Future<Output = TokenCheck> + Send + 'a>>;
+
+/// How long a registration waits for the push service to say whether the
+/// token is one. A service that is silent for longer is taken for one that
+/// cannot say: whoever registers is waiting, and the first push will tell.
+pub const CHECK_DEADLINE: Duration = Duration::from_secs(5);
+
 /// A service that carries pushes.
 pub trait PushProvider: Send + Sync {
     fn kind(&self) -> ProviderKind;
 
     /// One attempt. Never fails: whatever happens is an [`Attempt`].
     fn send<'a>(&'a self, target: &'a Target, message: &'a Message) -> SendFuture<'a>;
+
+    /// Asks the service whether it can push to the target. Nothing reaches
+    /// the device.
+    fn check<'a>(&'a self, target: &'a Target) -> CheckFuture<'a>;
+}
+
+/// [`PushProvider::check`], given up on at the deadline.
+pub async fn check_token(provider: &dyn PushProvider, target: &Target) -> TokenCheck {
+    tokio::time::timeout(CHECK_DEADLINE, provider.check(target))
+        .await
+        .unwrap_or(TokenCheck::Unknown)
 }
 
 /// One push of the type `test` to one address, and what became of it.
@@ -306,6 +347,10 @@ mod tests {
         fn send<'a>(&'a self, _: &'a Target, _: &'a Message) -> SendFuture<'a> {
             Box::pin(std::future::pending())
         }
+
+        fn check<'a>(&'a self, _: &'a Target) -> CheckFuture<'a> {
+            Box::pin(std::future::pending())
+        }
     }
 
     /// A push service that is busy, and counts how often it was asked.
@@ -323,6 +368,10 @@ mod tests {
             self.asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Box::pin(std::future::ready(Attempt::new(Outcome::Retry).status(503)))
         }
+
+        fn check<'a>(&'a self, _: &'a Target) -> CheckFuture<'a> {
+            Box::pin(std::future::ready(TokenCheck::Unknown))
+        }
     }
 
     fn phone() -> Target {
@@ -339,6 +388,13 @@ mod tests {
         assert_eq!(delivery.outcome, Outcome::Retry);
         assert_eq!(delivery.attempts.len(), 1);
         assert_eq!(delivery.attempts[0].code.as_deref(), Some("DEADLINE"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_service_that_does_not_answer_a_check_is_one_that_cannot_say() {
+        let started = tokio::time::Instant::now();
+        assert_eq!(check_token(&Silent, &phone()).await, TokenCheck::Unknown);
+        assert_eq!(started.elapsed(), CHECK_DEADLINE);
     }
 
     #[tokio::test(start_paused = true)]

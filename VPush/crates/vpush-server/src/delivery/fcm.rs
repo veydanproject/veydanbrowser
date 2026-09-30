@@ -14,9 +14,12 @@ use ring::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
-use vpush_proto::Payload;
+use vpush_proto::{Payload, PushType};
 
-use super::{http, Attempt, Message, Outcome, ProviderKind, PushProvider, SendFuture, Target};
+use super::{
+    http, mask, Attempt, CheckFuture, Message, Outcome, ProviderKind, PushProvider, SendFuture,
+    Target, TokenCheck,
+};
 use crate::config::FcmConfig;
 
 pub const DEFAULT_ENDPOINT: &str = "https://fcm.googleapis.com";
@@ -260,6 +263,43 @@ impl FcmClient {
     }
 
     async fn attempt(&self, target: &Target, message: &Message, payload: &Payload) -> Attempt {
+        self.post(&Self::body(target, message, payload)).await
+    }
+
+    /// Asks FCM whether it would push to the token: the request a push is
+    /// sent with, marked `validate_only`. FCM checks it as it checks a push,
+    /// the token included, and sends nothing.
+    pub async fn validate(&self, token: &str) -> TokenCheck {
+        let body = json!({
+            "validate_only": true,
+            "message": {
+                "token": token,
+                "data": Payload::new(PushType::Test).to_data(),
+            },
+        });
+        let attempt = self.post(&body).await;
+        let check = match attempt.outcome {
+            Outcome::Delivered => TokenCheck::Valid,
+            Outcome::DeadToken => TokenCheck::Invalid,
+            // The message is a few bytes: what FCM cannot read is the token.
+            _ if attempt.code.as_deref() == Some(INVALID_ARGUMENT) => TokenCheck::Invalid,
+            // Busy, out of reach, or our own account is refused: that says
+            // nothing of the token.
+            _ => TokenCheck::Unknown,
+        };
+        tracing::debug!(
+            token = %mask(token),
+            check = check.as_str(),
+            http_status = attempt.http_status,
+            code = attempt.code.as_deref(),
+            detail = attempt.detail.as_deref(),
+            "fcm token check"
+        );
+        check
+    }
+
+    /// One request to `messages:send`, and what FCM made of it.
+    async fn post(&self, body: &serde_json::Value) -> Attempt {
         let token = match self.access_token().await {
             Ok(token) => token,
             Err(TokenError::Refused { status, detail }) => {
@@ -287,7 +327,7 @@ impl FcmClient {
             .http
             .post(url)
             .bearer_auth(&token)
-            .json(&Self::body(target, message, payload))
+            .json(body)
             .send()
             .await
         {
@@ -413,6 +453,10 @@ impl PushProvider for FcmClient {
             attempt.latency_ms = started.elapsed().as_millis() as u64;
             attempt
         })
+    }
+
+    fn check<'a>(&'a self, target: &'a Target) -> CheckFuture<'a> {
+        Box::pin(self.validate(&target.token))
     }
 }
 

@@ -26,11 +26,11 @@ internal data class Push(
 ) {
   /** Handled, not shown. */
   val silent: Boolean
-    get() = type == TYPE_SYNC || type == TYPE_MANIFEST
+    get() = type == TYPE_MANIFEST
 
-  /** About a message, as opposed to a word from the server itself. */
+  /** About messages, as opposed to a word from the server itself. */
   val aboutMessage: Boolean
-    get() = type == TYPE_DM || type == TYPE_GROUP
+    get() = type == TYPE_DM || type == TYPE_GROUP || type == TYPE_SYNC
 
   /** The map the messenger's core reads; the same keys the server sent. */
   fun asData(): Map<String, String> = buildMap {
@@ -50,6 +50,7 @@ internal data class Push(
 
     const val TYPE_DM = "dm"
     const val TYPE_GROUP = "group"
+    /** More came than the server pushes one by one: `count` of them, and no word of which. */
     const val TYPE_SYNC = "sync"
     const val TYPE_TEST = "test"
     const val TYPE_BROADCAST = "broadcast"

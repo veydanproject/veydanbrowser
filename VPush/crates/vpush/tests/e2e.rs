@@ -587,6 +587,94 @@ fn a_broken_service_account_stops_the_start_with_a_reason() {
     assert!(text.contains("not a service account file"), "{text}");
 }
 
+/// A fake token is refused by the running server, and `vpush ctl stats` says
+/// how often that happened: the migration, the config and the counters in
+/// the real binary.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_token_fcm_does_not_know_is_refused_and_counted() {
+    use nostr::prelude::*;
+
+    let unknown = wiremock::ResponseTemplate::new(400).set_body_json(serde_json::json!({
+        "error": { "code": 400, "message": "The registration token is not a valid FCM registration token",
+            "status": "INVALID_ARGUMENT",
+            "details": [{ "errorCode": "INVALID_ARGUMENT" }] }
+    }));
+    let (server, _google) = server_with_fcm("fake-token", unknown).await;
+    let since_start = || {
+        let (ok, text) = tokio::task::block_in_place(|| server.ctl(&["stats"]));
+        assert!(ok, "{text}");
+        let stats: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(stats["devices"], 0, "{text}");
+        assert_eq!(stats["dead_tokens"], 0, "{text}");
+        stats["since_start"].clone()
+    };
+    assert_eq!(
+        since_start(),
+        serde_json::json!({
+            "refused_rate_owner": 0, "refused_rate_ip": 0, "refused_devices_total": 0,
+            "tokens_invalid": 0, "sync_pushes": 0, "lines_started_over": 0,
+        })
+    );
+
+    let alice = Keys::generate();
+    let body = serde_json::json!({
+        "app_id": "net.veydan.mobile",
+        "channel": { "provider": "fcm", "token": "made-up-token" },
+    })
+    .to_string();
+    let path = "/v1/devices/phone-0001";
+    let answer = reqwest::Client::new()
+        .put(format!("http://127.0.0.1:{}{path}", server.port))
+        .header(
+            "authorization",
+            signed(&alice, "PUT", &format!("http://localhost:{}{path}", server.port), body.as_bytes()),
+        )
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(answer.status(), 422);
+    let refusal: serde_json::Value = answer.json().await.unwrap();
+    assert_eq!(refusal["error"]["code"], "token_invalid", "{refusal}");
+
+    assert_eq!(since_start()["tokens_invalid"], 1);
+    let log = server.lines().join("\n");
+    assert!(!log.contains("made-up-token"), "the token is in the log:\n{log}");
+}
+
+/// What the server runs by is said at its start: whether it knows whom a
+/// request came from, and with that whether new devices are counted by the
+/// address.
+#[test]
+fn the_start_says_whether_the_limit_per_address_is_on() {
+    // The log of a server that was not told of a proxy.
+    let off = Server::start("proxy-off");
+    assert_eq!(off.count("server.trusted_proxy"), 1);
+    assert_eq!(
+        off.count("the limit of new devices per address is off"),
+        1,
+        "{}",
+        off.lines().join("\n")
+    );
+
+    // And the same words of a config that tells of one, as `check-config`
+    // prints them.
+    let dir = std::env::temp_dir().join(format!("vpush-proxy-check-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("vpush.toml");
+    std::fs::write(
+        &path,
+        "public_url = \"https://push.example.org\"\n[server]\ntrusted_proxy = true\n",
+    )
+    .unwrap();
+    let out = Command::new(BIN).args(["check-config", "--config"]).arg(&path).output().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("server.trusted_proxy = true"), "{text}");
+    assert!(text.contains("X-Real-IP"), "{text}");
+}
+
 /// A relay of the test's own, listening.
 ///
 /// Left to itself, the relay picks a random port by trying it, and a server
@@ -715,15 +803,21 @@ async fn a_message_on_a_gated_relay_becomes_a_push_and_the_key_of_the_relay_stay
     relay.add_event(message.clone()).await.unwrap();
 
     tokio::task::block_in_place(|| server.wait_for("outcome=\"delivered\""));
-    let pushes: Vec<_> = google
+    let sent: Vec<serde_json::Value> = google
         .received_requests()
         .await
         .unwrap()
         .into_iter()
         .filter(|r| r.url.path().ends_with("messages:send"))
+        .map(|r| serde_json::from_slice(&r.body).unwrap())
         .collect();
-    assert_eq!(pushes.len(), 1);
-    let push: serde_json::Value = serde_json::from_slice(&pushes[0].body).unwrap();
+    // The first is the question about the token, asked when the phone
+    // registered: nothing of it reached the phone.
+    assert_eq!(sent.len(), 2, "{sent:#?}");
+    assert_eq!(sent[0]["validate_only"], true);
+    assert_eq!(sent[0]["message"]["token"], "token-of-the-phone");
+    let push = &sent[1];
+    assert!(push.get("validate_only").is_none());
     assert_eq!(push["message"]["data"]["v"], "2");
     assert_eq!(push["message"]["data"]["type"], "dm");
     // The push carries the message itself, and no text of the server's.

@@ -1,5 +1,6 @@
 //! What happened a moment ago, counted by key: the signatures that were
-//! used, the test pushes that were asked for.
+//! used, the test pushes that were asked for, the registrations of an owner
+//! and of an address.
 //!
 //! Whoever can make the server remember a thing can ask it to remember a
 //! million of them. So the count is kept for a bounded number of keys, and
@@ -7,6 +8,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Why a key is not taken. Both come with the time after which to ask again.
@@ -87,6 +89,31 @@ impl<K: Hash + Eq + Clone> Recent<K> {
     }
 }
 
+/// A [`Recent`] that many requests count in at once: how often a key may
+/// come within a time, by the clock of this machine.
+pub struct Limiter<K> {
+    taken: Mutex<Recent<K>>,
+}
+
+impl<K: Hash + Eq + Clone> Limiter<K> {
+    pub fn new(window: Duration, per_key: usize, max_keys: usize) -> Self {
+        Self {
+            taken: Mutex::new(Recent::new(window, per_key, max_keys)),
+        }
+    }
+
+    /// Counts one more take of `key`, or says after how long to come back.
+    /// A key that cannot be remembered, because as many are as may be, is
+    /// told to come back as well.
+    pub fn take(&self, key: K) -> Result<(), Duration> {
+        self.taken
+            .lock()
+            .unwrap()
+            .take(key, Instant::now())
+            .map_err(Refused::wait)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +168,16 @@ mod tests {
         // `a` runs out, and there is room for one more.
         recent.take("d", start + secs(3600)).unwrap();
         assert_eq!(recent.take("e", start + secs(3600)), Err(Refused::Full(secs(60))));
+    }
+
+    #[test]
+    fn a_limiter_counts_each_key_by_itself_and_says_when_to_come_back() {
+        let limiter = Limiter::new(HOUR, 2, 100);
+        limiter.take("a").unwrap();
+        limiter.take("a").unwrap();
+        let wait = limiter.take("a").unwrap_err();
+        assert!(wait <= HOUR && wait > secs(3590), "{wait:?}");
+        limiter.take("b").unwrap();
     }
 
     #[test]

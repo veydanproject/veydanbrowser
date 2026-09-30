@@ -42,6 +42,9 @@ class VeydanMessagingService : FirebaseMessagingService() {
     if (PushState.visible && PushState.live) {
       return "not shown, the app is on the screen"
     }
+    if (push.type == Push.TYPE_SYNC) {
+      return if (Notifier.showMore(this, push.count)) "shown, ${push.count} more" else "not shown, notifications are off"
+    }
     // Without keys the core still names the chat; nothing else.
     val bundle = Keys.read(this) ?: ByteArray(0)
     val answer = try {
