@@ -120,7 +120,21 @@ pub enum Effect {
     Send(Outbound),
     Emit(UiEvent),
     /// A user-visible notification request; the host decides how to show it.
-    Notify { title: String, body: Option<String>, chat_id: Option<String> },
+    Notify(Notice),
+}
+
+/// Something to tell the user about.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Notice {
+    /// The chat as the list names it (a person, a group).
+    pub title: String,
+    /// One line of the message, or a code the host words (`group_invite`, …).
+    pub body: Option<String>,
+    pub chat_id: Option<String>,
+    /// Who wrote, hex; in a group the author, not the group.
+    pub sender: Option<String>,
+    /// A stranger's first message, waiting for an answer.
+    pub request: bool,
 }
 
 /// One handler per `Inbound` family. Handlers are pure with respect to the

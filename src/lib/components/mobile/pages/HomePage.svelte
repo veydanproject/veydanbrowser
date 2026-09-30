@@ -8,7 +8,7 @@
   import { t } from '$lib/mobile/i18n';
   import { APPS, availableApps, loadDefaultApp } from '$lib/mobile/apps';
   import { messengerStore } from '$lib/messenger/store.svelte';
-  import { launchRoute } from '$lib/messenger/push/bridge';
+  import { followRoute, launchRoute } from '$lib/messenger/push/bridge';
 
   let ready = $state(false);
 
@@ -25,7 +25,7 @@
     // default app. Without the messenger compiled in there is none.
     const tapped = await launchRoute();
     if (tapped) {
-      goto(tapped, { replaceState: true });
+      followRoute(tapped, true);
       return;
     }
     const id = loadDefaultApp();

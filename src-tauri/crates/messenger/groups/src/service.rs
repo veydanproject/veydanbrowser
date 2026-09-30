@@ -13,7 +13,7 @@ use crate::op::{GroupKind, KeyId, Op, OpBody};
 use crate::roles::Role;
 use crate::state::{GroupState, Rejection};
 use crate::wire::{self, SecretEnvelope};
-use messenger_core::traits::UiEvent;
+use messenger_core::traits::{Notice, UiEvent};
 use messenger_core::{Clock, Envelope, MessengerError, Outbound, PubKey, RelayUrl, Result, Scope, SecretStore};
 use messenger_dm::wrap::{wrap_as, Wake};
 use messenger_dm::{DmService, MessageView};
@@ -55,8 +55,8 @@ pub struct Outcome {
     /// To publish, in order.
     pub publish: Vec<Outbound>,
     pub events: Vec<UiEvent>,
-    /// Someone to tell the user about: title, body, chat id.
-    pub notify: Vec<(String, Option<String>, Option<String>)>,
+    /// Someone to tell the user about.
+    pub notify: Vec<Notice>,
     /// The set of groups to listen to changed.
     pub resubscribe: bool,
     /// Groups whose key needs a manager (me): new key or delivery.

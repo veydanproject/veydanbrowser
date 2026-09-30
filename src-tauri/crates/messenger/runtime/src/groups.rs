@@ -66,11 +66,8 @@ impl GroupsDriver {
         for ev in outcome.events {
             let _ = self.ui.send(ev);
         }
-        for (title, body, chat_id) in outcome.notify {
-            let _ = self.ui.send(UiEvent {
-                name: "notify".into(),
-                payload: serde_json::json!({ "title": title, "body": body, "chat_id": chat_id }),
-            });
+        for notice in outcome.notify {
+            let _ = self.ui.send(UiEvent { name: "notify".into(), payload: serde_json::to_value(notice).unwrap_or_default() });
         }
         for n in outcome.notes {
             eprintln!("messenger groups: {n}");

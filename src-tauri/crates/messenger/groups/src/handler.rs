@@ -31,7 +31,7 @@ pub fn effects(outcome: Outcome, signals: &Signals) -> Vec<Effect> {
     let mut out: Vec<Effect> = Vec::new();
     out.extend(outcome.publish.into_iter().map(Effect::Send));
     out.extend(outcome.events.into_iter().map(Effect::Emit));
-    out.extend(outcome.notify.into_iter().map(|(title, body, chat_id)| Effect::Notify { title, body, chat_id }));
+    out.extend(outcome.notify.into_iter().map(Effect::Notify));
     if outcome.resubscribe {
         let _ = signals.send(Signal::Resubscribe);
     }

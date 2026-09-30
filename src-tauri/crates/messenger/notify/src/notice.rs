@@ -42,6 +42,8 @@ pub struct Notice {
     /// Who wrote, as this phone calls them.
     pub sender: String,
     pub sender_key: String,
+    /// Address of the sender's picture, https only; the phone may fetch it.
+    pub picture: Option<String>,
     /// None when the settings say the text stays in the app.
     pub body: Option<Body>,
     pub muted: bool,

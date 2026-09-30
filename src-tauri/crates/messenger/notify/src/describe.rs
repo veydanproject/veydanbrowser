@@ -177,9 +177,12 @@ impl Describe {
             _ => (text_body(envelope.str_field("text")), Some(chat_id.clone())),
         };
 
-        let (title, muted) = match self.dm.chat(&chat_id).await? {
-            Some(view) => (view.title, view.is_muted),
-            None => (self.contacts.label_of(&peer).await?, false),
+        let (title, picture, muted) = match self.dm.chat(&chat_id).await? {
+            Some(view) => (view.title, view.picture, view.is_muted),
+            None => {
+                let (name, picture) = self.contacts.face_of(&peer).await?;
+                (name, picture, false)
+            }
         };
         Ok(Outcome::Show(Notice {
             kind,
@@ -187,6 +190,7 @@ impl Describe {
             sender: title.clone(),
             title,
             sender_key: peer.as_hex().to_string(),
+            picture: https(picture),
             body: body.filter(|_| settings.content == Content::SenderText),
             muted,
             hide_on_lockscreen: settings.lockscreen_hidden,
@@ -223,12 +227,14 @@ impl Describe {
             _ => return Ok(Outcome::Quiet { reason: Reason::NotAMessage }),
         };
         let chat = groups::group_chat_id(group_id);
+        let (sender, picture) = self.contacts.face_of(&message.author).await?;
         Ok(Outcome::Show(Notice {
             kind: ChatKind::Group,
             chat: Some(chat.clone()),
             title: group.name,
-            sender: self.contacts.label_of(&message.author).await?,
+            sender,
             sender_key: message.author.as_hex().to_string(),
+            picture: https(picture),
             body: body.filter(|_| settings.content == Content::SenderText),
             muted: chats::is_muted(&self.store, &chat).await?,
             hide_on_lockscreen: settings.lockscreen_hidden,
@@ -277,4 +283,10 @@ async fn plain(store: &Store, push: &PushData) -> Result<Plain> {
         _ => (ChatKind::Dm, None, None, false),
     };
     Ok(Plain { kind, chat, title, muted, count: push.count })
+}
+
+/// Pictures come from profiles anyone can write: only https addresses are
+/// passed on, as the app itself shows no others.
+fn https(picture: Option<String>) -> Option<String> {
+    picture.filter(|p| p.starts_with("https://") && p.len() <= 2048)
 }

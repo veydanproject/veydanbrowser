@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 pub trait EffectSink: Send + Sync {
     async fn send(&self, out: Outbound) -> Result<Ack>;
     fn emit(&self, event: UiEvent);
-    fn notify(&self, title: String, body: Option<String>, chat_id: Option<String>);
+    fn notify(&self, notice: messenger_core::Notice);
 }
 
 #[derive(Default)]
@@ -112,7 +112,7 @@ impl Dispatcher {
                             }
                         }
                         Effect::Emit(ev) => sink.emit(ev),
-                        Effect::Notify { title, body, chat_id } => sink.notify(title, body, chat_id),
+                        Effect::Notify(notice) => sink.notify(notice),
                     }
                 }
             }
@@ -167,7 +167,7 @@ mod tests {
         fn emit(&self, event: UiEvent) {
             self.events.lock().unwrap().push(event);
         }
-        fn notify(&self, _: String, _: Option<String>, _: Option<String>) {}
+        fn notify(&self, _: messenger_core::Notice) {}
     }
 
     /// Handler that records the order of `content` values and holds each

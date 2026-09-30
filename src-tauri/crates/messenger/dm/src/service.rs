@@ -9,7 +9,7 @@ use crate::view::{preview, ChatView, MessageView, ReplyPreview};
 use crate::wrap::{wrap_as, Wake};
 use messenger_contacts::{ContactService, ProfileService};
 use messenger_core::envelope::{T_CONTROL, T_DELETE, T_EDIT, T_MEDIA, T_TEXT};
-use messenger_core::traits::UiEvent;
+use messenger_core::traits::{Notice, UiEvent};
 use messenger_core::{
     Clock, Context, DmInbound, Effect, Envelope, EventSource, MessengerError, Outbound, PubKey, RelayUrl, Result,
 };
@@ -634,7 +634,13 @@ impl DmService {
         }));
         if live_incoming && !view.deleted {
             if let Some(c) = self.chat(&chat.id).await?.filter(|c| !c.is_muted) {
-                effects.push(Effect::Notify { title: c.title, body: Some(line), chat_id: Some(chat.id.clone()) });
+                effects.push(Effect::Notify(Notice {
+                    title: c.title,
+                    body: Some(line),
+                    chat_id: Some(chat.id.clone()),
+                    sender: Some(peer.as_hex().to_string()),
+                    request: c.mode == "request_received",
+                }));
             }
         }
         Ok(effects)

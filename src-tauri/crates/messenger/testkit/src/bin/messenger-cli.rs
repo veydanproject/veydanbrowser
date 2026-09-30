@@ -35,7 +35,7 @@ use std::time::Duration;
 fn usage() -> ! {
     eprintln!(
         "usage: messenger-cli [--data-dir DIR] <keygen [--password PW] | import <nsec|ncryptsec> <secret> [--password PW] \
-         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] | push-status | push-test | push-off | wrap <to> <text…> | notify-describe <event.json> [--type dm|group] [--group ID]>"
+         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] | push-status | push-test | push-off | profile-set <name> [picture] | wrap <to> <text…> | notify-describe <event.json> [--type dm|group] [--group ID]>"
     );
     std::process::exit(2)
 }
@@ -478,6 +478,21 @@ async fn main() {
             println!("outcome {}  trace {}", answer.outcome, answer.trace);
         }
         "push-off" => print_push(&rt.push_set_enabled(false).await.unwrap_or_else(die)),
+        "profile-set" => {
+            // `profile-set <name> [picture-url]`: publishes this identity's kind 0.
+            if args.is_empty() {
+                usage();
+            }
+            wait_connect(&rt).await;
+            let input = messenger_runtime::ProfileInput {
+                name: Some(args[0].clone()),
+                picture: args.get(1).cloned(),
+                ..Default::default()
+            };
+            let p = rt.publish_own_profile(&input).await.unwrap_or_else(die);
+            flush(&rt).await;
+            println!("published {} {}", p.label(), p.picture.unwrap_or_default());
+        }
         "wrap" => {
             // The gift wrap of a text to `to`, printed, not sent: what a relay
             // and a push server would see of it.

@@ -116,7 +116,7 @@ mod tests {
         fn emit(&self, e: UiEvent) {
             self.0.lock().unwrap().push(e);
         }
-        fn notify(&self, _: String, _: Option<String>, _: Option<String>) {}
+        fn notify(&self, _: messenger_core::Notice) {}
     }
 
     fn raw_of(event: &Event) -> RawEvent {

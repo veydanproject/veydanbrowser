@@ -74,17 +74,23 @@ impl ContactService {
     /// How this person is called here: my nickname for them, else what
     /// their profile says, else a short npub.
     pub async fn label_of(&self, pubkey: &PubKey) -> Result<String> {
+        Ok(self.face_of(pubkey).await?.0)
+    }
+
+    /// The name as `label_of` gives it, and the address of their picture.
+    pub async fn face_of(&self, pubkey: &PubKey) -> Result<(String, Option<String>)> {
         if let Some(c) = self.get(pubkey).await? {
-            return Ok(c.label());
+            let picture = c.profile.as_ref().and_then(|p| p.picture.clone());
+            return Ok((c.label(), picture));
         }
         if let Some(p) = self.profiles.get(pubkey).await? {
-            return Ok(p.label());
+            return Ok((p.label(), p.picture.clone()));
         }
         let npub = PublicKey::from_hex(pubkey.as_hex())
             .ok()
             .and_then(|p| p.to_bech32().ok())
             .unwrap_or_else(|| pubkey.as_hex().to_string());
-        Ok(format!("{}…{}", &npub[..12.min(npub.len())], &npub[npub.len().saturating_sub(4)..]))
+        Ok((format!("{}…{}", &npub[..12.min(npub.len())], &npub[npub.len().saturating_sub(4)..]), None))
     }
 
     pub async fn get(&self, pubkey: &PubKey) -> Result<Option<ContactView>> {

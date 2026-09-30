@@ -49,11 +49,8 @@ impl EffectSink for RuntimeSink {
         let _ = self.ui.send(event);
     }
 
-    fn notify(&self, title: String, body: Option<String>, chat_id: Option<String>) {
-        let _ = self.ui.send(UiEvent {
-            name: "notify".into(),
-            payload: serde_json::json!({ "title": title, "body": body, "chat_id": chat_id }),
-        });
+    fn notify(&self, notice: messenger_core::Notice) {
+        let _ = self.ui.send(UiEvent { name: "notify".into(), payload: serde_json::to_value(notice).unwrap_or_default() });
     }
 }
 

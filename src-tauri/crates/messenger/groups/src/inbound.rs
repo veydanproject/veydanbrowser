@@ -16,7 +16,7 @@ use crate::roles::Role;
 use crate::service::*;
 use crate::wire::{self, InnerMessage, Opened, SecretEnvelope};
 use messenger_core::envelope::{T_DELETE, T_EDIT, T_MEDIA, T_TEXT};
-use messenger_core::traits::UiEvent;
+use messenger_core::traits::{Notice, UiEvent};
 use messenger_core::{Context, DmInbound, Envelope, EventSource, GroupInbound, MessengerError, PubKey, Result};
 use messenger_store::groups::{self as repo, GroupRow, PendingRow};
 use messenger_store::messages::{self as msgs, NewMessage};
@@ -196,7 +196,13 @@ impl GroupService {
             payload: serde_json::json!({ "invite_id": body.invite_id, "group_id": body.group_id }),
         });
         if !from_me && !historical {
-            out.notify.push((body.name.clone(), Some("group_invite".into()), None));
+            out.notify.push(Notice {
+                title: body.name.clone(),
+                body: Some("group_invite".into()),
+                chat_id: None,
+                sender: Some(peer.as_hex().to_string()),
+                request: false,
+            });
         }
         Ok(out)
     }
@@ -332,7 +338,13 @@ impl GroupService {
             payload: serde_json::json!({ "group_id": body.group_id, "requester": sender.as_hex() }),
         });
         if !historical {
-            out.notify.push((row.name, Some("group_request".into()), Some(repo::group_chat_id(&body.group_id))));
+            out.notify.push(Notice {
+                title: row.name,
+                body: Some("group_request".into()),
+                chat_id: Some(repo::group_chat_id(&body.group_id)),
+                sender: Some(sender.as_hex().to_string()),
+                request: false,
+            });
         }
         Ok(out)
     }
@@ -496,7 +508,13 @@ impl GroupService {
         self.drain(keys, &group_id, ctx, &mut out).await?;
         self.settle(keys, &group_id, true, ctx, &mut out).await?;
         if !from_me {
-            out.notify.push((s.name.clone(), Some("group_welcome".into()), Some(repo::group_chat_id(&group_id))));
+            out.notify.push(Notice {
+                title: s.name.clone(),
+                body: Some("group_welcome".into()),
+                chat_id: Some(repo::group_chat_id(&group_id)),
+                sender: Some(sender.as_hex().to_string()),
+                request: false,
+            });
         }
         Ok(out)
     }
@@ -887,7 +905,13 @@ impl GroupService {
             payload: serde_json::json!({ "chat_id": chat_id, "message": view, "historical": item.historical }),
         });
         if live && !deleted && !chats::is_muted(&self.store, &chat_id).await? {
-            out.notify.push((s.name.clone(), Some(line), Some(chat_id)));
+            out.notify.push(Notice {
+                title: s.name.clone(),
+                body: Some(line),
+                chat_id: Some(chat_id),
+                sender: Some(m.author.as_hex().to_string()),
+                request: false,
+            });
         }
         Ok(Verdict::Done)
     }

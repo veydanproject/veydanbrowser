@@ -11,6 +11,8 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 
 /**
@@ -60,10 +62,11 @@ internal object Notifier {
 
     val tag = notice.chat ?: TAG_DM_PLAIN
     val group = notice.kind == "group"
+    val face = IconCompat.createWithBitmap(Avatar.of(context, notice.sender, notice.senderKey, notice.picture))
     val sender = Person.Builder()
       .setName(notice.sender)
       .setKey(notice.senderKey)
-      .setIcon(IconCompat.createWithBitmap(Avatar.of(notice.sender, notice.senderKey)))
+      .setIcon(face)
       .build()
     val me = Person.Builder().setName(context.getString(R.string.veydan_push_me)).build()
 
@@ -83,12 +86,42 @@ internal object Notifier {
       .setAutoCancel(true)
       .setSilent(notice.muted)
       .setContentIntent(open(context, if (group) Push.TYPE_GROUP else Push.TYPE_DM, notice.chat))
+    // A chat of its own in the system's eyes: its face becomes the
+    // notification's, and it goes to the "Conversations" section.
+    notice.chat?.let { chat ->
+      val icon = if (group) IconCompat.createWithBitmap(Avatar.initials(notice.title, chat)) else face
+      if (conversation(context, chat, notice.title, if (group) null else sender, icon, group)) builder.setShortcutId(chat)
+    }
     if (notice.hideOnLockscreen) {
       builder
         .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
         .setPublicVersion(plainBuilder(context, PlainNotice(notice.kind, notice.chat, null, notice.muted, 1)).build())
     }
     return post(context, tag, builder) && summary(context)
+  }
+
+  /**
+   * The chat as a long-lived shortcut: what Android wants before it shows a
+   * notification as a conversation, with the chat's face instead of the
+   * app's. False when the system would not take it.
+   */
+  private fun conversation(context: Context, chat: String, title: String, person: Person?, icon: IconCompat, group: Boolean): Boolean {
+    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName) ?: return false
+    intent.putExtra(EXTRA_TYPE, if (group) Push.TYPE_GROUP else Push.TYPE_DM)
+    intent.putExtra(EXTRA_CHAT, chat)
+    val shortcut = ShortcutInfoCompat.Builder(context, chat)
+      .setShortLabel(title.ifBlank { "Veydan" })
+      .setLongLived(true)
+      .setIcon(icon)
+      .setIntent(intent)
+      .apply { person?.let { setPerson(it) } }
+      .build()
+    return try {
+      ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
+      true
+    } catch (e: Exception) {
+      false
+    }
   }
 
   /** Something came, and that is all: the phone has no key, or may say no more. */
