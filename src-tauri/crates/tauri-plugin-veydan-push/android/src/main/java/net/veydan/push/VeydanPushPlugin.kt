@@ -6,6 +6,7 @@ package net.veydan.push
 import android.Manifest
 import android.app.Activity
 import android.os.Build
+import android.util.Base64
 import android.util.Log
 import android.webkit.WebView
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -31,6 +32,12 @@ class ContextArgs {
 @InvokeArg
 class CancelArgs {
   var key: String? = null
+}
+
+@InvokeArg
+class KeysArgs {
+  /** Base64 of the bundle. */
+  var bundle: String? = null
 }
 
 private const val NOTIFICATIONS = "notifications"
@@ -175,11 +182,34 @@ class VeydanPushPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun cancel(invoke: Invoke) {
     val key = invoke.parseArgs(CancelArgs::class.java).key
-    if (key != null && !Push.isChatKey(key)) {
+    if (key != null && !Notifier.isClearable(key)) {
       invoke.reject("not a chat: $key")
       return
     }
     Notifier.cancel(activity, key)
+    invoke.resolve()
+  }
+
+  @Command
+  fun storeKeys(invoke: Invoke) {
+    val b64 = invoke.parseArgs(KeysArgs::class.java).bundle
+    if (b64.isNullOrEmpty()) {
+      invoke.reject("no bundle")
+      return
+    }
+    try {
+      val bytes = Base64.decode(b64, Base64.DEFAULT)
+      Keys.store(activity, bytes)
+      bytes.fill(0)
+      invoke.resolve()
+    } catch (e: Exception) {
+      invoke.reject("the keys were not kept: ${e.javaClass.simpleName}")
+    }
+  }
+
+  @Command
+  fun clearKeys(invoke: Invoke) {
+    Keys.clear(activity)
     invoke.resolve()
   }
 }

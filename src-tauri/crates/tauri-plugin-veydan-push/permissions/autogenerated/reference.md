@@ -40,6 +40,32 @@ Denies the cancel command without any pre-configured scope.
 <tr>
 <td>
 
+`veydan-push:allow-clear-keys`
+
+</td>
+<td>
+
+Enables the clear_keys command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`veydan-push:deny-clear-keys`
+
+</td>
+<td>
+
+Denies the clear_keys command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `veydan-push:allow-delete-token`
 
 </td>
@@ -241,6 +267,32 @@ Enables the set_context command without any pre-configured scope.
 <td>
 
 Denies the set_context command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`veydan-push:allow-store-keys`
+
+</td>
+<td>
+
+Enables the store_keys command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`veydan-push:deny-store-keys`
+
+</td>
+<td>
+
+Denies the store_keys command without any pre-configured scope.
 
 </td>
 </tr>

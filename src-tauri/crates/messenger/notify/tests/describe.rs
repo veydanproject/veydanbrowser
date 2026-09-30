@@ -62,7 +62,7 @@ impl Phone {
 
     async fn describe(&self, push: PushData) -> Outcome {
         let bundle = self.bundle().await;
-        describe(&self.dir.path().join("messenger"), &bundle, &push).await.unwrap()
+        describe(&self.dir.path().join("messenger"), Some(&bundle), &push).await.unwrap()
     }
 }
 
@@ -327,7 +327,7 @@ async fn a_group_i_am_not_in_says_nothing() {
 
     let other = Phone::new().await;
     // The other phone has the key somehow, but no such group.
-    let outcome = describe(&other.dir.path().join("messenger"), &KeyBundle::new(&other.keys, bundle.groups.clone()), &group_push(&gid, &event)).await.unwrap();
+    let outcome = describe(&other.dir.path().join("messenger"), Some(&KeyBundle::new(&other.keys, bundle.groups.clone())), &group_push(&gid, &event)).await.unwrap();
     assert_eq!(quiet(outcome), Reason::NotForMe);
 }
 
@@ -338,7 +338,7 @@ async fn an_event_that_is_not_what_the_push_says_is_refused() {
     let event = dm_from(&alice, &phone, &Envelope::text("hi"), 1_000_000);
     let push = push_with(&[("type", "dm"), ("event", &event.to_string()), ("event_id", &"00".repeat(32))]);
     let bundle = phone.bundle().await;
-    assert!(describe(&phone.dir.path().join("messenger"), &bundle, &push).await.is_err());
+    assert!(describe(&phone.dir.path().join("messenger"), Some(&bundle), &push).await.is_err());
 
     let mut forged = event.clone();
     forged["content"] = serde_json::Value::String("tampered".into());
@@ -354,5 +354,20 @@ async fn a_database_from_another_version_is_refused() {
         .unwrap();
     let bundle = phone.bundle().await;
     let push = push_with(&[("type", "dm"), ("event", "{}")]);
-    assert!(describe(&phone.dir.path().join("messenger"), &bundle, &push).await.is_err());
+    assert!(describe(&phone.dir.path().join("messenger"), Some(&bundle), &push).await.is_err());
+}
+
+#[tokio::test]
+async fn without_keys_the_group_is_still_named() {
+    let phone = Phone::new().await;
+    let (gid, bob, key) = group_with_bob(&phone).await;
+    phone.dm.set_muted(&format!("group:{gid}"), true).await.unwrap();
+    let event = group_message(&gid, &key, &bob, &Envelope::text("x"), 1_000_000);
+    let outcome = describe(&phone.dir.path().join("messenger"), None, &group_push(&gid, &event)).await.unwrap();
+    let p = plain(outcome);
+    assert_eq!(p.title.as_deref(), Some("Пуш-тест"));
+    assert_eq!(p.chat.as_deref(), Some(format!("group:{gid}").as_str()));
+    assert!(p.muted);
+    let dm = describe(&phone.dir.path().join("messenger"), None, &push_with(&[("type", "dm"), ("event", "{}")])).await.unwrap();
+    assert!(plain(dm).chat.is_none());
 }

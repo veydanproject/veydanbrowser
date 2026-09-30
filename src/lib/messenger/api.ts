@@ -463,9 +463,17 @@ export function pushErrorCode(e: unknown): string | null {
 }
 
 /** A notification the user tapped. */
+/** What a notification may say; kept by the messenger, read by the push handler. */
+export interface MessengerNotifySettings {
+  content: 'sender_text' | 'sender' | 'none';
+  lockscreen_hidden: boolean;
+  /** A PIN or password guards the app: notifications say only that something came, whatever `content` says. */
+  locked: boolean;
+}
+
 export interface MessengerPushTap {
   type: string;
-  /** `group:<id>`, or null: a direct message names no chat. */
+  /** `dm:<pubkey>` or `group:<id>`; null when the phone could not say whose the message was. */
   chat: string | null;
 }
 
@@ -517,6 +525,7 @@ let mockRelays: MessengerRelay[] = [
   { url: 'wss://relay.damus.io', relay_id: 'pub-damus', source: 'manifest', regions: ['default'], read: true, write: true, enabled: true, auth_type: 'api_key', state: 'connected' },
   { url: 'wss://nos.lol', relay_id: 'pub-nos', source: 'manifest', regions: ['default'], read: true, write: true, enabled: false, auth_type: null, state: 'disconnected' },
 ];
+let mockNotify: MessengerNotifySettings = { content: 'sender_text', lockscreen_hidden: false, locked: false };
 let mockPush: MessengerPushView = {
   device: { supported: true, available: true, reason: null, detail: null, permission: 'prompt' },
   status: {
@@ -880,6 +889,8 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_push_test: (): MessengerPushTest => ({ outcome: 'delivered', trace: '5f3a9c1e' }),
   messenger_push_take_tap: () => null,
   messenger_push_clear: () => undefined,
+  messenger_notify_get: () => mockNotify,
+  messenger_notify_set: (a) => { mockNotify = { ...mockNotify, content: a?.content as MessengerNotifySettings['content'], lockscreen_hidden: Boolean(a?.lockscreenHidden) }; return mockNotify; },
 };
 
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -950,6 +961,9 @@ export const messengerApi = {
     refresh: () => invoke<MessengerPushView>('messenger_push_refresh'),
     test: () => invoke<MessengerPushTest>('messenger_push_test'),
     takeTap: () => invoke<MessengerPushTap | null>('messenger_push_take_tap'),
+    notify: () => invoke<MessengerNotifySettings>('messenger_notify_get'),
+    setNotify: (content: MessengerNotifySettings['content'], lockscreenHidden: boolean) =>
+      invoke<MessengerNotifySettings>('messenger_notify_set', { content, lockscreenHidden }),
     /** `dm`, `group:<id>`, or nothing for every notification about messages. */
     clear: (key?: string) => invoke<void>('messenger_push_clear', { key: key ?? null }),
   },

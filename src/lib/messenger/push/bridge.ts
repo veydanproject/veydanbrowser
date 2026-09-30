@@ -12,7 +12,7 @@ import { pushStore } from './pushStore.svelte';
 let started = false;
 
 /** What came from outside the app is checked before it is used as a route. */
-const CHAT = /^group:[0-9a-f]{64}$/;
+const CHAT = /^(dm|group):[0-9a-f]{64}$/;
 
 async function takeRoute(): Promise<string | null> {
   const tap = await messengerApi.push.takeTap().catch(() => null);
@@ -74,8 +74,9 @@ export async function startPushBridge() {
  * The user is looking at this chat, or at the list of chats: what the
  * notifications said is on the screen now.
  *
- * `group:<id>` takes away the notification of that group; anything else
- * takes away the one about direct messages, which is one for all of them.
+ * A chat (`dm:<pubkey>`, `group:<id>`) takes away the notification of that
+ * chat; the list of chats takes away the one about direct messages the
+ * phone could not tell apart.
  */
 export function pushSeen(chatId?: string) {
   if (!pushStore.view?.device.supported) return;

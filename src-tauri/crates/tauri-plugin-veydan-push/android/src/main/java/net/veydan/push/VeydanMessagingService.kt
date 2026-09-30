@@ -8,8 +8,12 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
 /**
- * Receives pushes. The system starts it on its own, also when the app is not
- * running, so nothing here may count on the app's window or on Rust.
+ * Receives pushes. The system starts it on its own, also when the app is
+ * not running, so nothing here may count on the app's window or on its
+ * runtime. What the push is about is worked out by the messenger's core,
+ * loaded on its own, with the keys the app left for it; without the keys,
+ * or when the core cannot say, the notification says only that something
+ * came.
  *
  * Every push leaves one line in the log with its trace id, the same id the
  * server logs: what came and what was done with it, never what it said.
@@ -26,17 +30,36 @@ class VeydanMessagingService : FirebaseMessagingService() {
 
   private fun handle(push: Push): String {
     if (push.silent) {
-      // Service pushes without text; their handling comes with the features
-      // that need them. Nothing is shown, which is what silent means.
+      // Service pushes without a word to the user; their handling comes
+      // with the features that need them.
       return "silent"
+    }
+    if (!push.aboutMessage) {
+      return if (Notifier.showService(this, push)) "shown" else "not shown, notifications are off"
     }
     // The user is looking at the app and the app gets messages by itself:
     // the message is already on the screen.
-    if (push.aboutMessage && PushState.visible && PushState.live) {
+    if (PushState.visible && PushState.live) {
       return "not shown, the app is on the screen"
     }
-    return if (Notifier.show(this, push)) "shown" else "not shown, notifications are off"
+    // Without keys the core still names the chat; nothing else.
+    val bundle = Keys.read(this) ?: ByteArray(0)
+    val answer = try {
+      Core.describe(this, bundle, push.asData())
+    } finally {
+      bundle.fill(0)
+    }
+    return when (val outcome = answer?.let { Outcome.from(it) }) {
+      null -> plain(push, "no answer from the core")
+      is Outcome.Show -> if (Notifier.show(this, outcome.notice)) "shown" else "not shown, notifications are off"
+      is Outcome.Plain -> if (Notifier.showPlain(this, outcome.plain)) "shown plain" else "not shown, notifications are off"
+      is Outcome.Quiet -> "quiet: ${outcome.reason}"
+      is Outcome.Error -> plain(push, outcome.error)
+    }
   }
+
+  private fun plain(push: Push, why: String): String =
+    if (Notifier.showPlain(this, PlainNotice.of(push))) "shown plain ($why)" else "not shown, notifications are off ($why)"
 
   override fun onNewToken(token: String) {
     Log.i(PushState.TAG, "the push service gave a new token")

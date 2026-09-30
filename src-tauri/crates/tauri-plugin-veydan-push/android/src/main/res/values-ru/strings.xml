@@ -5,4 +5,23 @@
     <string name="veydan_push_channel_service">Служебные сообщения</string>
     <string name="veydan_push_update_title">Новое уведомление</string>
     <string name="veydan_push_update_body">Обновите приложение, чтобы его увидеть.</string>
+    <string name="veydan_push_test_title">Тестовое уведомление</string>
+    <string name="veydan_push_test_body">Пуши доходят до этого телефона.</string>
+    <string name="veydan_push_service_title">Veydan</string>
+    <string name="veydan_push_me">Вы</string>
+    <string name="veydan_push_dm_title">Новое сообщение</string>
+    <string name="veydan_push_group">Группа</string>
+    <string name="veydan_push_one">Новое сообщение</string>
+    <string name="veydan_push_many">Новых сообщений: %d</string>
+    <string name="veydan_push_more">и ещё %d</string>
+    <string name="veydan_push_request">Запрос на переписку</string>
+    <string name="veydan_push_media_image">📷 Фото</string>
+    <string name="veydan_push_media_video">🎬 Видео</string>
+    <string name="veydan_push_media_audio">🎵 Аудио</string>
+    <string name="veydan_push_media_voice">🎤 Голосовое сообщение</string>
+    <string name="veydan_push_media_circle">⭕ Видеосообщение</string>
+    <string name="veydan_push_media_file">📎 %s</string>
+    <string name="veydan_push_invite">Приглашает вас в группу %s</string>
+    <string name="veydan_push_join_request">Просится в группу %s</string>
+    <string name="veydan_push_welcome">Вы в группе %s</string>
 </resources>

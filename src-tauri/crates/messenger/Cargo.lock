@@ -1700,6 +1700,7 @@ dependencies = [
  "async-trait",
  "messenger-core",
  "messenger-dm",
+ "messenger-groups",
  "messenger-notify",
  "messenger-runtime",
  "messenger-store",

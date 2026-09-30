@@ -8,6 +8,7 @@ import {
   messengerApi,
   messengerError,
   pushErrorCode,
+  type MessengerNotifySettings,
   type MessengerPushTest,
   type MessengerPushView,
 } from '../api';
@@ -58,6 +59,27 @@ class PushStore {
   };
   setPrefs = (dm: boolean, groups: boolean) => this.run(() => messengerApi.push.setPrefs(dm, groups));
   setServer = (url: string | null) => this.run(() => messengerApi.push.setServer(url));
+
+  /** What a notification may say. Loaded with the view; changed on its own. */
+  notify = $state<MessengerNotifySettings | null>(null);
+  loadNotify = async () => {
+    try {
+      this.notify = await messengerApi.push.notify();
+    } catch (e) {
+      this.error = messengerError(e);
+    }
+  };
+  setNotify = async (content: MessengerNotifySettings['content'], lockscreenHidden: boolean) => {
+    this.error = '';
+    this.busy = true;
+    try {
+      this.notify = await messengerApi.push.setNotify(content, lockscreenHidden);
+    } catch (e) {
+      this.error = messengerError(e);
+    } finally {
+      this.busy = false;
+    }
+  };
 
   /** "Not now": the question is not asked again. */
   decline = () =>

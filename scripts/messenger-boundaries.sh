@@ -37,7 +37,7 @@ allowed() {
     push)      echo "messenger-core messenger-http" ;;
     notify)    echo "messenger-core messenger-store messenger-ingress messenger-contacts messenger-dm messenger-groups messenger-media messenger-transport" ;;
     runtime)   echo "messenger-core messenger-store messenger-transport messenger-identity messenger-ingress messenger-contacts messenger-dm messenger-media messenger-groups messenger-links messenger-preview messenger-push messenger-notify" ;;
-    testkit)   echo "messenger-core messenger-store messenger-runtime messenger-notify messenger-dm" ;;
+    testkit)   echo "messenger-core messenger-store messenger-runtime messenger-notify messenger-dm messenger-groups" ;;
     *)         echo "__unknown__" ;;
   esac
 }

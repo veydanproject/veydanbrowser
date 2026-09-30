@@ -29,10 +29,19 @@ use std::sync::Arc;
 
 /// Says what the push is about. `data_dir` is the messenger's data
 /// directory, the one with `messenger.db` in it.
-pub async fn describe(data_dir: &Path, bundle: &KeyBundle, push: &PushData) -> Result<Outcome> {
+/// Without keys (the app has a lock, or the settings want nothing said)
+/// only what the database knows of the chat is told: the group's name,
+/// whether it is muted.
+pub async fn describe(data_dir: &Path, bundle: Option<&KeyBundle>, push: &PushData) -> Result<Outcome> {
     let config = MessengerConfig::new(data_dir);
     let store = Store::open_read_only(&config).await?;
-    let out = Describe::new(store.clone(), bundle.keys()?).run(bundle, push).await;
+    let out = match bundle {
+        Some(bundle) => match bundle.keys() {
+            Ok(keys) => Describe::new(store.clone(), keys).run(bundle, push).await,
+            Err(e) => Err(e),
+        },
+        None => plain(&store, push).await.map(Outcome::Plain),
+    };
     store.close().await;
     out
 }
@@ -56,7 +65,7 @@ impl Describe {
 
     async fn run(&self, bundle: &KeyBundle, push: &PushData) -> Result<Outcome> {
         let settings = Settings::load(&self.store).await?;
-        let mut plain = self.plain(push).await?;
+        let mut plain = plain(&self.store, push).await?;
         if settings.content == Content::None {
             return Ok(Outcome::Plain(plain));
         }
@@ -82,19 +91,6 @@ impl Describe {
         }
     }
 
-    /// What can be said before the event is opened, or when it cannot be.
-    async fn plain(&self, push: &PushData) -> Result<Plain> {
-        let (kind, chat, title, muted) = match (push.kind, &push.group_id) {
-            (PushKind::Group, Some(id)) => {
-                let chat = groups::group_chat_id(id);
-                let group = groups::get(&self.store, id).await?;
-                let muted = chats::is_muted(&self.store, &chat).await?;
-                (ChatKind::Group, Some(chat), group.map(|g| g.name), muted)
-            }
-            _ => (ChatKind::Dm, None, None, false),
-        };
-        Ok(Plain { kind, chat, title, muted, count: push.count })
-    }
 
     async fn event_of(&self, push: &PushData) -> Result<Option<RawEvent>> {
         let json: serde_json::Value = match (&push.event, &push.event_id, &push.relay) {
@@ -267,4 +263,18 @@ fn raw_event(json: serde_json::Value, relay: Option<&str>) -> Result<RawEvent> {
     let created_at = json["created_at"].as_i64().ok_or_else(|| bad("created_at"))?;
     let url = relay.and_then(RelayUrl::parse).unwrap_or_else(|| RelayUrl::parse("wss://push.invalid").expect("a fixed url"));
     Ok(RawEvent { id, kind, pubkey, created_at: Timestamp(created_at), json, source: EventSource::Relay { url } })
+}
+
+/// What can be said before the event is opened, or when it cannot be.
+async fn plain(store: &Store, push: &PushData) -> Result<Plain> {
+    let (kind, chat, title, muted) = match (push.kind, &push.group_id) {
+        (PushKind::Group, Some(id)) => {
+            let chat = groups::group_chat_id(id);
+            let group = groups::get(store, id).await?;
+            let muted = chats::is_muted(store, &chat).await?;
+            (ChatKind::Group, Some(chat), group.map(|g| g.name), muted)
+        }
+        _ => (ChatKind::Dm, None, None, false),
+    };
+    Ok(Plain { kind, chat, title, muted, count: push.count })
 }

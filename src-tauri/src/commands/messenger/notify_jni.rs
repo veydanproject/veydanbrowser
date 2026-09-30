@@ -49,9 +49,13 @@ fn error(message: impl std::fmt::Display) -> String {
 }
 
 fn run(data_dir: PathBuf, bundle: &[u8], push: &str) -> String {
-    let bundle = match KeyBundle::from_json(bundle) {
-        Ok(b) => b,
-        Err(e) => return error(e),
+    // No bytes: the handler has no keys, and only the chat is looked up.
+    let bundle = match bundle {
+        [] => None,
+        bytes => match KeyBundle::from_json(bytes) {
+            Ok(b) => Some(b),
+            Err(e) => return error(e),
+        },
     };
     let data: std::collections::BTreeMap<String, String> = match serde_json::from_str(push) {
         Ok(d) => d,
@@ -68,7 +72,7 @@ fn run(data_dir: PathBuf, bundle: &[u8], push: &str) -> String {
         Err(e) => return error(format!("runtime: {e}")),
     };
     let out = rt.block_on(async {
-        match describe(&data_dir, &bundle, &push).await {
+        match describe(&data_dir, bundle.as_ref(), &push).await {
             Ok(outcome) => serde_json::to_string(&outcome).unwrap_or_else(|e| error(e)),
             Err(e) => error(e),
         }

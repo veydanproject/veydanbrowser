@@ -484,16 +484,29 @@ async fn main() {
             if args.len() < 2 {
                 usage();
             }
-            let to = messenger_core::PubKey::parse(&args.remove(0)).unwrap_or_else(|| usage());
+            let to = args.remove(0);
             let bundle = rt.notify_bundle().await.unwrap_or_else(die).unwrap_or_else(|| {
                 eprintln!("error: no identity");
                 std::process::exit(1)
             });
             let keys = bundle.keys().unwrap_or_else(die);
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-            let wrapped = messenger_dm::wrap::wrap(&keys, &to, &messenger_core::Envelope::text(&args.join(" ")).encode(), now, None)
-                .unwrap_or_else(die);
-            println!("{}", wrapped.to_peer.json);
+            let content = messenger_core::Envelope::text(&args.join(" ")).encode();
+            // `group:<id>`: sealed with the group's newest key this identity holds.
+            if let Some(group_id) = to.strip_prefix("group:") {
+                let entry = bundle.groups.iter().rev().find(|g| g.group_id == group_id).unwrap_or_else(|| {
+                    eprintln!("error: no key of that group");
+                    std::process::exit(1)
+                });
+                let key = bundle.group_key(group_id, &entry.key_id).expect("a key of the bundle");
+                let signed = messenger_groups::wire::sign_message(&keys, group_id, &content, now, None).unwrap_or_else(die);
+                let sealed = messenger_groups::wire::seal_message(group_id, &key, &signed, &keys).unwrap_or_else(die);
+                println!("{}", sealed.json);
+            } else {
+                let to = messenger_core::PubKey::parse(&to).unwrap_or_else(|| usage());
+                let wrapped = messenger_dm::wrap::wrap(&keys, &to, &content, now, None).unwrap_or_else(die);
+                println!("{}", wrapped.to_peer.json);
+            }
         }
         "notify-describe" => {
             // What the phone would show for this event, from this data directory.
@@ -520,7 +533,7 @@ async fn main() {
                 std::process::exit(1)
             });
             rt.shutdown().await;
-            let outcome = messenger_notify::describe(&data_dir, &bundle, &push).await.unwrap_or_else(die);
+            let outcome = messenger_notify::describe(&data_dir, Some(&bundle), &push).await.unwrap_or_else(die);
             println!("{}", serde_json::to_string_pretty(&outcome).unwrap());
             return;
         }

@@ -393,6 +393,15 @@ export const messengerTranslations = {
     msg_push_told: 'Last told on {date}. Holds until {until}; renewed by itself while you use the app.',
     msg_push_pref_dm: 'Direct messages',
     msg_push_pref_groups: 'Groups',
+    msg_notify_title: 'What a notification shows',
+    msg_notify_text:
+      'The phone opens the message itself, with your keys. It keeps a copy of them in its own key store for that; with a PIN on the app there is no copy, and notifications say only that something came.',
+    msg_notify_locked:
+      'The app has a PIN. Your keys stay locked while the app is, so a notification can only say that a message came, not from whom or what.',
+    msg_notify_sender_text: 'Sender and text',
+    msg_notify_sender: 'Sender only',
+    msg_notify_none: 'Nothing',
+    msg_notify_lockscreen: 'Hide on the lock screen',
     msg_push_relays_title: 'Relays the server watches for you',
     msg_push_relays_none: 'No relay is watched. Messages will not bring a push.',
     msg_push_relay_ok: 'watched',
@@ -947,6 +956,15 @@ export const messengerTranslations = {
     msg_push_told: 'Последний раз сообщили {date}. Действует до {until}; продлевается само, пока вы пользуетесь приложением.',
     msg_push_pref_dm: 'Личные сообщения',
     msg_push_pref_groups: 'Группы',
+    msg_notify_title: 'Что показывать в уведомлении',
+    msg_notify_text:
+      'Телефон сам открывает сообщение вашими ключами. Для этого он держит их копию в своём хранилище ключей; с PIN-кодом на приложении копии нет, и уведомление говорит только, что что-то пришло.',
+    msg_notify_locked:
+      'На приложении стоит PIN-код. Ключи закрыты, пока закрыто приложение, поэтому уведомление скажет только, что пришло сообщение, но не от кого и не какое.',
+    msg_notify_sender_text: 'Отправителя и текст',
+    msg_notify_sender: 'Только отправителя',
+    msg_notify_none: 'Ничего',
+    msg_notify_lockscreen: 'Скрывать на экране блокировки',
     msg_push_relays_title: 'Реле, за которыми сервер следит для вас',
     msg_push_relays_none: 'Сервер не следит ни за одним реле. Сообщения не вызовут пуш.',
     msg_push_relay_ok: 'следит',

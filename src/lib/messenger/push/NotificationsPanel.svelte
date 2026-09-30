@@ -11,7 +11,7 @@
   let editingServer = $state(false);
   let serverDraft = $state('');
 
-  onMount(() => { pushStore.load(); });
+  onMount(() => { pushStore.load(); pushStore.loadNotify(); });
 
   const view = $derived(pushStore.view);
   const status = $derived(view?.status ?? null);
@@ -114,6 +114,41 @@
           ></button>
         </div>
 
+        {#if pushStore.notify}
+          {@const n = pushStore.notify}
+          <div class="block">
+            <span class="label">{$t('msg_notify_title')}</span>
+            {#if n.locked}
+              <p class="muted small">{$t('msg_notify_locked')}</p>
+            {:else}
+              <p class="muted small">{$t('msg_notify_text')}</p>
+            {/if}
+            <div class="choices" role="radiogroup" aria-label={$t('msg_notify_title')}>
+              {#each ['sender_text', 'sender', 'none'] as const as choice (choice)}
+                <button
+                  class="choice"
+                  class:on={n.content === choice}
+                  role="radio"
+                  aria-checked={n.content === choice}
+                  disabled={pushStore.busy || n.locked}
+                  onclick={() => pushStore.setNotify(choice, n.lockscreen_hidden)}
+                >{$t(`msg_notify_${choice}` as 'msg_notify_sender_text')}</button>
+              {/each}
+            </div>
+            <div class="line">
+              <span>{$t('msg_notify_lockscreen')}</span>
+              <button
+                class="toggle"
+                class:on={n.lockscreen_hidden}
+                disabled={pushStore.busy || n.locked}
+                onclick={() => pushStore.setNotify(n.content, !n.lockscreen_hidden)}
+                aria-pressed={n.lockscreen_hidden}
+                aria-label={$t('msg_notify_lockscreen')}
+              ></button>
+            </div>
+          </div>
+        {/if}
+
         {#if status.state === 'registered'}
           <div class="block">
             <span class="label">{$t('msg_push_relays_title')}</span>
@@ -211,6 +246,13 @@
   .state.ok { color: var(--success-text); }
   .state.bad, .warn { margin: 0; font-size: var(--fs-sm); color: var(--danger-text); }
   .block { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .choices { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+  .choice {
+    font: inherit; font-size: var(--fs-xs); color: var(--text-2); cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-full, 999px); padding: 4px 10px;
+  }
+  .choice.on { background: var(--accent-tint); color: var(--accent-text-2); border-color: transparent; }
+  .choice:disabled { opacity: 0.5; cursor: default; }
   .label { font-size: var(--fs-xs); color: var(--text-3); }
   .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
   .row {

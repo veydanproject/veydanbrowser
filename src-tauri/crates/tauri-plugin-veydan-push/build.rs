@@ -12,6 +12,8 @@ const COMMANDS: &[&str] = &[
     "set_context",
     "take_tap",
     "cancel",
+    "store_keys",
+    "clear_keys",
     "register_listener",
     "remove_listener",
 ];

@@ -159,6 +159,22 @@ impl<R: Runtime> VeydanPush<R> {
             .map(|_| ())
     }
 
+    /// Hands the keys the push handler opens messages with to the phone's
+    /// key store, sealed, for the process a push starts. Base64 of the
+    /// bundle; what is in it is the app's business.
+    pub async fn store_keys(&self, bundle: &[u8]) -> Result<()> {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bundle);
+        self.call::<serde_json::Value>("storeKeys", serde_json::json!({ "bundle": b64 }))
+            .await
+            .map(|_| ())
+    }
+
+    /// Takes the keys away from the push handler.
+    pub async fn clear_keys(&self) -> Result<()> {
+        self.call::<serde_json::Value>("clearKeys", ()).await.map(|_| ())
+    }
+
     /// Calls `handler` on every `event`, for as long as the app runs.
     pub async fn listen<F>(&self, event: Event, handler: F) -> Result<()>
     where

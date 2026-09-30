@@ -4,66 +4,78 @@
 package net.veydan.push
 
 /**
- * One push, as the server sent it (VPush/spec/protocol.md). Everything in it
- * comes from outside and is treated so: what does not look right is dropped.
+ * One push, as the server sent it (VPush/spec/protocol.md, payload
+ * version 2). The server says what kind of thing came and carries the
+ * event when it fits; every word shown comes from this phone. Everything
+ * here came from outside and is treated so: what does not look right is
+ * dropped.
  */
 internal data class Push(
   val version: Int,
   val type: String,
-  val title: String?,
-  val body: String?,
+  /** The outer event as JSON, when the push could carry it. */
+  val event: String?,
+  val eventId: String?,
+  val relay: String?,
   val groupId: String?,
-  val count: Int?,
-  val trace: String?,
+  /** How many events this push stands for; more than one after a burst. */
+  val count: Int,
+  val trace: String,
+  /** Payload of a service push, as JSON. */
+  val data: String?,
 ) {
-  /** A push without text is handled, not shown. */
+  /** Handled, not shown. */
   val silent: Boolean
-    get() = title.isNullOrBlank() && body.isNullOrBlank()
+    get() = type == TYPE_SYNC || type == TYPE_MANIFEST
 
   /** About a message, as opposed to a word from the server itself. */
   val aboutMessage: Boolean
     get() = type == TYPE_DM || type == TYPE_GROUP
 
-  /** Notifications with the same key replace one another. */
-  val key: String
-    get() = when (type) {
-      TYPE_DM -> KEY_DM
-      TYPE_GROUP -> "$KEY_GROUP${groupId ?: ""}"
-      else -> "service:${trace ?: type}"
-    }
-
-  /** The chat a tap opens. A direct message names none: the server does not know the sender. */
-  val chat: String?
-    get() = if (type == TYPE_GROUP && groupId != null) "$KEY_GROUP$groupId" else null
+  /** The map the messenger's core reads; the same keys the server sent. */
+  fun asData(): Map<String, String> = buildMap {
+    put("v", version.toString())
+    put("type", type)
+    event?.let { put("event", it) }
+    eventId?.let { put("event_id", it) }
+    relay?.let { put("relay", it) }
+    groupId?.let { put("group_id", it) }
+    if (count > 1) put("count", count.toString())
+    put("trace", trace)
+  }
 
   companion object {
     /** The version of the format this code understands. */
-    const val VERSION = 1
+    const val VERSION = 2
 
     const val TYPE_DM = "dm"
     const val TYPE_GROUP = "group"
-    const val KEY_DM = "dm"
-    const val KEY_GROUP = "group:"
+    const val TYPE_SYNC = "sync"
+    const val TYPE_TEST = "test"
+    const val TYPE_BROADCAST = "broadcast"
+    const val TYPE_MANIFEST = "manifest_update"
 
     private val TYPE = Regex("^[a-z_]{1,32}$")
     private val HEX64 = Regex("^[0-9a-f]{64}$")
     private val TRACE = Regex("^[0-9A-Za-z_-]{1,64}$")
+    private val CHAT = Regex("^(dm|group):[0-9a-f]{64}$")
 
     fun from(data: Map<String, String>): Push? {
       val type = data["type"]?.takeIf { TYPE.matches(it) } ?: return null
       return Push(
         version = data["v"]?.toIntOrNull() ?: 1,
         type = type,
-        title = data["title"]?.take(200),
-        body = data["body"]?.take(1000),
+        event = data["event"]?.takeIf { it.isNotEmpty() && it.length <= 8192 },
+        eventId = data["event_id"]?.takeIf { HEX64.matches(it) },
+        relay = data["relay"]?.takeIf { it.startsWith("wss://") || it.startsWith("ws://") },
         groupId = data["group_id"]?.takeIf { HEX64.matches(it) },
-        count = data["count"]?.toIntOrNull()?.takeIf { it in 2..9999 },
-        trace = data["trace"]?.takeIf { TRACE.matches(it) },
+        count = data["count"]?.toIntOrNull()?.takeIf { it in 1..9999 } ?: 1,
+        trace = data["trace"]?.takeIf { TRACE.matches(it) } ?: "-",
+        data = data["data"],
       )
     }
 
-    /** Is this a key the app may ask to clear. */
-    fun isChatKey(key: String): Boolean =
-      key == KEY_DM || (key.startsWith(KEY_GROUP) && HEX64.matches(key.removePrefix(KEY_GROUP)))
+    /** `dm:<pubkey>` or `group:<id>`: what a notification is tagged with and a tap opens. */
+    fun isChatKey(key: String): Boolean = CHAT.matches(key)
   }
 }
