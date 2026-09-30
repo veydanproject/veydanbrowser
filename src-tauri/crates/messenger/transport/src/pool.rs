@@ -379,12 +379,20 @@ impl Transport for RelayPool {
             }
             Outbound::Subscribe { id, filter, .. } => {
                 let f = Self::parse_filter(&filter)?;
-                self.client
+                let id = SubscriptionId::new(id.0);
+                // A subscription is sent again to change its filter (a group
+                // joined, a contact added). nostr-sdk keeps the first filter
+                // of an ID and refuses the next one, reporting it only per
+                // relay: without closing the old one first, nothing changes
+                // until the app restarts.
+                let _ = self.client.unsubscribe(&id).await;
+                let out = self
+                    .client
                     .subscribe(f)
-                    .with_id(SubscriptionId::new(id.0))
+                    .with_id(id)
                     .await
                     .map_err(|e| MessengerError::Transport(e.to_string()))?;
-                Ok(Ack { accepted_by: vec![], rejected_by: vec![] })
+                Ok(ack_from(&out))
             }
             Outbound::Unsubscribe { id } => {
                 // Unsubscribing from a relay that already dropped the
@@ -480,6 +488,52 @@ mod tests {
 
         sender.shutdown().await;
         receiver.shutdown().await;
+    }
+
+    /// A group joined while the app runs is added to the subscription that
+    /// already exists: the same ID with a new filter must replace the old one.
+    #[tokio::test]
+    async fn subscribing_again_under_the_same_id_replaces_the_filter() {
+        let (_relay, url) = local_relay().await;
+        let config = || vec![RelayConfig { url: url.clone(), read: true, write: true, api_key: None }];
+
+        let alice = Keys::generate();
+        let bob = Keys::generate();
+        let alice_out = RelayPool::new(Some(alice.clone()));
+        let bob_out = RelayPool::new(Some(bob.clone()));
+        let receiver = RelayPool::new(None);
+        let mut inbox = receiver.events();
+        for pool in [&alice_out, &bob_out, &receiver] {
+            pool.set_relays(config()).await.unwrap();
+        }
+        for _ in 0..50 {
+            let mut all = true;
+            for pool in [&alice_out, &bob_out, &receiver] {
+                all &= pool.status().await.relays.iter().all(|r| r.state == RelayState::Connected);
+            }
+            if all {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let by = |keys: &Keys| CoreFilter(serde_json::json!({ "kinds": [1], "authors": [keys.public_key().to_hex()] }));
+        let id = || SubId("same".into());
+        receiver.send(Outbound::Subscribe { id: id(), filter: by(&alice), scope: Scope::Own }).await.unwrap();
+        receiver.send(Outbound::Subscribe { id: id(), filter: by(&bob), scope: Scope::Own }).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let ack = bob_out.send(Outbound::PublishOwn { event: signed_note(&bob, "from bob") }).await.unwrap();
+        assert!(ack.is_delivered(), "{ack:?}");
+        let got = tokio::time::timeout(Duration::from_secs(5), inbox.recv())
+            .await
+            .expect("the second filter is the one the relay has")
+            .unwrap();
+        assert_eq!(got.pubkey.as_hex(), bob.public_key().to_hex());
+
+        for pool in [alice_out, bob_out, receiver] {
+            pool.shutdown().await;
+        }
     }
 
     #[tokio::test]
