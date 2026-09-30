@@ -234,6 +234,18 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      # Firebase settings for the messenger's pushes. The file is gitignored;
+      # without it the APK builds but pushes do not work.
+      - name: Write google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON secret (base64 of google-services.json) is required"
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON" | base64 -d > src-tauri/gen/android/app/google-services.json
+
       - name: Build Android APK
         run: pnpm tauri android build --target aarch64
 
