@@ -18,6 +18,7 @@
   import { notesLock } from '$lib/store/notes-lock.svelte';
   import { messengerStore } from '$lib/messenger/store.svelte';
   import { startPushBridge } from '$lib/messenger/push/bridge';
+  import NoticeBanner from '$lib/messenger/push/NoticeBanner.svelte';
 
   let { children }: { children: Snippet } = $props();
 
@@ -65,6 +66,7 @@
 </div>
 
 {#if !notesLock.locked}
+  <NoticeBanner />
   <HubSheet open={hubOpen} onclose={() => (hubOpen = false)} />
   <NotesMoreSheet open={moreOpen} onclose={() => (moreOpen = false)} />
 {/if}
