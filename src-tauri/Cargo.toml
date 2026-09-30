@@ -1,6 +1,6 @@
 [package]
 name = "veydanspace"
-version = "4.0.2"
+version = "4.0.3"
 description = "Anti-detect browser & fingerprint profile manager"
 authors = ["Veydan Project"]
 edition = "2021"
