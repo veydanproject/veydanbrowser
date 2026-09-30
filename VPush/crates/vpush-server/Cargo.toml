@@ -34,5 +34,6 @@ sqlx = { workspace = true }
 [dev-dependencies]
 wiremock = { workspace = true }
 reqwest = { workspace = true }
-tokio = { workspace = true }
+# `test-util`: a test stops the clock to see a deadline pass without waiting for it.
+tokio = { workspace = true, features = ["test-util"] }
 nostr-sdk = { workspace = true, features = ["local-relay"] }

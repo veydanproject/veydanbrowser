@@ -15,14 +15,13 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use vpush_proto::{
-    Channel, DeviceAnswer, DevicePut, DeviceView, ErrorCode, Payload, PushType, RelayAnswer,
-    RelayStatus, RelayView, TestAnswer,
+    Channel, DeviceAnswer, DevicePut, DeviceView, ErrorCode, RelayAnswer, RelayStatus, RelayView,
+    TestAnswer,
 };
 
 use super::{error, now, Api, RequestId};
 use crate::auth::AuthError;
-use crate::delivery::retry::{self, RetryPolicy};
-use crate::delivery::{mask, Message, Outcome, ProviderKind, Target, TEST_TTL};
+use crate::delivery::{mask, test_push, Outcome, ProviderKind, Target};
 use crate::store::{Device, DeviceInput, StoreError, WatchedRelay};
 
 const MAX_TOKEN: usize = 4096;
@@ -73,6 +72,16 @@ impl Refusal {
 impl From<AuthError> for Refusal {
     fn from(e: AuthError) -> Self {
         let (code, message) = match e {
+            // Nothing is wrong with the signature; the server has no room
+            // to remember one more.
+            AuthError::Busy(wait) => {
+                return Self {
+                    status: StatusCode::TOO_MANY_REQUESTS,
+                    code: ErrorCode::RateLimited,
+                    message: "too many requests at once; come back later".to_string(),
+                    retry_after: Some(wait),
+                }
+            }
             AuthError::Missing => (
                 ErrorCode::AuthMissing,
                 "the request is not signed: no `Authorization: Nostr …` header".to_string(),
@@ -466,7 +475,7 @@ pub async fn test(
             .ok_or_else(no_device)?;
 
         api.tests
-            .take(&asked.pubkey, &asked.device_id)
+            .take(&device.token)
             .map_err(|wait| Refusal {
                 status: StatusCode::TOO_MANY_REQUESTS,
                 code: ErrorCode::RateLimited,
@@ -485,22 +494,10 @@ pub async fn test(
             Refusal::new(StatusCode::UNPROCESSABLE_ENTITY, ErrorCode::ProviderDisabled, e)
         })?;
 
-        // The device shows a test push in its own words; the push says
-        // only what it is and how to find it in the log.
-        let mut payload = Payload::new(PushType::Test);
-        payload.trace = Some(rid.clone());
-        let message = Message {
-            payload,
-            fallback: None,
-            collapse_key: None,
-            ttl: TEST_TTL,
-            urgent: true,
-        };
         let target = Target {
             token: device.token.clone(),
         };
-        let delivery =
-            retry::deliver(provider.as_ref(), &target, &message, RetryPolicy::default()).await;
+        let delivery = test_push(provider.as_ref(), &target, &rid).await;
         let outcome = outcome_name(delivery.outcome);
         let last = delivery.attempts.last();
         tracing::info!(
@@ -516,7 +513,7 @@ pub async fn test(
             "test push"
         );
         api.store
-            .record_outcome(&asked.pubkey, &asked.device_id, outcome, now())
+            .record_outcome(&asked.pubkey, &asked.device_id, &target.token, outcome, now())
             .await
             .map_err(|e| Refusal::internal(e, &rid))?;
         Ok::<_, Refusal>(TestAnswer {
@@ -552,6 +549,15 @@ mod tests {
         for bad in ["", "short", &"x".repeat(65), "with space", "sl/ash", "точка-1234"] {
             assert!(!device_id_ok(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn no_room_for_one_more_signature_is_too_many_requests_not_a_bad_signature() {
+        let refusal = Refusal::from(AuthError::Busy(Duration::from_secs(40)));
+        assert_eq!(refusal.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(refusal.code, ErrorCode::RateLimited);
+        assert_eq!(refusal.retry_after, Some(Duration::from_secs(40)));
+        assert_eq!(Refusal::from(AuthError::Replay).status, StatusCode::UNAUTHORIZED);
     }
 
     #[test]

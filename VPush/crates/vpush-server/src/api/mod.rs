@@ -2,7 +2,6 @@
 
 mod devices;
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -19,6 +18,7 @@ use vpush_proto::{AppInfo, ErrorBody, ErrorCode, ErrorDetail, Info, Limits};
 use crate::auth::Nip98;
 use crate::config::Config;
 use crate::delivery::Providers;
+use crate::limit::{Recent, Refused};
 use crate::relays::RelayPolicy;
 use crate::store::Store;
 use crate::version;
@@ -70,42 +70,36 @@ pub fn now() -> u64 {
         .unwrap_or(0)
 }
 
-/// How many test pushes a device has asked for in the last hour.
+/// How many test pushes were asked for in the last hour, by the token they
+/// go to. A token is one phone, whatever it is registered as: the same
+/// token under a new device id has no allowance of its own.
 pub struct TestLimiter {
-    per_hour: u32,
-    asked: Mutex<HashMap<(String, String), Vec<Instant>>>,
+    asked: Mutex<Recent<[u8; 32]>>,
 }
 
 impl TestLimiter {
     const HOUR: Duration = Duration::from_secs(3600);
+    /// Tokens remembered at one time. Past this many a token that is not
+    /// remembered is told to come back later.
+    const MAX_TOKENS: usize = 100_000;
 
     pub fn new(per_hour: u32) -> Self {
         Self {
-            per_hour,
-            asked: Mutex::new(HashMap::new()),
+            asked: Mutex::new(Recent::new(Self::HOUR, per_hour as usize, Self::MAX_TOKENS)),
         }
     }
 
     /// Counts one more request, or says after how long to come back.
-    pub fn take(&self, pubkey: &str, device_id: &str) -> Result<(), Duration> {
-        let now = Instant::now();
-        let mut asked = self.asked.lock().unwrap();
-        if asked.len() >= 4096 {
-            asked.retain(|_, times| {
-                times.retain(|t| now.duration_since(*t) < Self::HOUR);
-                !times.is_empty()
-            });
-        }
-        let times = asked
-            .entry((pubkey.to_string(), device_id.to_string()))
-            .or_default();
-        times.retain(|t| now.duration_since(*t) < Self::HOUR);
-        if times.len() >= self.per_hour as usize {
-            let oldest = times.iter().min().copied().unwrap_or(now);
-            return Err(Self::HOUR.saturating_sub(now.duration_since(oldest)));
-        }
-        times.push(now);
-        Ok(())
+    pub fn take(&self, token: &str) -> Result<(), Duration> {
+        // Remembered by its hash: a token may be thousands of bytes long.
+        let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
+        let mut key = [0u8; 32];
+        key.copy_from_slice(digest.as_ref());
+        self.asked
+            .lock()
+            .unwrap()
+            .take(key, Instant::now())
+            .map_err(Refused::wait)
     }
 }
 
@@ -234,13 +228,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_test_limit_is_per_device() {
+    fn the_test_limit_is_per_token() {
         let limiter = TestLimiter::new(2);
-        limiter.take("alice", "phone").unwrap();
-        limiter.take("alice", "phone").unwrap();
-        let wait = limiter.take("alice", "phone").unwrap_err();
+        limiter.take("token-of-the-phone").unwrap();
+        limiter.take("token-of-the-phone").unwrap();
+        let wait = limiter.take("token-of-the-phone").unwrap_err();
         assert!(wait <= TestLimiter::HOUR && wait > Duration::from_secs(3590), "{wait:?}");
-        limiter.take("alice", "tablet").unwrap();
-        limiter.take("bob", "phone").unwrap();
+        limiter.take("token-of-the-tablet").unwrap();
     }
 }

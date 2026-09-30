@@ -454,6 +454,54 @@ async fn a_test_push_says_only_what_it_is() {
 }
 
 #[tokio::test]
+async fn the_same_phone_under_a_new_device_id_has_no_test_pushes_of_its_own() {
+    let server = start_with("[limits]\ntest_per_hour = 2\n").await;
+    server
+        .fcm_answers(ResponseTemplate::new(200).set_body_json(json!({ "name": "m/1" })))
+        .await;
+    let alice = Keys::generate();
+
+    server.ask(&alice, "PUT", DEVICE, Some(registration())).await;
+    for _ in 0..2 {
+        let answer = server.ask(&alice, "POST", &format!("{DEVICE}/test"), None).await;
+        assert_eq!(answer.status, 200, "{}", answer.body);
+    }
+
+    // The same token, registered again as another device.
+    let renamed = "/v1/devices/phone-0002";
+    assert_eq!(server.ask(&alice, "PUT", renamed, Some(registration())).await.status, 200);
+    let third = server.ask(&alice, "POST", &format!("{renamed}/test"), None).await;
+    assert_eq!((third.status, code(&third)), (429, "rate_limited"), "{}", third.body);
+    assert_eq!(server.pushes().await.len(), 2);
+
+    // Another phone has an allowance of its own.
+    let mut other = registration();
+    other["channel"]["token"] = json!("token-of-the-tablet");
+    let tablet = "/v1/devices/tablet-0001";
+    assert_eq!(server.ask(&alice, "PUT", tablet, Some(other)).await.status, 200);
+    assert_eq!(server.ask(&alice, "POST", &format!("{tablet}/test"), None).await.status, 200);
+}
+
+#[tokio::test]
+async fn a_test_push_to_a_busy_service_is_tried_once_and_says_so() {
+    let server = start().await;
+    server
+        .fcm_answers(ResponseTemplate::new(503).set_body_json(json!({
+            "error": { "status": "UNAVAILABLE", "message": "busy",
+                       "details": [{ "errorCode": "UNAVAILABLE" }] }
+        })))
+        .await;
+    let alice = Keys::generate();
+    server.ask(&alice, "PUT", DEVICE, Some(registration())).await;
+
+    let answer = server.ask(&alice, "POST", &format!("{DEVICE}/test"), None).await;
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    assert_eq!(answer.body["outcome"], "retry");
+    assert_eq!(server.pushes().await.len(), 1, "whoever asked is waiting: no second attempt");
+    assert_eq!(server.ask(&alice, "GET", DEVICE, None).await.body["last_outcome"], "retry");
+}
+
+#[tokio::test]
 async fn a_token_the_push_service_gave_up_on_is_marked_and_a_new_one_clears_the_mark() {
     let server = start().await;
     server

@@ -55,11 +55,11 @@ current()  { readlink "$DIR/current"; }
 previous() { readlink "$DIR/previous" 2>/dev/null || echo none; }
 alive()    { "$DIR/current/vpush" ctl --config "$DIR/etc/vpush.toml" health >/dev/null 2>&1; }
 
-# A release that passes check-config and then dies.
-cat > "$ROOT/broken" <<'BROKEN'
+# A release that reads the config, saves the database, and then does not start.
+cat > "$ROOT/broken" <<BROKEN
 #!/usr/bin/env bash
-[ "$1" = check-config ] && exit 0
-exit 1
+[ "\$1" = serve ] && exit 1
+exec "$VPUSH_DIR/dist/vpush" "\$@"
 BROKEN
 chmod +x "$ROOT/broken"
 
@@ -75,6 +75,9 @@ activate r2 dist/vpush > "$ROOT/out" 2>&1 || { cat "$ROOT/out"; fail "second rel
 expect "current is r2"            [ "$(current)" = releases/r2 ]
 expect "previous is r1"           [ "$(previous)" = releases/r1 ]
 expect "database was saved"       [ "$(ls "$DIR/data/backups" | wc -l)" = 1 ]
+# A copy that is a database can itself be copied by the same command.
+sed "s|^path = .*|path = \"$(ls "$DIR"/data/backups/*.db)\"|" "$DIR/etc/vpush.toml" > "$ROOT/copy.toml"
+expect "the copy is a whole database" "$DIR/current/vpush" backup --config "$ROOT/copy.toml" --out "$ROOT/copy-of-copy.db"
 expect "server is alive"          alive
 
 echo "== a release that does not start"
@@ -105,6 +108,19 @@ expect "deploy reported failure"  grep -q "rolled back to releases/r2, which is 
 expect "current is r2 again"      [ "$(current)" = releases/r2 ]
 expect "server is alive"          alive
 
+echo "== a database that cannot be saved"
+# A release whose `backup` fails: nothing is switched, the old one runs on.
+cat > "$ROOT/nobackup" <<NOBACKUP
+#!/usr/bin/env bash
+[ "\$1" = backup ] && exit 1
+exec "$VPUSH_DIR/dist/vpush" "\$@"
+NOBACKUP
+chmod +x "$ROOT/nobackup"
+if activate r3c "$ROOT/nobackup" > "$ROOT/out" 2>&1; then fail "a release was switched to without a copy of the database"; fi
+expect "reason is given"          grep -q "could not be saved" "$ROOT/out"
+expect "current is still r2"      [ "$(current)" = releases/r2 ]
+expect "server is alive"          alive
+
 echo "== a wrong checksum"
 cp dist/vpush "$ROOT/upload"
 if bash scripts/remote-activate.sh "$DIR" r4 "$ROOT/upload" deadbeef > "$ROOT/out" 2>&1; then
@@ -128,6 +144,18 @@ bash scripts/remote-rollback.sh "$DIR" > "$ROOT/out" 2>&1 || { cat "$ROOT/out"; 
 expect "current is r1"            [ "$(current)" = releases/r1 ]
 expect "previous is r2"           [ "$(previous)" = releases/r2 ]
 expect "server is alive"          alive
+
+echo "== rollback to a release that does not stay up"
+# r1 is the previous one now; it is replaced by one that falls at once.
+real_r2="$DIR/releases/r2/vpush.real"
+mv "$DIR/releases/r2/vpush" "$real_r2"
+cp "$ROOT/broken" "$DIR/releases/r2/vpush"
+if bash scripts/remote-rollback.sh "$DIR" > "$ROOT/out" 2>&1; then fail "a release that does not start was rolled back to"; fi
+expect "reason is given"          grep -q "does not stay up; back on releases/r1" "$ROOT/out"
+expect "current is r1 again"      [ "$(current)" = releases/r1 ]
+expect "previous is r2 again"     [ "$(previous)" = releases/r2 ]
+expect "server is alive"          alive
+mv "$real_r2" "$DIR/releases/r2/vpush"
 
 echo "== old releases are removed"
 activate r6 dist/vpush > "$ROOT/out" 2>&1 || { cat "$ROOT/out"; fail "release r6"; }

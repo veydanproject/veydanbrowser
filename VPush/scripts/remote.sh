@@ -18,6 +18,11 @@ if [ ! -f "$DEPLOY_ENV" ]; then
   echo "       cp deploy/deploy.example deploy.env   and put the server in it" >&2
   exit 1
 fi
+# The file may hold the server's password: it is for its owner alone.
+if [ -n "$(find "$DEPLOY_ENV" -perm /077 2>/dev/null)" ]; then
+  chmod 600 "$DEPLOY_ENV"
+  echo "vpush: $DEPLOY_ENV was readable by others; it is 600 now" >&2
+fi
 # shellcheck disable=SC1090
 source "$DEPLOY_ENV"
 
@@ -26,9 +31,21 @@ VPUSH_USER="${VPUSH_USER:-root}"
 VPUSH_PORT="${VPUSH_PORT:-22}"
 VPUSH_REMOTE_DIR="${VPUSH_REMOTE_DIR:-/opt/vpush}"
 
+# The server's key is the one recorded by `make vpush-trust`, and no other:
+# a machine that answers in the server's place would otherwise be handed
+# the password on first contact.
+KNOWN_HOSTS="$(dirname "$DEPLOY_ENV")/known_hosts"
+if [ ! -s "$KNOWN_HOSTS" ] && [ -z "${VPUSH_TRUSTING:-}" ]; then
+  echo "vpush: the key of $VPUSH_HOST is not recorded yet" >&2
+  echo "       make vpush-trust   shows it and records it, once" >&2
+  exit 1
+fi
+
 mkdir -p "$HOME/.ssh"
 SSH_OPTS=(
   -p "$VPUSH_PORT"
+  -o "UserKnownHostsFile=$KNOWN_HOSTS"
+  -o StrictHostKeyChecking=yes
   -o ControlMaster=auto
   -o "ControlPath=$HOME/.ssh/vpush-%C"
   -o ControlPersist=120
@@ -36,6 +53,8 @@ SSH_OPTS=(
 )
 SCP_OPTS=(
   -P "$VPUSH_PORT"
+  -o "UserKnownHostsFile=$KNOWN_HOSTS"
+  -o StrictHostKeyChecking=yes
   -o ControlMaster=auto
   -o "ControlPath=$HOME/.ssh/vpush-%C"
   -o ControlPersist=120
@@ -54,11 +73,8 @@ if [ -n "${VPUSH_PASSWORD:-}" ]; then
   printf '#!/bin/sh\nprintf "%%s\\n" "$VPUSH_PASSWORD"\n' > "$ASKPASS"
   trap 'rm -f "$ASKPASS"' EXIT
   export VPUSH_PASSWORD SSH_ASKPASS="$ASKPASS" SSH_ASKPASS_REQUIRE=force
-  # Every question of ssh goes to the hook, and it knows one answer. A server
-  # seen for the first time is accepted and remembered; one whose key changed
-  # is still refused.
+  # Every question of ssh goes to the hook, and it knows one answer.
   PASSWORD_OPTS=(
-    -o StrictHostKeyChecking=accept-new
     -o PreferredAuthentications=password,keyboard-interactive
     -o PubkeyAuthentication=no
     -o NumberOfPasswordPrompts=1
@@ -81,7 +97,9 @@ run_remote() {
   local script="$1"; shift
   local args="" a
   for a in "$@"; do args+=" $(printf %q "$a")"; done
-  ssh "${SSH_OPTS[@]}" "$REMOTE" "$(remote_env)bash -s --$args" < "$VPUSH_DIR/scripts/$script"
+  # What the server-side scripts share goes first.
+  cat "$VPUSH_DIR/scripts/remote-lib.sh" "$VPUSH_DIR/scripts/$script" \
+    | ssh "${SSH_OPTS[@]}" "$REMOTE" "$(remote_env)bash -s --$args"
 }
 
 # For commands a person watches (logs): gets a terminal.

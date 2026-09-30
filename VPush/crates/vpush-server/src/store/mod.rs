@@ -101,10 +101,15 @@ pub trait Store: Send + Sync + 'static {
 
     /// Notes what became of the last push to the device. `dead_token` also
     /// marks the device so that nothing more is sent to it.
+    ///
+    /// `token` is the one the push went to. A device that has registered a
+    /// new token since is left as it is: what the push service said of the
+    /// former token says nothing of the new one.
     async fn record_outcome(
         &self,
         pubkey: &str,
         device_id: &str,
+        token: &str,
         outcome: &str,
         now: u64,
     ) -> Result<()>;
@@ -152,6 +157,8 @@ pub enum Seen {
     Quiet = 2,
     /// For nobody who is registered.
     Nobody = 3,
+    /// Dated too far from now to be pushed.
+    Misdated = 4,
 }
 
 /// A device a push goes to.
@@ -176,6 +183,15 @@ pub trait WatchStore: Send + Sync + 'static {
     async fn baselined(&self, url: &str) -> Result<Vec<(WatchKind, String)>>;
 
     async fn set_baselined(&self, url: &str, targets: &[(WatchKind, String)], now: u64) -> Result<()>;
+
+    /// Forgets that stock was taken of these keys and groups on a relay.
+    /// They are no longer watched there; when they are again, what the
+    /// relay holds for them by then is old, and stock is taken anew.
+    async fn unset_baselined(&self, url: &str, targets: &[(WatchKind, String)]) -> Result<()>;
+
+    /// Forgets the stock taken on every relay but these. Returns how many
+    /// keys and groups were forgotten.
+    async fn keep_baselined(&self, urls: &[String]) -> Result<u64>;
 
     /// True the first time an event is seen, false ever after.
     async fn first_seen(&self, event_id: &str, what: Seen, now: u64) -> Result<bool>;

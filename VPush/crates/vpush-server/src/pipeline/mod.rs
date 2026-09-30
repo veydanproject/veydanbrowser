@@ -31,6 +31,13 @@ use throttle::{Named, Throttle, Verdict};
 const TTL: Duration = Duration::from_secs(24 * 3600);
 /// Pushes on their way to the push services at one time.
 const SENDING: usize = 32;
+/// For how long an event that was dealt with is remembered. A relay is
+/// asked two days back, where the senders of sealed messages date them, so
+/// an event seen longer ago than this does not come again.
+pub const SEEN_FOR: u64 = 3 * 86_400;
+/// How far ahead of the server's clock an event may be dated: clocks differ
+/// by minutes, not by more.
+const AHEAD: u64 = 15 * 60;
 
 /// What became of an event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +52,8 @@ pub enum Dealt {
     Nobody,
     /// Dealt with before: from another relay, or before a reconnect.
     Duplicate,
+    /// Dated further from now than an event that was just written can be.
+    Misdated,
     Pushed {
         /// Pushed at once.
         now: usize,
@@ -157,6 +166,17 @@ impl Pipeline {
         if baseline {
             self.store.first_seen(&id, Seen::Baseline, at).await?;
             return Ok(Dealt::Baseline);
+        }
+        // An event dated far from now was not written just now. Dated long
+        // ago, it may have been pushed and then forgotten with all that is
+        // older than `SEEN_FOR`. Dated ahead, it is newer than any date a
+        // relay is asked from for as long as its date is ahead, and is
+        // given again after it was forgotten here. Pushed, either is
+        // pushed once more every time it is forgotten.
+        let dated = event.created_at.as_secs();
+        if dated > at + AHEAD || dated < at.saturating_sub(SEEN_FOR) {
+            self.store.first_seen(&id, Seen::Misdated, at).await?;
+            return Ok(Dealt::Misdated);
         }
         if classify::is_silent(event) {
             self.store.first_seen(&id, Seen::Quiet, at).await?;
@@ -325,7 +345,13 @@ impl Pipeline {
             );
             if let Err(e) = pipeline
                 .store
-                .record_outcome(&order.to.pubkey, &order.to.device_id, outcome, now())
+                .record_outcome(
+                    &order.to.pubkey,
+                    &order.to.device_id,
+                    &order.to.token,
+                    outcome,
+                    now(),
+                )
                 .await
             {
                 tracing::error!(trace = %order.trace, error = %e, "outcome not recorded");

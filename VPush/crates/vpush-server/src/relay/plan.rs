@@ -18,7 +18,7 @@ pub const GROUP_BACK: u64 = 600;
 /// One request to a relay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sub {
-    /// `dm-0`, `group-3`
+    /// `dm-0-g17`, `group-3-g17`
     pub id: String,
     pub kind: WatchKind,
     pub targets: Vec<String>,
@@ -29,7 +29,17 @@ pub struct Sub {
 /// The requests for a plan. `last_alive` is when the server last had the
 /// relay on the line: group events are asked for from a little before that,
 /// so that what came while the server was away is not lost.
-pub fn subscriptions(plan: &RelayPlan, now: u64, last_alive: Option<u64>) -> Vec<Sub> {
+///
+/// `generation` counts the times the requests were made anew, and is in
+/// every id. A relay answers a request some time after it was made, and by
+/// then the request may have been replaced: an answer with the number of
+/// an earlier generation is not taken for an answer to this one.
+pub fn subscriptions(
+    plan: &RelayPlan,
+    now: u64,
+    last_alive: Option<u64>,
+    generation: u64,
+) -> Vec<Sub> {
     let group_since = last_alive
         .unwrap_or(now)
         .min(now)
@@ -41,7 +51,7 @@ pub fn subscriptions(plan: &RelayPlan, now: u64, last_alive: Option<u64>) -> Vec
             .chunks(CHUNK)
             .enumerate()
             .map(|(i, chunk)| Sub {
-                id: format!("{}-{i}", kind.as_str()),
+                id: format!("{}-{i}-g{generation}", kind.as_str()),
                 kind,
                 targets: chunk.to_vec(),
                 since,
@@ -69,15 +79,15 @@ mod tests {
 
     #[test]
     fn direct_messages_are_asked_for_two_days_back() {
-        let subs = subscriptions(&plan(1, 0), NOW, Some(NOW));
+        let subs = subscriptions(&plan(1, 0), NOW, Some(NOW), 17);
         assert_eq!(subs.len(), 1);
-        assert_eq!(subs[0].id, "dm-0");
+        assert_eq!(subs[0].id, "dm-0-g17");
         assert_eq!(subs[0].since, NOW - 2 * 86_400 - 600);
     }
 
     #[test]
     fn group_events_are_asked_for_from_when_the_relay_was_last_on_the_line() {
-        let since = |last_alive| subscriptions(&plan(0, 1), NOW, last_alive)[0].since;
+        let since = |last_alive| subscriptions(&plan(0, 1), NOW, last_alive, 1)[0].since;
         assert_eq!(since(None), NOW - 600, "never seen before: from now");
         assert_eq!(since(Some(NOW - 100)), NOW - 700);
         assert_eq!(since(Some(NOW - 3600)), NOW - 4200, "an hour away");
@@ -87,11 +97,11 @@ mod tests {
 
     #[test]
     fn long_lists_are_cut_so_that_a_relay_takes_them() {
-        let subs = subscriptions(&plan(1201, 501), NOW, None);
+        let subs = subscriptions(&plan(1201, 501), NOW, None, 3);
         let sizes: Vec<_> = subs.iter().map(|s| (s.id.as_str(), s.targets.len())).collect();
         assert_eq!(
             sizes,
-            [("dm-0", 500), ("dm-1", 500), ("dm-2", 201), ("group-0", 500), ("group-1", 1)]
+            [("dm-0-g3", 500), ("dm-1-g3", 500), ("dm-2-g3", 201), ("group-0-g3", 500), ("group-1-g3", 1)]
         );
         let all: usize = subs.iter().filter(|s| s.kind == WatchKind::Dm).map(|s| s.targets.len()).sum();
         assert_eq!(all, 1201);
@@ -99,6 +109,6 @@ mod tests {
 
     #[test]
     fn nothing_to_watch_is_nothing_to_ask() {
-        assert!(subscriptions(&plan(0, 0), NOW, None).is_empty());
+        assert!(subscriptions(&plan(0, 0), NOW, None, 1).is_empty());
     }
 }

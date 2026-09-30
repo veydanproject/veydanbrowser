@@ -45,6 +45,29 @@ impl SqliteStore {
         Ok(Self { pool })
     }
 
+    /// A copy of the database at `path`, whole, written to `out` by the
+    /// database itself: what is still in the write-ahead log is in it, which
+    /// a copy of the file would miss. The schema is left as it is: this is
+    /// what a new release calls before it touches the database of the old.
+    pub async fn snapshot(path: &Path, out: &Path) -> Result<()> {
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(false)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .map_err(|e| db(format!("cannot open {}: {e}", path.display())))?;
+        let done = sqlx::query("VACUUM INTO ?")
+            .bind(out.to_string_lossy().into_owned())
+            .execute(&pool)
+            .await
+            .map_err(|e| db(format!("cannot write {}: {e}", out.display())));
+        pool.close().await;
+        done.map(|_| ())
+    }
+
     /// A database that lives as long as the value does. For tests.
     pub async fn in_memory() -> Result<Self> {
         let options = SqliteConnectOptions::from_str("sqlite::memory:")
@@ -296,6 +319,7 @@ impl Store for SqliteStore {
         &self,
         pubkey: &str,
         device_id: &str,
+        token: &str,
         outcome: &str,
         now: u64,
     ) -> Result<()> {
@@ -303,13 +327,14 @@ impl Store for SqliteStore {
             "UPDATE devices SET
                 last_push_at = ?, last_outcome = ?,
                 state = CASE WHEN ? = 'dead_token' THEN 'dead_token' ELSE state END
-             WHERE pubkey = ? AND device_id = ?",
+             WHERE pubkey = ? AND device_id = ? AND token = ?",
         )
         .bind(now as i64)
         .bind(outcome)
         .bind(outcome)
         .bind(pubkey)
         .bind(device_id)
+        .bind(token)
         .execute(&self.pool)
         .await
         .map_err(db)?;
@@ -470,11 +495,11 @@ mod tests {
         let s = store().await;
         s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
 
-        s.record_outcome(ALICE, "phone-1", "delivered", 1100).await.unwrap();
+        s.record_outcome(ALICE, "phone-1", "t1", "delivered", 1100).await.unwrap();
         let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
         assert_eq!((d.state.as_str(), d.last_outcome.as_deref(), d.last_push_at), ("active", Some("delivered"), Some(1100)));
 
-        s.record_outcome(ALICE, "phone-1", "dead_token", 1200).await.unwrap();
+        s.record_outcome(ALICE, "phone-1", "t1", "dead_token", 1200).await.unwrap();
         assert_eq!(s.device(ALICE, "phone-1").await.unwrap().unwrap().state, "dead_token");
         assert_eq!(s.counts().await.unwrap().dead_tokens, 1);
 
@@ -484,6 +509,22 @@ mod tests {
 
         s.put_device(input(ALICE, "phone-1", "t1-new"), 10).await.unwrap();
         assert_eq!(s.device(ALICE, "phone-1").await.unwrap().unwrap().state, "active");
+    }
+
+    #[tokio::test]
+    async fn what_is_said_of_a_former_token_does_not_mark_the_new_one() {
+        let s = store().await;
+        s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
+        s.record_outcome(ALICE, "phone-1", "t1", "delivered", 1100).await.unwrap();
+
+        // The push was on its way to `t1` when the phone registered `t2`.
+        s.put_device(input(ALICE, "phone-1", "t2"), 10).await.unwrap();
+        s.record_outcome(ALICE, "phone-1", "t1", "dead_token", 1200).await.unwrap();
+
+        let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
+        assert_eq!(d.state, "active");
+        assert_eq!((d.last_outcome.as_deref(), d.last_push_at), (Some("delivered"), Some(1100)));
+        assert_eq!(s.counts().await.unwrap().dead_tokens, 0);
     }
 
     #[tokio::test]
@@ -604,6 +645,34 @@ impl super::WatchStore for SqliteStore {
         tx.commit().await.map_err(db)
     }
 
+    async fn unset_baselined(&self, url: &str, targets: &[(super::WatchKind, String)]) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        for (kind, target) in targets {
+            sqlx::query("DELETE FROM baselines WHERE url = ? AND kind = ? AND target = ?")
+                .bind(url)
+                .bind(kind.as_str())
+                .bind(target)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
+        tx.commit().await.map_err(db)
+    }
+
+    async fn keep_baselined(&self, urls: &[String]) -> Result<u64> {
+        // Nothing but question marks is put into the statement: one for
+        // every relay that is kept.
+        let kept = vec!["?"; urls.len()].join(", ");
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DELETE FROM baselines WHERE url NOT IN ({kept})"
+        )));
+        for url in urls {
+            query = query.bind(url);
+        }
+        let done = query.execute(&self.pool).await.map_err(db)?;
+        Ok(done.rows_affected())
+    }
+
     async fn first_seen(&self, event_id: &str, what: super::Seen, now: u64) -> Result<bool> {
         let done = sqlx::query("INSERT OR IGNORE INTO seen_events (event_id, flag, seen_at) VALUES (?, ?, ?)")
             .bind(event_id)
@@ -721,7 +790,7 @@ mod watch_tests {
     async fn what_is_dead_expired_or_turned_off_is_not_watched() {
         let s = SqliteStore::in_memory().await.unwrap();
         s.put_device(input("aa", "dead", "t1"), 10).await.unwrap();
-        s.record_outcome("aa", "dead", "dead_token", 1100).await.unwrap();
+        s.record_outcome("aa", "dead", "t1", "dead_token", 1100).await.unwrap();
         let mut off = input("bb", "off", "t2");
         off.prefs.dm = false;
         off.prefs.groups = false;
@@ -782,6 +851,33 @@ mod watch_tests {
     }
 
     #[tokio::test]
+    async fn what_is_no_longer_watched_loses_its_stock() {
+        let s = SqliteStore::in_memory().await.unwrap();
+        let (alice, bob) = ((WatchKind::Dm, "aa".to_string()), (WatchKind::Dm, "bb".to_string()));
+        let group = (WatchKind::Group, "11".repeat(32));
+        for url in ["wss://a", "wss://b", "wss://c"] {
+            s.set_baselined(url, &[alice.clone(), bob.clone(), group.clone()], 100).await.unwrap();
+        }
+
+        // One key leaves one relay, and takes nothing else with it.
+        s.unset_baselined("wss://a", std::slice::from_ref(&alice)).await.unwrap();
+        let mut left = s.baselined("wss://a").await.unwrap();
+        left.sort();
+        assert_eq!(left, [bob, group]);
+        assert_eq!(s.baselined("wss://b").await.unwrap().len(), 3);
+
+        // A relay leaves with everything stock was taken of there.
+        let watched = ["wss://a".to_string(), "wss://c".to_string()];
+        assert_eq!(s.keep_baselined(&watched).await.unwrap(), 3);
+        assert!(s.baselined("wss://b").await.unwrap().is_empty());
+        assert_eq!(s.baselined("wss://a").await.unwrap().len(), 2);
+        assert_eq!(s.baselined("wss://c").await.unwrap().len(), 3);
+
+        assert_eq!(s.keep_baselined(&[]).await.unwrap(), 5, "nothing is watched anywhere");
+        assert!(s.baselined("wss://c").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn the_last_time_a_relay_was_on_the_line() {
         let s = SqliteStore::in_memory().await.unwrap();
         assert_eq!(s.relay_last_alive("wss://a").await.unwrap(), None);
@@ -832,6 +928,42 @@ mod migrate_tests {
         let s = SqliteStore::open(&path).await.expect("the older release opens it");
         assert!(s.device("aa", "phone").await.unwrap().is_some());
         s.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::tests_support::input;
+    use super::*;
+
+    #[tokio::test]
+    async fn a_snapshot_holds_what_the_log_had_not_given_to_the_file_yet() {
+        let dir = std::env::temp_dir().join(format!("vpush-snapshot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("vpush.db");
+        let out = dir.join("copy.db");
+
+        let s = SqliteStore::open(&path).await.unwrap();
+        s.put_device(input("aa", "phone", "t1"), 10).await.unwrap();
+        // As after a stop that was not clean: the server still holds the
+        // database, and what it wrote last is in the write-ahead log only.
+        assert!(std::fs::metadata(dir.join("vpush.db-wal")).unwrap().len() > 0);
+        let main_only = dir.join("main-only.db");
+        std::fs::copy(&path, &main_only).unwrap();
+
+        SqliteStore::snapshot(&path, &out).await.unwrap();
+        s.close().await;
+
+        let copy = SqliteStore::open(&out).await.unwrap();
+        assert_eq!(copy.counts().await.unwrap().devices, 1, "the snapshot has the device");
+        copy.close().await;
+        // What a copy of the file alone would have had: nothing of it.
+        let bare = SqliteStore::open(&main_only).await.unwrap();
+        assert_eq!(bare.counts().await.unwrap().devices, 0, "the file alone does not");
+        bare.close().await;
+
+        assert!(SqliteStore::snapshot(&path, &out).await.is_err(), "an existing file is not written over");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -314,6 +314,10 @@ impl FcmClient {
     }
 }
 
+/// What FCM says of a push it cannot read: a `data` map that is too big, or
+/// a token that is not one.
+const INVALID_ARGUMENT: &str = "INVALID_ARGUMENT";
+
 /// What an error answer of FCM means for us.
 pub fn classify(status: u16, body: &str) -> Attempt {
     #[derive(Deserialize, Default)]
@@ -353,14 +357,15 @@ pub fn classify(status: u16, body: &str) -> Attempt {
     };
 
     let outcome = match (code.as_deref(), status) {
-        // The only answer that means the token is gone for good. A bare 404
-        // is not enough: a wrong project id answers 404 too, and would cost
-        // every user their registration.
-        (Some("UNREGISTERED"), _) => Outcome::DeadToken,
-        // A push FCM cannot read, or a token of another project: ours to fix.
-        (Some("INVALID_ARGUMENT" | "SENDER_ID_MISMATCH" | "THIRD_PARTY_AUTH_ERROR"), _) => {
-            Outcome::Rejected
-        }
+        // The token is gone for good, or was given by another project and
+        // never was ours to push to. A bare 404 is not enough: a wrong
+        // project id answers 404 too, and would cost every user their
+        // registration.
+        (Some("UNREGISTERED" | "SENDER_ID_MISMATCH"), _) => Outcome::DeadToken,
+        // A push FCM cannot read. Whether that is the push or the token is
+        // told apart in `send`, which knows what was sent. The other is a
+        // key of ours that APNs or the web push service refuses.
+        (Some(INVALID_ARGUMENT | "THIRD_PARTY_AUTH_ERROR"), _) => Outcome::Rejected,
         (Some("QUOTA_EXCEEDED" | "UNAVAILABLE" | "INTERNAL"), _) => Outcome::Retry,
         (_, 401 | 408 | 429) => Outcome::Retry,
         (_, 500..=599) => Outcome::Retry,
@@ -384,9 +389,9 @@ impl PushProvider for FcmClient {
             let started = Instant::now();
             let mut attempt = self.attempt(target, message, &message.payload).await;
             // FCM says `INVALID_ARGUMENT` for a data map it finds too big,
-            // among other things. A push that carried the event is sent
-            // once more without it; anything else is refused for good.
-            if attempt.code.as_deref() == Some("INVALID_ARGUMENT") {
+            // and for a token it cannot read. A push that carried the event
+            // is sent once more without it.
+            if attempt.code.as_deref() == Some(INVALID_ARGUMENT) {
                 if let Some(fallback) = &message.fallback {
                     tracing::info!(
                         trace = message.payload.trace.as_deref().unwrap_or(""),
@@ -397,6 +402,13 @@ impl PushProvider for FcmClient {
                     );
                     attempt = self.attempt(target, message, fallback).await;
                 }
+            }
+            // Without the event a push is a few hundred bytes. Refused all
+            // the same, it is not its size that is wrong but the token: no
+            // push will ever reach it, and the device is not to be kept
+            // for a month as if one would.
+            if attempt.code.as_deref() == Some(INVALID_ARGUMENT) {
+                attempt.outcome = Outcome::DeadToken;
             }
             attempt.latency_ms = started.elapsed().as_millis() as u64;
             attempt
@@ -419,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn only_unregistered_kills_a_token() {
+    fn an_unregistered_token_is_dead() {
         let a = classify(404, &fcm_error("NOT_FOUND", Some("UNREGISTERED")));
         assert_eq!(a.outcome, Outcome::DeadToken);
         assert_eq!(a.code.as_deref(), Some("UNREGISTERED"));
@@ -434,8 +446,11 @@ mod tests {
         assert_eq!(classify(404, "<html>no such project</html>").outcome, Outcome::Rejected);
     }
 
+    /// By itself: `send` knows whether the push could have been too big,
+    /// and the tests against a server that plays Google say what it makes
+    /// of the answer.
     #[test]
-    fn invalid_argument_does_not_kill_a_token() {
+    fn invalid_argument_by_itself_does_not_kill_a_token() {
         for body in [
             fcm_error("INVALID_ARGUMENT", Some("INVALID_ARGUMENT")),
             fcm_error("INVALID_ARGUMENT", None),
@@ -445,8 +460,14 @@ mod tests {
     }
 
     #[test]
-    fn a_token_of_another_project_is_kept() {
+    fn a_token_of_another_project_is_dead() {
         let a = classify(403, &fcm_error("PERMISSION_DENIED", Some("SENDER_ID_MISMATCH")));
+        assert_eq!(a.outcome, Outcome::DeadToken);
+    }
+
+    #[test]
+    fn a_key_the_service_behind_fcm_refuses_does_not_kill_a_token() {
+        let a = classify(401, &fcm_error("UNAUTHENTICATED", Some("THIRD_PARTY_AUTH_ERROR")));
         assert_eq!(a.outcome, Outcome::Rejected);
     }
 

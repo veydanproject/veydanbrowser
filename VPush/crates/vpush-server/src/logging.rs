@@ -1,8 +1,8 @@
 //! Logging that is steered while the server runs.
 //!
 //! Levels are set per module. The config gives the base; `vpush ctl log set`
-//! lays overrides on top, each with an optional lifetime after which it goes
-//! away by itself. Nothing here needs a restart.
+//! lays overrides on top, each with a lifetime after which it goes away by
+//! itself. Nothing here needs a restart.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -190,12 +190,16 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
     }
 }
 
+/// An override lives no longer than this. One that was forgotten at `trace`
+/// fills the disk, so there is none without an end.
+pub const MAX_TTL: Duration = Duration::from_secs(24 * 3600);
+
 /// One override laid over the base. `target: None` is the level of everything.
 #[derive(Debug, Clone)]
 struct Override {
     target: Option<String>,
     level: LevelFilter,
-    expires: Option<Instant>,
+    expires: Instant,
 }
 
 #[derive(Debug)]
@@ -218,7 +222,7 @@ impl State {
         spec
     }
 
-    fn put(&mut self, spec: &LogSpec, expires: Option<Instant>) {
+    fn put(&mut self, spec: &LogSpec, expires: Instant) {
         let mut put_one = |target: Option<String>, level| {
             self.overrides.retain(|o| o.target != target);
             self.overrides.push(Override {
@@ -239,7 +243,7 @@ impl State {
     fn expire(&mut self, now: Instant) -> Vec<Override> {
         let (gone, kept) = std::mem::take(&mut self.overrides)
             .into_iter()
-            .partition(|o| o.expires.is_some_and(|at| at <= now));
+            .partition(|o| o.expires <= now);
         self.overrides = kept;
         gone
     }
@@ -268,8 +272,7 @@ pub struct OverrideView {
     /// `*` is the level of everything.
     pub target: String,
     pub level: String,
-    /// Absent: stays until reset or restart.
-    pub expires_in_secs: Option<u64>,
+    pub expires_in_secs: u64,
 }
 
 /// Handle to the running log filter.
@@ -284,12 +287,20 @@ impl LogControl {
         let _ = self.handle.reload(to_targets(&state.effective()));
     }
 
-    /// Lays `spec` over the base, for `ttl` or until reset.
-    pub fn set(&self, spec: &LogSpec, ttl: Option<Duration>) -> LogView {
+    /// Lays `spec` over the base for `ttl`, or until reset.
+    ///
+    /// `ttl` is a number somebody typed. One the clock cannot count to is
+    /// refused like any other that is too long: added to now without a
+    /// look, it takes the process down.
+    pub fn set(&self, spec: &LogSpec, ttl: Duration) -> Result<LogView, String> {
+        let expires = Some(ttl)
+            .filter(|ttl| *ttl <= MAX_TTL)
+            .and_then(|ttl| Instant::now().checked_add(ttl))
+            .ok_or("an override of log levels lasts 24h at most")?;
         let mut state = self.state.lock().unwrap();
-        state.put(spec, ttl.map(|d| Instant::now() + d));
+        state.put(spec, expires);
         self.apply(&state);
-        view(&state)
+        Ok(view(&state))
     }
 
     /// Removes every override.
@@ -359,9 +370,7 @@ fn view(state: &State) -> LogView {
                     .unwrap_or("*")
                     .to_string(),
                 level: level_name(o.level).to_string(),
-                expires_in_secs: o
-                    .expires
-                    .map(|at| at.saturating_duration_since(now).as_secs()),
+                expires_in_secs: o.expires.saturating_duration_since(now).as_secs(),
             })
             .collect(),
     }
@@ -530,6 +539,21 @@ mod tests {
         }
     }
 
+    /// When an override put now runs out, in a test that does not wait for it.
+    fn in_an_hour() -> Instant {
+        Instant::now() + Duration::from_secs(3600)
+    }
+
+    /// A control whose filter no subscriber listens to.
+    fn control(base: &str) -> LogControl {
+        let state = state(base);
+        let (_filter, handle) = reload::Layer::new(to_targets(&state.effective()));
+        LogControl {
+            handle,
+            state: Mutex::new(state),
+        }
+    }
+
     #[test]
     fn spec_round_trips() {
         assert_eq!(
@@ -576,7 +600,7 @@ mod tests {
     #[test]
     fn override_wins_over_base_and_base_returns() {
         let mut s = state("info,relay=warn");
-        s.put(&spec("relay=trace,api=debug"), None);
+        s.put(&spec("relay=trace,api=debug"), in_an_hour());
         assert_eq!(s.effective().to_string(), "info,api=debug,relay=trace");
         s.overrides.clear();
         assert_eq!(s.effective().to_string(), "info,relay=warn");
@@ -585,8 +609,8 @@ mod tests {
     #[test]
     fn second_override_of_a_target_replaces_the_first() {
         let mut s = state("info");
-        s.put(&spec("relay=trace"), None);
-        s.put(&spec("relay=debug"), None);
+        s.put(&spec("relay=trace"), in_an_hour());
+        s.put(&spec("relay=debug"), in_an_hour());
         assert_eq!(s.overrides.len(), 1);
         assert_eq!(s.effective().to_string(), "info,relay=debug");
     }
@@ -595,9 +619,9 @@ mod tests {
     fn only_what_ran_out_is_dropped() {
         let now = Instant::now();
         let mut s = state("info");
-        s.put(&spec("relay=trace"), Some(now + Duration::from_secs(10)));
-        s.put(&spec("api=debug"), Some(now + Duration::from_secs(100)));
-        s.put(&spec("debug"), None);
+        s.put(&spec("relay=trace"), now + Duration::from_secs(10));
+        s.put(&spec("api=debug"), now + Duration::from_secs(100));
+        s.put(&spec("debug"), now + Duration::from_secs(1000));
 
         assert!(s.expire(now).is_empty());
 
@@ -606,14 +630,37 @@ mod tests {
         assert_eq!(gone[0].target.as_deref(), Some("vpush_server::relay"));
         assert_eq!(s.effective().to_string(), "debug,api=debug");
 
-        s.expire(now + Duration::from_secs(1000));
+        s.expire(now + Duration::from_secs(999));
         assert_eq!(s.effective().to_string(), "debug");
+
+        s.expire(now + Duration::from_secs(1000));
+        assert_eq!(s.effective().to_string(), "info", "nothing is laid over the config for ever");
+    }
+
+    #[test]
+    fn an_override_lasts_a_day_at_most() {
+        let control = control("info");
+        let view = control.set(&spec("relay=debug"), MAX_TTL).unwrap();
+        assert_eq!(view.effective, "info,relay=debug");
+        assert!(view.overrides[0].expires_in_secs >= MAX_TTL.as_secs() - 1);
+
+        // The last two are beyond what the clock can count to: adding them
+        // to now without looking takes the process down.
+        for too_long in [
+            MAX_TTL + Duration::from_secs(1),
+            Duration::from_secs(9_300_000_000_000_000_000),
+            Duration::MAX,
+        ] {
+            let refused = control.set(&spec("relay=trace"), too_long).unwrap_err();
+            assert!(refused.contains("24h"), "{refused}");
+        }
+        assert_eq!(control.show().effective, "info,relay=debug", "a refused change changes nothing");
     }
 
     #[test]
     fn view_names_targets_the_short_way() {
         let mut s = state("info");
-        s.put(&spec("trace,relay=debug"), None);
+        s.put(&spec("trace,relay=debug"), in_an_hour());
         let v = view(&s);
         let targets: Vec<_> = v.overrides.iter().map(|o| o.target.as_str()).collect();
         assert_eq!(targets, ["*", "relay"]);

@@ -19,9 +19,11 @@ use vpush_server::delivery::fcm::{FcmClient, ServiceAccount};
 use vpush_server::delivery::retry::RetryPolicy;
 use vpush_server::delivery::Providers;
 use vpush_server::pipeline::classify::mark_of;
-use vpush_server::pipeline::Pipeline;
+use vpush_server::pipeline::{Dealt, Pipeline};
 use vpush_server::relays::{normalize, RelayPolicy};
-use vpush_server::store::{AllStore, DeviceInput, SqliteStore, Store, WatchStore, WatchedRelay};
+use vpush_server::store::{
+    AllStore, DeviceInput, Seen, SqliteStore, Store, WatchStore, WatchedRelay,
+};
 use vpush_server::relay::Watch;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -61,6 +63,26 @@ async fn relay() -> Relay {
 impl Relay {
     async fn publish(&self, event: &Event) {
         self.relay.add_event(event.clone()).await.unwrap();
+    }
+
+    /// The relay goes off the line, as when it is restarted.
+    fn goes_away(&self) {
+        self.relay.shutdown();
+    }
+
+    /// A relay at the same address again, with nothing stored.
+    async fn comes_back(&self) -> Relay {
+        let port: u16 = self.url.rsplit(':').next().unwrap().parse().unwrap();
+        let mut last = None;
+        for _ in 0..50 {
+            let relay = LocalRelay::builder().port(port).build();
+            match relay.run().await {
+                Ok(()) => return Relay { relay, url: self.url.clone() },
+                Err(e) => last = Some(e),
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("the relay did not come back on its port: {last:?}");
     }
 }
 
@@ -127,10 +149,10 @@ async fn server(relays: &[&Relay], window: Duration) -> Server {
 }
 
 impl Server {
-    fn start(&mut self) {
-        let store: Arc<dyn AllStore> = self.store.clone();
-        let pipeline = Pipeline::with_retry(
-            store.clone(),
+    /// A pipeline over the server's store, pushing through its mock.
+    fn pipeline(&self) -> Arc<Pipeline> {
+        Pipeline::with_retry(
+            self.store.clone(),
             self.providers.clone(),
             self.window,
             RetryPolicy {
@@ -138,14 +160,18 @@ impl Server {
                 base: Duration::from_millis(20),
                 max_wait: Duration::from_secs(1),
             },
-        );
+        )
+    }
+
+    fn start(&mut self) {
+        let store: Arc<dyn AllStore> = self.store.clone();
         let watch = Watch::new();
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(vpush_server::relay::run(
             watch.clone(),
             store,
             self.policy.clone(),
-            pipeline,
+            self.pipeline(),
             stopped,
         ));
         self.running = Some(Running { watch, stop, task });
@@ -188,14 +214,18 @@ impl Server {
         input
     }
 
+    /// Was stock taken of a key or a group on the relay.
+    async fn knows(&self, relay: &Relay, target: &str) -> bool {
+        let known = self.store.baselined(&relay.url).await.unwrap();
+        known.iter().any(|(_, known)| known == target)
+    }
+
     /// Waits until stock was taken of everything the device watches.
     async fn watching(&self, owner: &Keys, relays: &[&Relay]) {
         let owner = owner.public_key().to_hex();
         for relay in relays {
             eventually("the relay is watched", || async {
-                let known = self.store.baselined(&relay.url).await.unwrap();
-                known.iter().any(|(_, target)| target == &owner)
-                    && known.iter().any(|(_, target)| target == GROUP)
+                self.knows(relay, &owner).await && self.knows(relay, GROUP).await
             })
             .await;
         }
@@ -247,11 +277,16 @@ fn wrap(to: &Keys, tags: &[&[&str]]) -> Event {
 }
 
 fn wrap_with(to: &Keys, content: &str, tags: &[&[&str]]) -> Event {
+    wrap_dated(to, content, tags, Timestamp::now().as_secs() - 86_400)
+}
+
+/// A sealed direct message that says it was written at `at`.
+fn wrap_dated(to: &Keys, content: &str, tags: &[&[&str]], at: u64) -> Event {
     let mut all = vec![Tag::public_key(to.public_key())];
     all.extend(tags.iter().map(|t| Tag::parse(t.iter().copied()).unwrap()));
     EventBuilder::new(Kind::GiftWrap, content)
         .tags(all)
-        .custom_created_at(Timestamp::from_secs(Timestamp::now().as_secs() - 86_400))
+        .custom_created_at(Timestamp::from_secs(at))
         .finalize(&Keys::generate())
         .unwrap()
 }
@@ -528,6 +563,113 @@ async fn a_device_that_leaves_takes_nothing_from_the_one_that_stays() {
 }
 
 #[tokio::test]
+async fn what_a_relay_took_while_nobody_watched_it_is_old_when_the_watch_begins_again() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let alice = Keys::generate();
+    let owner = alice.public_key().to_hex();
+    server.register(&alice, "phone", &[&r]).await;
+    server.watching(&alice, &[&r]).await;
+
+    // Pushes are turned off on the only phone that named this relay.
+    assert!(server.store.delete_device(&owner, "phone").await.unwrap());
+    server.watch().plan_changed();
+    eventually("the stock taken on the relay is forgotten", || async {
+        server.store.baselined(&r.url).await.unwrap().is_empty()
+    })
+    .await;
+    let meanwhile = wrap(&alice, &[]);
+    r.publish(&meanwhile).await;
+
+    // And on again.
+    server.register(&alice, "phone", &[&r]).await;
+    server.watching(&alice, &[&r]).await;
+    let fresh = wrap(&alice, &[]);
+    r.publish(&fresh).await;
+
+    let pushes = server.pushes_are(1).await;
+    assert_eq!(carried(&pushes[0]["data"])["id"], fresh.id.to_hex());
+}
+
+#[tokio::test]
+async fn what_came_for_a_key_while_it_was_not_watched_is_old_when_it_is_watched_again() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let (alice, bob) = (Keys::generate(), Keys::generate());
+    let owner = alice.public_key().to_hex();
+    server.register(&alice, "alice-phone", &[&r]).await;
+    server.register(&bob, "bob-phone", &[&r]).await;
+    server.watching(&alice, &[&r]).await;
+    server.watching(&bob, &[&r]).await;
+
+    // Alice leaves; the relay stays on the line for bob.
+    assert!(server.store.delete_device(&owner, "alice-phone").await.unwrap());
+    server.watch().plan_changed();
+    eventually("the stock taken of alice is forgotten", || async {
+        !server.knows(&r, &owner).await
+    })
+    .await;
+    assert!(server.knows(&r, &bob.public_key().to_hex()).await, "bob is known as before");
+    let meanwhile = wrap(&alice, &[]);
+    r.publish(&meanwhile).await;
+    // Something for bob after it: when the push about that is out, the
+    // server has dealt with whatever the relay sent before, and alice was
+    // nobody's to tell at the time.
+    let to_bob = group_event(&Keys::generate(), &[]);
+    r.publish(&to_bob).await;
+    server.pushes_are(1).await;
+
+    server.register(&alice, "alice-phone", &[&r]).await;
+    server.watching(&alice, &[&r]).await;
+    let fresh = wrap(&alice, &[]);
+    r.publish(&fresh).await;
+
+    let pushes = server.pushes_are(2).await;
+    assert_eq!(pushes[0]["token"], "token-of-bob-phone");
+    assert_eq!(carried(&pushes[0]["data"])["id"], to_bob.id.to_hex());
+    assert_eq!(pushes[1]["token"], "token-of-alice-phone");
+    assert_eq!(carried(&pushes[1]["data"])["id"], fresh.id.to_hex());
+}
+
+#[tokio::test]
+async fn an_event_dated_far_from_now_is_noted_and_not_pushed() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let alice = Keys::generate();
+    server.register(&alice, "phone", &[&r]).await;
+    // Straight to the pipeline, as from a relay that does not look at the
+    // date it was asked from: an honest one keeps most of these back.
+    let pipeline = server.pipeline();
+    let now = Timestamp::now().as_secs();
+    let dated = |at: u64| wrap_dated(&alice, "sealed", &[], at);
+
+    let (ahead, stale) = (dated(now + 16 * 60), dated(now - 3 * 86_400 - 60));
+    for event in [&ahead, &stale] {
+        assert_eq!(pipeline.event(&r.url, event, false).await, Dealt::Misdated);
+        let id = event.id.to_hex();
+        assert!(!server.store.first_seen(&id, Seen::Pushed, now).await.unwrap(), "it was noted");
+    }
+
+    // A clock a few minutes ahead, and a sender who dated a sealed message
+    // as far back as senders do.
+    let (soon, backdated) = (dated(now + 10 * 60), dated(now - 2 * 86_400));
+    for event in [&soon, &backdated] {
+        let dealt = pipeline.event(&r.url, event, false).await;
+        assert!(matches!(dealt, Dealt::Pushed { .. }), "{dealt:?}");
+    }
+
+    let pushes = server.pushes_are(2).await;
+    let mut ids: Vec<_> = pushes
+        .iter()
+        .map(|p| carried(&p["data"])["id"].as_str().unwrap().to_string())
+        .collect();
+    ids.sort();
+    let mut expected = vec![soon.id.to_hex(), backdated.id.to_hex()];
+    expected.sort();
+    assert_eq!(ids, expected);
+}
+
+#[tokio::test]
 async fn a_relay_that_is_not_on_the_list_is_not_connected_to() {
     let (listed, other) = (relay().await, relay().await);
     let server = server(&[&listed], SHORT).await;
@@ -542,4 +684,36 @@ async fn a_relay_that_is_not_on_the_list_is_not_connected_to() {
 
     other.publish(&wrap(&alice, &[])).await;
     server.pushes_are(0).await;
+}
+
+#[tokio::test]
+async fn who_registers_while_a_relay_is_away_is_watched_when_it_is_back() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let alice = Keys::generate();
+    server.register(&alice, "phone", &[&r]).await;
+    server.watching(&alice, &[&r]).await;
+
+    // The relay is away when somebody new registers: the request for their
+    // key waits for it.
+    r.goes_away();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let bob = Keys::generate();
+    server.register(&bob, "bob-phone", &[&r]).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // Back on the line, it is asked, not within the hour but at once. The
+    // wait is the library's own before it tries the relay again. (A relay
+    // that failed for so long that the library refuses requests for it is
+    // not played here: that takes minutes. `Line::unsent` is for it.)
+    let r = r.comes_back().await;
+    let bob_key = bob.public_key().to_hex();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !server.knows(&r, &bob_key).await {
+        assert!(Instant::now() < deadline, "the relay was never asked about the new key");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    r.publish(&wrap(&bob, &[])).await;
+    server.pushes_are(1).await;
 }

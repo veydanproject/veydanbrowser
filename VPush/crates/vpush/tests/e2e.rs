@@ -131,11 +131,15 @@ impl Server {
     }
 
     fn wait_for(&self, needle: &str) {
+        self.wait_for_times(needle, 1);
+    }
+
+    fn wait_for_times(&self, needle: &str, times: usize) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        while self.count(needle) == 0 {
+        while self.count(needle) < times {
             assert!(
                 Instant::now() < deadline,
-                "`{needle}` never appeared in:\n{}",
+                "`{needle}` did not appear {times} time(s) in:\n{}",
                 self.lines().join("\n")
             );
             std::thread::sleep(Duration::from_millis(20));
@@ -260,6 +264,34 @@ fn bad_log_spec_is_refused_with_a_reason() {
     let (ok, text) = server.ctl(&["log", "set", "debug", "--for", "soon"]);
     assert!(!ok);
     assert!(text.contains("not a duration"), "{text}");
+}
+
+#[test]
+fn a_change_of_levels_lasts_an_hour_unless_told_otherwise() {
+    let server = Server::start("loghour");
+
+    let (ok, text) = server.ctl(&["log", "set", "relay=debug"]);
+    assert!(ok, "{text}");
+    let view: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let left = view["overrides"][0]["expires_in_secs"].as_u64().unwrap();
+    assert!((3590..=3600).contains(&left), "{text}");
+}
+
+#[test]
+fn a_lifetime_no_clock_counts_to_is_refused_and_the_server_lives() {
+    let server = Server::start("logforever");
+
+    for too_long in ["9300000000000000000s", "2d", "25h"] {
+        let (ok, text) = server.ctl(&["log", "set", "relay=debug", "--for", too_long]);
+        assert!(!ok, "{too_long}: {text}");
+        assert!(text.contains("24h at most"), "{too_long}: {text}");
+    }
+
+    let (ok, text) = server.ctl(&["log", "show"]);
+    assert!(ok, "the server is gone: {text}\n{}", server.lines().join("\n"));
+    assert!(text.contains(r#""overrides": []"#), "{text}");
+    let (ok, text) = server.ctl(&["log", "set", "relay=debug", "--for", "1d"]);
+    assert!(ok, "{text}");
 }
 
 #[test]
@@ -456,6 +488,30 @@ async fn test_push_goes_out_and_the_token_stays_out_of_the_log() {
     assert!(!log.contains("PRIVATE KEY"), "the key is in the log:\n{log}");
 }
 
+/// reqwest logs through `log`, not through `tracing`, and `log` has a
+/// ceiling of its own on levels, set when the server starts. The filter
+/// moves the ceiling whenever it is reloaded (tracing-subscriber does, in
+/// `reload::Handle`); this test is here for the day it does not.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_level_raised_on_the_running_server_reaches_a_crate_that_logs_through_log() {
+    let sent = wiremock::ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "name": "projects/veydan-test/messages/1" }));
+    let (server, _google) = server_with_fcm("loglog", sent).await;
+    let push = || server.ctl(&["test-push", "--app", "net.veydan.mobile", "--token", "t"]);
+    // What reqwest says at `debug` when it opens a connection.
+    let line = "starting new connection";
+
+    tokio::task::block_in_place(|| {
+        let (ok, text) = server.ctl(&["log", "set", "reqwest=debug", "--for", "1m"]);
+        assert!(ok, "{text}");
+        // The first push of a server opens the connections to Google.
+        let (ok, text) = push();
+        assert!(ok, "{text}");
+        server.wait_for(line);
+    });
+    assert_eq!(server.count("admin request"), 0, "only what was named is written");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_push_reports_what_the_service_said() {
     let refused = wiremock::ResponseTemplate::new(404).set_body_json(serde_json::json!({
@@ -471,6 +527,26 @@ async fn test_push_reports_what_the_service_said() {
     assert!(ok, "{text}");
     assert!(text.contains(r#""outcome": "dead_token""#), "{text}");
     assert!(text.contains(r#""code": "UNREGISTERED""#), "{text}");
+}
+
+/// Ten real seconds: the deadline of a test push is the server's, and
+/// `vpush ctl` has to outwait it to hear what came of the push.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_test_push_the_service_never_answers_ends_with_an_outcome_at_the_terminal() {
+    let silent = wiremock::ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "name": "projects/veydan-test/messages/1" }))
+        .set_delay(Duration::from_secs(60));
+    let (server, _google) = server_with_fcm("testpushsilent", silent).await;
+
+    let started = Instant::now();
+    let (ok, text) = tokio::task::block_in_place(|| {
+        server.ctl(&["test-push", "--app", "net.veydan.mobile", "--token", "t"])
+    });
+    assert!(ok, "{text}");
+    assert!(text.contains(r#""outcome": "retry""#), "{text}");
+    assert!(text.contains(r#""code": "DEADLINE""#), "{text}");
+    let took = started.elapsed();
+    assert!(took >= Duration::from_secs(10) && took < Duration::from_secs(14), "{took:?}");
 }
 
 #[test]
@@ -746,4 +822,60 @@ async fn a_relay_behind_tls_does_not_take_the_server_down() {
     assert!(ok, "the server is gone: {text}\n{log}");
     let (_, relays) = tokio::task::block_in_place(|| server.ctl(&["relays"]));
     assert!(relays.contains(&relay_url), "{relays}");
+}
+
+/// An address the config takes and nostr-sdk does not: the line of such a
+/// relay ends before it begins.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relay_whose_address_is_not_taken_is_said_to_be_off_the_line_and_tried_again() {
+    use nostr::prelude::*;
+
+    let relay_url = "ws://127.0.0.1:1/a://b";
+    let refused = "not an address nostr-sdk takes";
+
+    let sent = wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({ "name": "m/1" }));
+    let (mut server, _google) = server_with_fcm("badaddress", sent).await;
+    tokio::task::block_in_place(|| {
+        let config = std::fs::read_to_string(server.config()).unwrap();
+        std::fs::write(
+            server.config(),
+            format!("{config}\n[[relays.allow]]\nurl = \"{relay_url}\"\n"),
+        )
+        .unwrap();
+        server.restart();
+    });
+
+    let alice = Keys::generate();
+    let body = serde_json::json!({
+        "app_id": "net.veydan.mobile",
+        "channel": { "provider": "fcm", "token": "token-of-the-phone" },
+        "relays": [{ "url": relay_url, "dm": true, "groups": true }],
+    })
+    .to_string();
+    let path = "/v1/devices/phone-0001";
+    let register = || async {
+        let answer = reqwest::Client::new()
+            .put(format!("http://127.0.0.1:{}{path}", server.port))
+            .header(
+                "authorization",
+                signed(&alice, "PUT", &format!("http://localhost:{}{path}", server.port), body.as_bytes()),
+            )
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(answer.status(), 200);
+    };
+
+    register().await;
+    tokio::task::block_in_place(|| server.wait_for(refused));
+    let (ok, relays) = tokio::task::block_in_place(|| server.ctl(&["relays"]));
+    assert!(ok, "{relays}");
+    assert!(relays.contains(relay_url), "{relays}");
+    assert!(relays.contains(r#""state": "disconnected""#), "{relays}");
+
+    // The plan is read again, here because the phone registered again, and
+    // the relay is given another try.
+    register().await;
+    tokio::task::block_in_place(|| server.wait_for_times(refused, 2));
 }

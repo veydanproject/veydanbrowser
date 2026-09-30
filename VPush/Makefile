@@ -1,6 +1,6 @@
 # VPush. From the repository root the same targets are `make vpush-<target>`.
 
-.PHONY: build test check run release deploy ftp rollback bootstrap status logs ctl server-ctl test-deploy clean
+.PHONY: build test check run release deploy ftp rollback bootstrap trust status logs ctl server-ctl test-deploy clean
 
 SHELL := /bin/bash
 ENV := source scripts/env.sh &&
@@ -37,6 +37,11 @@ ftp: deploy
 
 rollback:
 	@bash scripts/rollback.sh
+
+# Once per machine that deploys: records the server's key, so that every
+# other command talks to that server and no other.
+trust:
+	@bash scripts/trust.sh
 
 # Once per server: user, directories, systemd unit, first config.
 bootstrap:

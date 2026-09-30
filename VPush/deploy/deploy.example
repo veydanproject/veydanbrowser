@@ -1,6 +1,9 @@
 # Where VPush is deployed. Copy to ../deploy.env (it is never committed):
 #
 #   cp deploy/deploy.example deploy.env
+#   make vpush-trust        once: records the server's key next to this file
+#
+# The file is kept readable by its owner alone; the scripts see to it.
 
 # Address of the server.
 VPUSH_HOST=203.0.113.10

@@ -4,7 +4,6 @@
 //! event names the address, the method and the body it was signed for, so
 //! it opens one request and no other, and only for a minute.
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -12,8 +11,17 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use nostr::event::{Event, Kind};
 
+use crate::limit::{Recent, Refused};
+
 /// How far the client's clock may be from the server's, either way.
 pub const WINDOW: Duration = Duration::from_secs(60);
+/// How long a used event is remembered: for as long as it could be used
+/// again. An event dated a window ahead is accepted now and for two windows
+/// more, and by a clock that counts whole seconds, up to a second longer.
+const REMEMBER: Duration = Duration::from_secs(2 * WINDOW.as_secs() + 2);
+/// Used events remembered at one time. Every signed request adds one, and
+/// anybody can sign; past this many a request is refused, not remembered.
+const MAX_REMEMBERED: usize = 100_000;
 /// Longer than any header of this kind has a reason to be.
 const MAX_HEADER: usize = 16 * 1024;
 const SCHEME: &str = "Nostr ";
@@ -25,6 +33,10 @@ pub enum AuthError {
     Expired,
     Replay,
     UrlMismatch,
+    /// As many used events are remembered as may be, and an event that
+    /// cannot be remembered cannot be accepted. After this long there is
+    /// room again.
+    Busy(Duration),
 }
 
 /// Checks requests, and remembers the events it has seen for as long as they
@@ -32,7 +44,7 @@ pub enum AuthError {
 pub struct Nip98 {
     /// The server's address as clients see it, without a trailing slash.
     public_url: String,
-    seen: Mutex<HashMap<[u8; 32], Instant>>,
+    seen: Mutex<Recent<[u8; 32]>>,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -47,7 +59,7 @@ impl Nip98 {
     pub fn new(public_url: &str) -> Self {
         Self {
             public_url: public_url.trim_end_matches('/').to_string(),
-            seen: Mutex::new(HashMap::new()),
+            seen: Mutex::new(Recent::new(REMEMBER, 1, MAX_REMEMBERED)),
         }
     }
 
@@ -119,25 +131,15 @@ impl Nip98 {
 
         // Last, so that a request refused for another reason does not use
         // the event up.
-        self.use_once(event.id.to_bytes())?;
+        self.use_once(event.id.to_bytes(), Instant::now())?;
         Ok(event.pubkey.to_hex())
     }
 
-    fn use_once(&self, id: [u8; 32]) -> Result<(), AuthError> {
-        // An event is refused by its age after WINDOW either side of now, so
-        // twice the window is as long as it needs to be remembered.
-        let keep = WINDOW * 2;
-        let now = Instant::now();
-        let mut seen = self.seen.lock().unwrap();
-        if seen.len() >= 1024 {
-            seen.retain(|_, at| now.duration_since(*at) < keep);
-        }
-        match seen.get(&id) {
-            Some(at) if now.duration_since(*at) < keep => Err(AuthError::Replay),
-            _ => {
-                seen.insert(id, now);
-                Ok(())
-            }
+    fn use_once(&self, id: [u8; 32], now: Instant) -> Result<(), AuthError> {
+        match self.seen.lock().unwrap().take(id, now) {
+            Ok(()) => Ok(()),
+            Err(Refused::TooOften(_)) => Err(AuthError::Replay),
+            Err(Refused::Full(wait)) => Err(AuthError::Busy(wait)),
         }
     }
 }
@@ -320,6 +322,46 @@ mod tests {
         let header = Signed::new("GET", b"").header(&keys);
         assert!(check(&auth, &header, "DELETE", b"").is_err());
         check(&auth, &header, "GET", b"").unwrap();
+    }
+
+    /// The id of an event nobody signed: `use_once` does not look further.
+    fn id(n: usize) -> [u8; 32] {
+        let mut id = [0u8; 32];
+        id[..8].copy_from_slice(&(n as u64).to_be_bytes());
+        id
+    }
+
+    #[test]
+    fn a_used_event_is_remembered_for_as_long_as_its_date_is_accepted() {
+        let auth = Nip98::new(BASE);
+        let first = Instant::now();
+        auth.use_once(id(1), first).unwrap();
+        // Dated a minute ahead and used at the start of the first second
+        // that accepts it, the event is accepted until the end of the
+        // second a minute past its date: 121 seconds.
+        let last = first + Duration::from_secs(121);
+        assert_eq!(auth.use_once(id(1), last), Err(AuthError::Replay));
+        // A second later it is refused by its date, and may be forgotten.
+        auth.use_once(id(1), first + REMEMBER).unwrap();
+    }
+
+    #[test]
+    fn the_memory_of_used_events_does_not_grow_without_end() {
+        let auth = Nip98::new(BASE);
+        let first = Instant::now();
+        for n in 0..MAX_REMEMBERED {
+            auth.use_once(id(n), first).unwrap();
+        }
+        let later = first + Duration::from_secs(20);
+        assert_eq!(
+            auth.use_once(id(MAX_REMEMBERED), later),
+            Err(AuthError::Busy(REMEMBER - Duration::from_secs(20)))
+        );
+        // What is remembered is still told from what is new.
+        assert_eq!(auth.use_once(id(7), later), Err(AuthError::Replay));
+
+        // The room comes back when the events have run out.
+        auth.use_once(id(MAX_REMEMBERED), first + REMEMBER).unwrap();
     }
 
     #[test]

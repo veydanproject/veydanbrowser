@@ -4,6 +4,7 @@
 //! and the client is told so by name.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use vpush_proto::RelayStatus;
 
@@ -51,6 +52,32 @@ pub fn shown(url: &str) -> String {
     url[..cut].chars().take(200).collect()
 }
 
+/// A key of a relay's gate is at least this long.
+const SHORTEST_KEY: usize = 16;
+
+/// The key of a relay's gate, from its file.
+///
+/// The key is put into the address of the relay as it is, and looked for
+/// in every line of the log as it is. So it is made of what an address
+/// takes without rewriting, and is long enough not to be found in words
+/// that are no secret. What is wrong is said of the file: the key itself
+/// is never put into a reason.
+fn read_key(path: &Path) -> Result<String, String> {
+    let key = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let key = key.trim();
+    let plain = key
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-'));
+    if key.len() < SHORTEST_KEY || !plain {
+        return Err(format!(
+            "{}: a key is {SHORTEST_KEY} or more letters, digits, `.`, `_`, `~` or `-`",
+            path.display()
+        ));
+    }
+    Ok(key.to_string())
+}
+
 /// A relay the server watches.
 #[derive(Debug, Clone)]
 pub struct AllowedRelay {
@@ -72,15 +99,7 @@ impl RelayPolicy {
             let url = normalize(&relay.url)?;
             let api_key = match &relay.api_key_file {
                 None => None,
-                Some(path) => {
-                    let key = std::fs::read_to_string(path)
-                        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-                    let key = key.trim().to_string();
-                    if key.is_empty() {
-                        return Err(format!("{} is empty", path.display()));
-                    }
-                    Some(key)
-                }
+                Some(path) => Some(read_key(path)?),
             };
             allowed.insert(url.clone(), AllowedRelay { url, api_key });
         }
@@ -162,6 +181,33 @@ mod tests {
     #[test]
     fn ws_is_fine_on_this_machine() {
         assert_eq!(normalize("ws://127.0.0.1:7777").unwrap(), "ws://127.0.0.1:7777");
+    }
+
+    #[test]
+    fn a_key_an_address_or_the_log_would_not_take_is_refused_by_its_file() {
+        let dir = std::env::temp_dir().join(format!("vpush-relay-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("relay.key");
+        let read = |key: &str| {
+            std::fs::write(&path, key).unwrap();
+            read_key(&path)
+        };
+
+        assert_eq!(read("d0f9c18a09ab2547f5c9aaddc5dfec3b\n").unwrap(), "d0f9c18a09ab2547f5c9aaddc5dfec3b");
+        assert_eq!(read("  Gate-key_0.1~2-abc  ").unwrap(), "Gate-key_0.1~2-abc");
+        for bad in [
+            "",
+            "short-key-15-ch",
+            "sixteen&more=but?splits#the/address",
+            "sixteen and more with spaces",
+            "sixteen-and-more\nin-two-lines-of-it",
+            "шестнадцать-и-больше",
+        ] {
+            let reason = read(bad).unwrap_err();
+            assert!(reason.contains("relay.key"), "{reason}");
+            assert!(bad.is_empty() || !reason.contains(bad), "the key is in the reason: {reason}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

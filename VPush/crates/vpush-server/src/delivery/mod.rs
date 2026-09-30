@@ -16,9 +16,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use vpush_proto::Payload;
+use vpush_proto::{Payload, PushType};
 
 use crate::config::Config;
+use retry::{Delivery, RetryPolicy};
 
 /// Which service carries the push.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -84,6 +85,11 @@ pub fn mask(secret: &str) -> String {
 /// push that lived one minute was dropped in that time, and nothing told
 /// anyone: the service had accepted it.
 pub const TEST_TTL: Duration = Duration::from_secs(600);
+
+/// How long a test push may take. Somebody is waiting for its outcome:
+/// behind the time limit of a request, which is 15 seconds unless the
+/// config says otherwise, or at a terminal.
+pub const TEST_DEADLINE: Duration = Duration::from_secs(10);
 
 /// One push, ready to be sent.
 #[derive(Debug, Clone)]
@@ -182,6 +188,42 @@ pub trait PushProvider: Send + Sync {
     fn send<'a>(&'a self, target: &'a Target, message: &'a Message) -> SendFuture<'a>;
 }
 
+/// One push of the type `test` to one address, and what became of it.
+///
+/// The device shows a test push in its own words; the push says only what
+/// it is and how to find it in the log. It is tried once: whoever asked is
+/// told that the service is busy, and tries again when they like. A service
+/// that does not answer by the deadline is not waited for.
+pub async fn test_push(provider: &dyn PushProvider, target: &Target, trace: &str) -> Delivery {
+    let mut payload = Payload::new(PushType::Test);
+    payload.trace = Some(trace.to_string());
+    let message = Message {
+        payload,
+        fallback: None,
+        collapse_key: None,
+        ttl: TEST_TTL,
+        urgent: true,
+    };
+    let once = RetryPolicy {
+        max_attempts: 1,
+        ..RetryPolicy::default()
+    };
+    let delivery = retry::deliver(provider, target, &message, once);
+    match tokio::time::timeout(TEST_DEADLINE, delivery).await {
+        Ok(delivery) => delivery,
+        Err(_) => {
+            let mut attempt = Attempt::new(Outcome::Retry)
+                .code("DEADLINE")
+                .detail("the push service did not answer in time");
+            attempt.latency_ms = TEST_DEADLINE.as_millis() as u64;
+            Delivery {
+                outcome: Outcome::Retry,
+                attempts: vec![attempt],
+            }
+        }
+    }
+}
+
 /// The providers of every app in the config.
 #[derive(Default)]
 pub struct Providers {
@@ -251,6 +293,63 @@ mod tests {
         assert_eq!(a, mask("token-of-device-a"));
         assert_eq!(a.len(), 9);
         assert!(!a.contains("token"));
+    }
+
+    /// A push service that takes a push and never says what became of it.
+    struct Silent;
+
+    impl PushProvider for Silent {
+        fn kind(&self) -> ProviderKind {
+            ProviderKind::Fcm
+        }
+
+        fn send<'a>(&'a self, _: &'a Target, _: &'a Message) -> SendFuture<'a> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// A push service that is busy, and counts how often it was asked.
+    #[derive(Default)]
+    struct Busy {
+        asked: std::sync::atomic::AtomicU32,
+    }
+
+    impl PushProvider for Busy {
+        fn kind(&self) -> ProviderKind {
+            ProviderKind::Fcm
+        }
+
+        fn send<'a>(&'a self, _: &'a Target, _: &'a Message) -> SendFuture<'a> {
+            self.asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Box::pin(std::future::ready(Attempt::new(Outcome::Retry).status(503)))
+        }
+    }
+
+    fn phone() -> Target {
+        Target {
+            token: "token-of-the-phone".into(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_test_push_nobody_answers_is_given_up_on_and_says_so() {
+        let started = tokio::time::Instant::now();
+        let delivery = test_push(&Silent, &phone(), "abcd1234").await;
+        assert_eq!(started.elapsed(), TEST_DEADLINE);
+        assert_eq!(delivery.outcome, Outcome::Retry);
+        assert_eq!(delivery.attempts.len(), 1);
+        assert_eq!(delivery.attempts[0].code.as_deref(), Some("DEADLINE"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_test_push_is_tried_once() {
+        let busy = Busy::default();
+        let started = tokio::time::Instant::now();
+        let delivery = test_push(&busy, &phone(), "abcd1234").await;
+        assert_eq!(delivery.outcome, Outcome::Retry);
+        assert_eq!(delivery.attempts.len(), 1);
+        assert_eq!(busy.asked.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(started.elapsed(), Duration::ZERO, "and nothing is waited for");
     }
 
     #[test]

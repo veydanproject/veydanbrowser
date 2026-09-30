@@ -395,6 +395,12 @@ impl Config {
             }
         }
 
+        // Zero is not "as fast as it goes": with no window nothing is held
+        // back, and every event of a burst wakes the phone.
+        if self.pipeline.throttle_secs == 0 {
+            out.push("pipeline.throttle_secs: must be above zero".to_string());
+        }
+
         out
     }
 
@@ -576,6 +582,18 @@ mod tests {
     }
 
     #[test]
+    fn a_throttle_of_no_seconds_is_refused() {
+        let with = |secs: u64| {
+            Config::parse(&format!(
+                "public_url = \"https://push.example.org\"\n[pipeline]\nthrottle_secs = {secs}\n"
+            ))
+        };
+        let problems = with(0).unwrap_err();
+        assert_eq!(problems, ["pipeline.throttle_secs: must be above zero"]);
+        assert_eq!(with(1).unwrap().pipeline.throttle_secs, 1);
+    }
+
+    #[test]
     fn http_is_fine_for_localhost() {
         Config::parse(r#"public_url = "http://localhost:8090""#).unwrap();
     }
@@ -635,6 +653,27 @@ mod app_tests {
         for needle in ["not an app id", "must be an absolute path", "not an http(s) address"] {
             assert!(problems.contains(needle), "missing `{needle}` in:\n{problems}");
         }
+    }
+
+    #[test]
+    fn a_relay_key_that_will_not_do_is_found_when_loading_and_is_not_shown() {
+        let dir = std::env::temp_dir().join(format!("vpush-cfg-key-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (path, key) = (dir.join("vpush.toml"), dir.join("relay.key"));
+        std::fs::write(&key, "top?secret&of=the-relay\n").unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "public_url = \"https://push.example.org\"\n\
+                 [[relays.allow]]\nurl = \"wss://node-1.veydan.net\"\napi_key_file = \"{}\"\n",
+                key.display()
+            ),
+        )
+        .unwrap();
+        let e = Config::load(&path).unwrap_err().to_string();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(e.contains(&format!("relays.allow: {}: a key is", key.display())), "{e}");
+        assert!(!e.contains("secret"), "{e}");
     }
 
     #[test]

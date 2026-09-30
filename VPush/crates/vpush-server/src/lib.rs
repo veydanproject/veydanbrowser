@@ -7,6 +7,7 @@ pub mod auth;
 pub mod api;
 pub mod config;
 pub mod delivery;
+pub mod limit;
 pub mod logging;
 pub mod pipeline;
 pub mod relay;

@@ -7,6 +7,7 @@ use clap::{Args, Parser, Subcommand};
 use vpush_server::admin::{self, Request};
 use vpush_server::config::{self, Config};
 use vpush_server::logging::parse_duration;
+use vpush_server::store::SqliteStore;
 use vpush_server::version;
 
 #[derive(Parser)]
@@ -47,6 +48,14 @@ enum Command {
         socket: Option<PathBuf>,
         #[command(subcommand)]
         command: Ctl,
+    },
+    /// Write a whole copy of the database to a file, as it is, schema and all.
+    Backup {
+        #[command(flatten)]
+        config: ConfigArg,
+        /// The file to write; it must not exist.
+        #[arg(long)]
+        out: PathBuf,
     },
     /// Print the release name, as used for the release directory.
     ReleaseName,
@@ -89,9 +98,10 @@ enum LogCmd {
     /// Change levels without a restart: `debug`, `relay=trace`, `relay=debug,api=debug`.
     Set {
         spec: String,
-        /// Take the change back after this long: 90s, 15m, 2h, 1d.
-        #[arg(long = "for", value_name = "DURATION")]
-        ttl: Option<String>,
+        /// Take the change back after this long: 90s, 15m, 2h. An hour when
+        /// not given, a day (1d) at most.
+        #[arg(long = "for", value_name = "DURATION", default_value = "1h")]
+        ttl: String,
     },
     /// Remove every override; the config levels are in force again.
     Reset,
@@ -111,6 +121,12 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Command::Serve(arg) => runtime()?.block_on(vpush_server::serve(arg.config)),
+        Command::Backup { config, out } => {
+            let config = Config::load(&config.config)?;
+            runtime()?.block_on(SqliteStore::snapshot(&config.store.path, &out))?;
+            println!("database {} saved to {}", config.store.path.display(), out.display());
+            Ok(())
+        }
         Command::CheckConfig(arg) => {
             let config = Config::load(&arg.config)?;
             println!("config {} is fine", arg.config.display());
@@ -146,10 +162,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                 },
                 Ctl::Log(LogCmd::Set { spec, ttl }) => Request::LogSet {
                     spec,
-                    ttl_secs: ttl
-                        .map(|t| parse_duration(&t).map(|d| d.as_secs()))
-                        .transpose()
-                        .map_err(anyhow::Error::msg)?,
+                    ttl_secs: parse_duration(&ttl)
+                        .map_err(anyhow::Error::msg)?
+                        .as_secs(),
                 },
             };
             let answer = runtime()?.block_on(admin::call(&socket, &request))?;

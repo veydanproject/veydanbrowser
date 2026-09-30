@@ -1,6 +1,11 @@
 /target/
 /dist/
 /.tools/
-# Where the server lives and how to reach it; copy deploy/deploy.example.
+# Where the server lives and how to reach it (copy deploy/deploy.example),
+# and the server's key as `make trust` recorded it. Never committed, in
+# either place the scripts look for them.
 /deploy.env
+/known_hosts
+/deploy/deploy.env
+/deploy/known_hosts
 /vpush.toml

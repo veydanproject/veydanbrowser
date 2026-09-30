@@ -270,8 +270,10 @@ async fn unregistered_token_is_dead_and_is_not_retried() {
     assert_eq!(delivery.attempts[0].code.as_deref(), Some("UNREGISTERED"));
 }
 
+/// A push without an event is a few hundred bytes: FCM cannot mean its
+/// size, so it means the token.
 #[tokio::test]
-async fn invalid_argument_does_not_kill_the_token() {
+async fn a_token_fcm_cannot_read_is_dead() {
     let server = MockServer::start().await;
     mount_token(&server).await;
     Mock::given(method("POST"))
@@ -281,9 +283,43 @@ async fn invalid_argument_does_not_kill_the_token() {
         .await;
 
     let delivery = deliver(&client(&server), &target(), &message(), fast()).await;
-    assert_eq!(delivery.outcome, Outcome::Rejected);
+    assert_eq!(delivery.outcome, Outcome::DeadToken);
     assert_eq!(delivery.attempts.len(), 1, "no point in trying again");
     assert_eq!(delivery.attempts[0].http_status, Some(400));
+    assert_eq!(delivery.attempts[0].code.as_deref(), Some("INVALID_ARGUMENT"));
+    assert_eq!(requests_to(&server, SEND).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_token_of_another_project_is_dead() {
+    let server = MockServer::start().await;
+    mount_token(&server).await;
+    Mock::given(method("POST"))
+        .and(path(SEND))
+        .respond_with(fcm_error(403, "PERMISSION_DENIED", Some("SENDER_ID_MISMATCH")))
+        .mount(&server)
+        .await;
+
+    let delivery = deliver(&client(&server), &target(), &message_with_event(), fast()).await;
+    assert_eq!(delivery.outcome, Outcome::DeadToken);
+    assert_eq!(requests_to(&server, SEND).await.len(), 1, "the other form would fare no better");
+}
+
+/// The key FCM holds for APNs or for web push is refused there: a fault
+/// of the project's settings, and none of the token's.
+#[tokio::test]
+async fn a_key_the_service_behind_fcm_refuses_does_not_kill_the_token() {
+    let server = MockServer::start().await;
+    mount_token(&server).await;
+    Mock::given(method("POST"))
+        .and(path(SEND))
+        .respond_with(fcm_error(401, "UNAUTHENTICATED", Some("THIRD_PARTY_AUTH_ERROR")))
+        .mount(&server)
+        .await;
+
+    let delivery = deliver(&client(&server), &target(), &message(), fast()).await;
+    assert_eq!(delivery.outcome, Outcome::Rejected);
+    assert_eq!(delivery.attempts.len(), 1);
 }
 
 #[tokio::test]
@@ -317,8 +353,10 @@ async fn a_push_fcm_finds_too_big_is_sent_again_without_the_event() {
     );
 }
 
+/// Refused with the event, the push may be too big. Refused without it as
+/// well, it is not the push that FCM cannot read.
 #[tokio::test]
-async fn a_push_without_an_event_that_fcm_refuses_is_not_sent_again() {
+async fn a_token_fcm_refuses_in_both_forms_is_dead() {
     let server = MockServer::start().await;
     mount_token(&server).await;
     Mock::given(method("POST"))
@@ -327,12 +365,38 @@ async fn a_push_without_an_event_that_fcm_refuses_is_not_sent_again() {
         .mount(&server)
         .await;
 
-    // The other form is refused too: it is sent once, and that is the end.
-    let mut message = message_with_event();
-    message.payload = message.fallback.take().unwrap();
-    let delivery = deliver(&client(&server), &target(), &message, fast()).await;
-    assert_eq!(delivery.outcome, Outcome::Rejected);
-    assert_eq!(requests_to(&server, SEND).await.len(), 1);
+    let delivery = deliver(&client(&server), &target(), &message_with_event(), fast()).await;
+    assert_eq!(delivery.outcome, Outcome::DeadToken);
+    assert_eq!(delivery.attempts.len(), 1);
+
+    let sent = requests_to(&server, SEND).await;
+    assert_eq!(sent.len(), 2, "once with the event, once without, and that is the end");
+    let data = |r: &Request| serde_json::from_slice::<Value>(&r.body).unwrap()["message"]["data"].clone();
+    assert!(data(&sent[0]).get("event").is_some());
+    assert!(data(&sent[1]).get("event").is_none());
+}
+
+/// The second form failed for a reason that says nothing of the token: the
+/// first refusal may still have been about the size, and the token stays.
+#[tokio::test]
+async fn a_busy_service_after_a_push_that_was_too_big_does_not_kill_the_token() {
+    let server = MockServer::start().await;
+    mount_token(&server).await;
+    Mock::given(method("POST"))
+        .and(path(SEND))
+        .and(body_string_contains(r#""event":"#))
+        .respond_with(fcm_error(400, "INVALID_ARGUMENT", Some("INVALID_ARGUMENT")))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(SEND))
+        .respond_with(fcm_error(503, "UNAVAILABLE", Some("UNAVAILABLE")))
+        .mount(&server)
+        .await;
+
+    let delivery = deliver(&client(&server), &target(), &message_with_event(), fast()).await;
+    assert_eq!(delivery.outcome, Outcome::Retry);
+    assert!(delivery.attempts.iter().all(|a| a.outcome == Outcome::Retry), "{delivery:?}");
 }
 
 #[tokio::test]

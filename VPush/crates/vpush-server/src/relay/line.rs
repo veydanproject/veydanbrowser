@@ -4,7 +4,6 @@
 //! it comes back by itself after it is lost, for as long as it takes, and
 //! checks that the relay still answers.
 
-use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,10 +14,11 @@ use nostr::prelude::{Kind, RelayUrl, Timestamp};
 use nostr_sdk::relay::{Relay, RelayNotification, RelayOptions, RelayStatus};
 use tokio::sync::watch;
 
-use super::plan::{subscriptions, Sub};
+use super::plan::Sub;
+use super::stock::Stock;
 use super::Watch;
 use crate::api::now;
-use crate::pipeline::classify::{self, Subject, KIND_GROUP, KIND_WRAP};
+use crate::pipeline::classify::{self, KIND_GROUP, KIND_WRAP};
 use crate::pipeline::Pipeline;
 use crate::relays::AllowedRelay;
 use crate::store::{AllStore, RelayPlan, WatchKind};
@@ -56,79 +56,74 @@ struct Line {
     watch: Arc<Watch>,
     store: Arc<dyn AllStore>,
     pipeline: Arc<Pipeline>,
-    /// What stock was taken of on this relay.
-    known: BTreeSet<(WatchKind, String)>,
-    /// By subscription: the keys and groups the relay is asked about for
-    /// the first time. What comes for them before the end of the stored
-    /// events was there before the watch began.
-    fresh: HashMap<String, BTreeSet<(WatchKind, String)>>,
+    stock: Stock,
+    /// What was last asked for, and whether the relay heard all of it.
+    plan: RelayPlan,
+    unsent: bool,
 }
 
 impl Line {
     async fn subscribe(&mut self, plan: &RelayPlan) {
-        // Fails when the relay is off the line; the list is cleared anyway.
-        let _ = self.relay.unsubscribe_all().await;
-        self.fresh.clear();
+        self.plan = plan.clone();
+        self.unsent = false;
+        // Every request is taken off the list nostr-sdk keeps, whether the
+        // relay can be told or not. `unsubscribe_all` stops at the first it
+        // cannot tell, and what stays on the list is asked for again after
+        // every reconnect, under an id nobody waits for any more.
+        for id in self.relay.subscriptions().await.into_keys() {
+            let _ = self.relay.unsubscribe(&id).await;
+        }
         let last_alive = self.store.relay_last_alive(&self.url).await.ok().flatten();
-        let subs = subscriptions(plan, now(), last_alive);
+        let (subs, left) = self.stock.replan(plan, now(), last_alive);
+        if !left.is_empty() {
+            match self.store.unset_baselined(&self.url, &left).await {
+                Ok(()) => {
+                    tracing::debug!(relay = %self.url, targets = left.len(), "stock forgotten")
+                }
+                Err(e) => tracing::error!(relay = %self.url, error = %e, "stock not forgotten"),
+            }
+        }
         self.watch.update(&self.url, |h| {
             h.dm = plan.dm.len();
             h.groups = plan.groups.len();
             h.refused = None;
         });
-        for sub in subs {
-            let fresh: BTreeSet<_> = sub
-                .targets
-                .iter()
-                .map(|t| (sub.kind, t.clone()))
-                .filter(|t| !self.known.contains(t))
-                .collect();
-            if !fresh.is_empty() {
-                self.fresh.insert(sub.id.clone(), fresh);
-            }
+        for sub in &subs {
             let asked = self
                 .relay
-                .subscribe(filter(&sub))
+                .subscribe(filter(sub))
                 .with_id(SubscriptionId::new(sub.id.clone()))
                 .await;
             if let Err(e) = asked {
-                // Kept by nostr-sdk and sent when the relay is on the line.
-                tracing::debug!(relay = %self.url, sub = %sub.id, error = %e, "subscription waits for the relay");
+                // A relay that is briefly away gets the request when it
+                // is back: nostr-sdk keeps it. One that has been failing
+                // for long is refused outright, and the request is
+                // forgotten; nothing would ask it for these keys and
+                // groups until the hourly renewal. So they are asked
+                // for again as soon as it is on the line.
+                self.unsent = true;
+                tracing::debug!(relay = %self.url, sub = %sub.id, error = %e, "subscription not sent");
             }
         }
         tracing::debug!(
             relay = %self.url,
             dm = plan.dm.len(),
             groups = plan.groups.len(),
-            fresh = self.fresh.values().map(|f| f.len()).sum::<usize>(),
+            fresh = self.stock.fresh(),
             "subscribed"
         );
     }
 
-    /// Is the event of a key or a group stock has not been taken of yet.
-    fn is_fresh(&self, sub: &str, event: &nostr::event::Event) -> bool {
-        let Some(fresh) = self.fresh.get(sub) else {
-            return false;
-        };
-        match classify::subject(event) {
-            Some(Subject::Dm { recipients }) => recipients
-                .iter()
-                .all(|p| fresh.contains(&(WatchKind::Dm, p.clone()))),
-            Some(Subject::Group { id }) => fresh.contains(&(WatchKind::Group, id)),
-            None => false,
-        }
-    }
-
     /// The relay sent all it had stored for a subscription.
     async fn stored_is_over(&mut self, sub: &str) {
-        let Some(fresh) = self.fresh.remove(sub) else {
+        let targets = self.stock.stored_is_over(sub);
+        if targets.is_empty() {
             return;
-        };
-        let targets: Vec<_> = fresh.into_iter().collect();
+        }
         match self.store.set_baselined(&self.url, &targets, now()).await {
             Ok(()) => {
                 tracing::debug!(relay = %self.url, sub, targets = targets.len(), "stock taken");
-                self.known.extend(targets);
+                self.stock.taken(targets);
             }
             Err(e) => tracing::error!(relay = %self.url, error = %e, "stock not recorded"),
         }
@@ -136,8 +131,9 @@ impl Line {
 
     async fn notified(&mut self, notification: RelayNotification) {
         match notification {
-            RelayNotification::Event { subscription_id, event } => {
-                let baseline = self.is_fresh(subscription_id.as_str(), &event);
+            RelayNotification::Event { event, .. } => {
+                let baseline =
+                    classify::subject(&event).is_some_and(|subject| self.stock.is_fresh(&subject));
                 self.watch.update(&self.url, |h| h.events += 1);
                 self.pipeline.event(&self.url, &event, baseline).await;
             }
@@ -170,6 +166,13 @@ impl Line {
                     tracing::info!(relay = %self.url, state, "relay");
                 }
                 if state == "connected" {
+                    // Before the relay is noted as alive: what is asked
+                    // for again reaches back to when it was last alive,
+                    // over the time it was away.
+                    if self.unsent {
+                        let plan = self.plan.clone();
+                        self.subscribe(&plan).await;
+                    }
                     let _ = self.store.relay_alive(&self.url, now()).await;
                 }
             }
@@ -190,7 +193,11 @@ pub async fn run(
     let address = match RelayUrl::parse(&address(&allowed)) {
         Ok(address) => address,
         Err(e) => {
-            tracing::error!(relay = %url, error = %e, "not an address nostr-sdk takes");
+            // The watcher starts a line that ended again, every time it
+            // reads the plan. Until one holds, the relay is shown to the
+            // clients as what it is: out of reach.
+            tracing::error!(relay = %url, error = %e, "not an address nostr-sdk takes; the relay is not watched");
+            watch.update(&url, |h| h.state = "disconnected".to_string());
             return;
         }
     };
@@ -199,10 +206,10 @@ pub async fn run(
         .build();
     let mut notifications = relay.notifications();
     let known = match store.baselined(&url).await {
-        Ok(known) => known.into_iter().collect(),
+        Ok(known) => known,
         Err(e) => {
             tracing::error!(relay = %url, error = %e, "what stock was taken of cannot be read");
-            BTreeSet::new()
+            Vec::new()
         }
     };
     let mut line = Line {
@@ -211,8 +218,9 @@ pub async fn run(
         watch: Arc::clone(&watch),
         store,
         pipeline,
-        known,
-        fresh: HashMap::new(),
+        stock: Stock::new(known),
+        plan: RelayPlan::default(),
+        unsent: false,
     };
 
     watch.update(&url, |_| {});

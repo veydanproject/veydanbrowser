@@ -13,13 +13,11 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::delivery::retry::{self, RetryPolicy};
-use crate::delivery::{mask, Message, ProviderKind, Providers, Target, TEST_TTL};
+use crate::delivery::{self, mask, ProviderKind, Providers, Target, TEST_DEADLINE};
 use crate::store::{Device, Store};
 use crate::relay::Watch;
 use crate::logging::{LogControl, LogSpec};
 use crate::version;
-use vpush_proto::{Payload, PushType};
 
 /// One connection may send this much in all; `vpush ctl` sends a line or two.
 const MAX_LINE: usize = 64 * 1024;
@@ -30,9 +28,11 @@ const IO_TIMEOUT: Duration = Duration::from_secs(10);
 pub enum Request {
     Health,
     LogShow,
+    /// Every change of levels made here runs out: the server is not left
+    /// writing everything it sees because somebody forgot.
     LogSet {
         spec: String,
-        ttl_secs: Option<u64>,
+        ttl_secs: u64,
     },
     LogReset,
     /// One push to one token, past every filter: shows whether pushes arrive.
@@ -91,6 +91,15 @@ impl Request {
             Self::Devices { .. } => "devices",
             Self::Stats => "stats",
             Self::Relays => "relays",
+        }
+    }
+
+    /// How long `vpush ctl` waits for the answer. A test push is given
+    /// its deadline by the server, and the answer a moment to come back.
+    fn answer_within(&self) -> Duration {
+        match self {
+            Self::TestPush { .. } => TEST_DEADLINE + Duration::from_secs(5),
+            _ => IO_TIMEOUT,
         }
     }
 }
@@ -254,16 +263,18 @@ async fn handle(request: Request, state: &AdminState) -> Response {
         Request::LogShow => Response::ok(state.log.show()),
         Request::LogSet { spec, ttl_secs } => match spec.parse::<LogSpec>() {
             Err(e) => Response::err(e),
-            Ok(parsed) => {
-                let view = state.log.set(&parsed, ttl_secs.map(Duration::from_secs));
-                tracing::info!(
-                    set = %parsed,
-                    ttl_secs,
-                    effective = %view.effective,
-                    "log levels changed"
-                );
-                Response::ok(view)
-            }
+            Ok(parsed) => match state.log.set(&parsed, Duration::from_secs(ttl_secs)) {
+                Err(e) => Response::err(e),
+                Ok(view) => {
+                    tracing::info!(
+                        set = %parsed,
+                        ttl_secs,
+                        effective = %view.effective,
+                        "log levels changed"
+                    );
+                    Response::ok(view)
+                }
+            },
         },
         Request::LogReset => {
             let view = state.log.reset();
@@ -303,18 +314,9 @@ async fn test_push(state: &AdminState, app: &str, kind: ProviderKind, token: Str
         Err(e) => return Response::err(e),
     };
     let trace = crate::api::next_request_id();
-    let mut payload = Payload::new(PushType::Test);
-    payload.trace = Some(trace.clone());
-    let message = Message {
-        payload,
-        fallback: None,
-        collapse_key: None,
-        ttl: TEST_TTL,
-        urgent: true,
-    };
     let target = Target { token };
 
-    let delivery = retry::deliver(provider.as_ref(), &target, &message, RetryPolicy::default()).await;
+    let delivery = delivery::test_push(provider.as_ref(), &target, &trace).await;
     let last = delivery.attempts.last();
     tracing::info!(
         app,
@@ -358,7 +360,7 @@ pub async fn call(socket: &Path, request: &Request) -> anyhow::Result<serde_json
     write.shutdown().await?;
 
     let mut line = String::new();
-    tokio::time::timeout(IO_TIMEOUT, BufReader::new(read).read_line(&mut line))
+    tokio::time::timeout(request.answer_within(), BufReader::new(read).read_line(&mut line))
         .await
         .map_err(|_| anyhow::anyhow!("vpush did not answer in time"))??;
     if line.trim().is_empty() {
@@ -381,7 +383,7 @@ mod tests {
     fn requests_have_a_stable_wire_form() {
         let line = serde_json::to_string(&Request::LogSet {
             spec: "relay=debug".to_string(),
-            ttl_secs: Some(900),
+            ttl_secs: 900,
         })
         .unwrap();
         assert_eq!(line, r#"{"cmd":"log_set","spec":"relay=debug","ttl_secs":900}"#);

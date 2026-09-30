@@ -24,15 +24,33 @@ UMask=0027
 RuntimeDirectory=vpush
 RuntimeDirectoryMode=0750
 
+# The server needs the network and its own directories, and nothing else of
+# the machine. What a bug in it could reach is cut down to that.
 NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
 RestrictSUIDSGID=true
-ReadWritePaths=/opt/vpush/data /opt/vpush/log
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadWritePaths=/opt/vpush/data
 LimitNOFILE=65536
 
 [Install]
