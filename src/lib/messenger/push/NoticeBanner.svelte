@@ -44,9 +44,10 @@
 
   /**
    * `onopen`: how the shell opens a chat (a desk has it in place); a phone
-   * goes to the chat's page. `corner`: under the title bar on the right.
+   * goes to the chat's page. `desk`: a computer, with a mouse: the cards sit
+   * under the title bar and each has a cross to close it.
    */
-  let { onopen, corner = false }: { onopen?: (chatId: string | null) => void; corner?: boolean } = $props();
+  let { onopen, desk = false }: { onopen?: (chatId: string | null) => void; desk?: boolean } = $props();
 
   const SHOWN_FOR_MS = 5000;
   const MAX_CARDS = 3;
@@ -170,7 +171,7 @@
 </script>
 
 {#if cards.length}
-  <div class="stack" class:corner aria-live="polite">
+  <div class="stack" class:desk aria-live="polite">
     {#each cards as card (card.key)}
       {@const f = face(card)}
       <div
@@ -195,6 +196,16 @@
             <span class="title">{card.group || !card.sender ? card.title : nameStore.label(card.sender)}</span>
             {#if card.count > 1}<span class="more">+{card.count - 1}</span>{/if}
             <span class="when">{$t('msg_notice_now')}</span>
+            {#if desk}
+              <button
+                class="close"
+                aria-label={$t('msg_notice_close')}
+                title={$t('msg_notice_close')}
+                onpointerdown={(e) => e.stopPropagation()}
+                onkeydown={(e) => e.stopPropagation()}
+                onclick={(e) => { e.stopPropagation(); leave(card); }}
+              ><Icon name="x" size={14} /></button>
+            {/if}
           </div>
           {#if card.request}<div class="label">{$t('msg_notice_request')}</div>{/if}
           <div class="body">
@@ -221,8 +232,14 @@
     display: flex; flex-direction: column; gap: 8px; align-items: center;
     pointer-events: none;
   }
-  /* A desk: the corner under the title bar, out of the way of the chat. */
-  .stack.corner { top: 52px; left: auto; right: 16px; width: 360px; align-items: stretch; }
+  /* A desk: in the middle, under the navigation bar. */
+  .stack.desk { top: 72px; }
+  .close {
+    flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; margin: -3px -4px -3px 0; padding: 0; border: none; border-radius: var(--radius-sm);
+    background: transparent; color: var(--text-3); cursor: pointer;
+  }
+  .close:hover { background: var(--surface-2); color: var(--text); }
   .card {
     position: relative; overflow: hidden; pointer-events: auto; touch-action: none; user-select: none;
     width: 100%; max-width: 420px;

@@ -448,7 +448,7 @@
 {#if !standaloneNotes && !notesLock.locked}
   <PasswordGenerator bind:open={pwgenOpen} />
   {#if messengerStore.visible}
-    <NoticeBanner corner onopen={(chat) => openFromNotice(chat).catch(() => {})} />
+    <NoticeBanner desk onopen={(chat) => openFromNotice(chat).catch(() => {})} />
   {/if}
   <TotpGenerator bind:open={totpOpen} context="global" />
   <PasswordDrawer bind:open={passwordsOpen} context="global" />
