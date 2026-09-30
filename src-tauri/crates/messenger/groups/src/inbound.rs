@@ -16,7 +16,7 @@ use crate::roles::Role;
 use crate::service::*;
 use crate::wire::{self, InnerMessage, Opened, SecretEnvelope};
 use messenger_core::envelope::{T_DELETE, T_EDIT, T_MEDIA, T_TEXT};
-use messenger_core::traits::{Notice, UiEvent};
+use messenger_core::traits::{Body, Notice, UiEvent};
 use messenger_core::{Context, DmInbound, Envelope, EventSource, GroupInbound, MessengerError, PubKey, Result};
 use messenger_store::groups::{self as repo, GroupRow, PendingRow};
 use messenger_store::messages::{self as msgs, NewMessage};
@@ -198,7 +198,7 @@ impl GroupService {
         if !from_me && !historical {
             out.notify.push(Notice {
                 title: body.name.clone(),
-                body: Some("group_invite".into()),
+                body: Some(Body::Invite { group_name: body.name.clone() }),
                 chat_id: None,
                 sender: Some(peer.as_hex().to_string()),
                 request: false,
@@ -339,8 +339,8 @@ impl GroupService {
         });
         if !historical {
             out.notify.push(Notice {
-                title: row.name,
-                body: Some("group_request".into()),
+                title: row.name.clone(),
+                body: Some(Body::JoinRequest { group_name: row.name }),
                 chat_id: Some(repo::group_chat_id(&body.group_id)),
                 sender: Some(sender.as_hex().to_string()),
                 request: false,
@@ -510,7 +510,7 @@ impl GroupService {
         if !from_me {
             out.notify.push(Notice {
                 title: s.name.clone(),
-                body: Some("group_welcome".into()),
+                body: Some(Body::Welcome { group_name: s.name.clone() }),
                 chat_id: Some(repo::group_chat_id(&group_id)),
                 sender: Some(sender.as_hex().to_string()),
                 request: false,
@@ -907,7 +907,7 @@ impl GroupService {
         if live && !deleted && !chats::is_muted(&self.store, &chat_id).await? {
             out.notify.push(Notice {
                 title: s.name.clone(),
-                body: Some(line),
+                body: messenger_dm::body::body_of(&envelope),
                 chat_id: Some(chat_id),
                 sender: Some(m.author.as_hex().to_string()),
                 request: false,

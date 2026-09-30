@@ -21,9 +21,10 @@
   import { chatStore } from '../chats/chatStore.svelte';
   import { nameStore } from '../groups/names.svelte';
   import { BASE, chatHref } from '../mobile/routes';
+  import { albumLine, albumOf, bodyLine, joinAlbum, type Album, type NoticeBody } from './wording';
 
   /** `os`: a computer's system shows it already (the window was not on the screen). */
-  interface Notify { title: string; body: string | null; chat_id: string | null; sender: string | null; request?: boolean; os?: boolean }
+  interface Notify { title: string; body: NoticeBody | null; chat_id: string | null; sender: string | null; request?: boolean; os?: boolean }
 
   interface Card {
     key: string;
@@ -33,6 +34,8 @@
     request: boolean;
     sender: string | null;
     text: string;
+    /** Files sent together, while they come one after another. */
+    album: Album | null;
     count: number;
     /** Changes with every message: restarts the line. */
     round: number;
@@ -55,12 +58,6 @@
   const SWIPE_UP = 40;
   const MOVED = 8;
 
-  const CODES: Record<string, string> = {
-    group_invite: 'msg_notice_group_invite',
-    group_request: 'msg_notice_group_request',
-    group_welcome: 'msg_notice_group_welcome',
-  };
-
   let cards = $state<Card[]>([]);
   let seenAt = 0;
   let round = 0;
@@ -79,8 +76,11 @@
     const chat = n.chat_id ? chatStore.chats.find((c) => c.id === n.chat_id) : undefined;
     const group = chat?.kind === 'group' || (n.chat_id?.startsWith('group:') ?? false);
     const key = n.chat_id ?? `note-${++round}`;
-    const text = wording(n.body);
     const old = cards.find((c) => c.key === key);
+    // One more of an album that is coming: the card counts them.
+    const joined = joinAlbum(old?.album, albumOf(n.body));
+    const album = joined ?? albumOf(n.body);
+    const text = joined ? albumLine(joined, $t) : bodyLine(n.body, $t);
     const card: Card = {
       key,
       chatId: n.chat_id,
@@ -89,7 +89,9 @@
       request: n.request ?? chat?.mode === 'request_received',
       sender: n.sender,
       text,
-      count: old ? old.count + 1 : 1,
+      album,
+      // The album says how many it has; the count is of the messages besides.
+      count: old ? old.count + (joined ? 0 : 1) : 1,
       round: ++round,
       held: false,
       dx: 0,
@@ -97,12 +99,6 @@
       gone: false,
     };
     cards = [card, ...cards.filter((c) => c.key !== key)].slice(0, MAX_CARDS);
-  }
-
-  function wording(body: string | null): string {
-    if (!body) return $t('msg_notice_new');
-    const code = CODES[body];
-    return code ? $t(code as 'msg_notice_new') : body;
   }
 
   /** The face on the card: the one who wrote. */

@@ -491,6 +491,22 @@ export interface MessengerNoticeWords {
   group_invite: string;
   group_request: string;
   group_welcome: string;
+  photo: string;
+  video: string;
+  voice: string;
+  circle: string;
+  audio: string;
+  file: string;
+  /** `{n}` is how many. */
+  album: string;
+  /** `{n}` is how many. */
+  files: string;
+  /** `{name}` is the group's. */
+  link_group: string;
+  link_group_nameless: string;
+  /** `{name}` is the person's. */
+  link_contact: string;
+  link_contact_nameless: string;
 }
 
 export interface MessengerPushTap {

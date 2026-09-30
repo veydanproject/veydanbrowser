@@ -222,13 +222,36 @@ async fn media_says_its_kind_and_the_caption() {
     let alice = Keys::generate();
     befriend(&phone, &alice, "Al").await;
 
-    let voice = descriptor(MediaKind::Voice, "voice.weba", None).to_envelope();
+    let mut voice = descriptor(MediaKind::Voice, "voice.weba", None);
+    voice.duration_ms = Some(12_400);
+    let voice = voice.to_envelope();
     let n = shown(phone.describe(dm_push(&dm_from(&alice, &phone, &voice, 1_000_000))).await);
-    assert_eq!(n.body, Some(Body::Media { kind: "voice".into(), name: "voice.weba".into(), caption: None }));
+    assert_eq!(
+        n.body,
+        Some(Body::Media { kind: "voice".into(), name: "voice.weba".into(), caption: None, duration_ms: Some(12_400), batch: None })
+    );
 
-    let photo = descriptor(MediaKind::Image, "cat.jpg", Some("look ")).to_envelope();
+    let mut photo = descriptor(MediaKind::Image, "cat.jpg", Some("look "));
+    photo.batch = Some("album-0001".into());
+    let photo = photo.to_envelope();
     let n = shown(phone.describe(dm_push(&dm_from(&alice, &phone, &photo, 1_000_001))).await);
-    assert_eq!(n.body, Some(Body::Media { kind: "image".into(), name: "cat.jpg".into(), caption: Some("look".into()) }));
+    assert_eq!(
+        n.body,
+        Some(Body::Media {
+            kind: "image".into(),
+            name: "cat.jpg".into(),
+            caption: Some("look".into()),
+            duration_ms: None,
+            batch: Some("album-0001".into()),
+        })
+    );
+
+    // What the phone reads has no `null` in it: its JSON reader would
+    // show a missing caption as the word "null".
+    let file = descriptor(MediaKind::File, "report.pdf", None).to_envelope();
+    let outcome = phone.describe(dm_push(&dm_from(&alice, &phone, &file, 1_000_002))).await;
+    let json = serde_json::to_value(&outcome).unwrap();
+    assert_eq!(json["body"], serde_json::json!({ "t": "media", "kind": "file", "name": "report.pdf" }));
 }
 
 #[tokio::test]

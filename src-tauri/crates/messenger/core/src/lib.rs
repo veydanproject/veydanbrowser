@@ -29,7 +29,7 @@ pub use envelope::Envelope;
 pub use error::{MessengerError, Result};
 pub use inbound::{ChannelInbound, DmInbound, GroupInbound, Inbound, MetaInbound};
 pub use outbound::{Outbound, Scope, SyncItem};
-pub use traits::{Ack, Clock, Context, Effect, Handler, Notice, SecretStore, Transport};
+pub use traits::{Ack, Body, Clock, Context, Effect, Handler, LinkKind, Notice, SecretStore, Transport};
 pub use types::{EventId, EventSource, PubKey, RawEvent, RelayUrl, SubId, Timestamp};
 
 /// Messenger core version, reported by the runtime `status()`.

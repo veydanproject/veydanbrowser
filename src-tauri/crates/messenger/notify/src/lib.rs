@@ -24,6 +24,6 @@ pub mod settings;
 pub use bundle::{GroupKeyEntry, KeyBundle};
 pub use describe::describe;
 pub use live::{live, Face};
-pub use notice::{Body, ChatKind, Notice, Outcome, Plain, Reason};
+pub use notice::{Body, ChatKind, LinkKind, Notice, Outcome, Plain, Reason};
 pub use push::{PushData, PushKind};
 pub use settings::{Content, DesktopSettings, Settings};

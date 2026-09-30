@@ -9,8 +9,9 @@
 //!   statuses). Returns `Outbound`s; it never talks to relays.
 //! - `handler`: `DmHandler` (`Inbound::Dm`) and `DmRoutesHandler`
 //!   (inbox relay lists from `Inbound::Meta`).
-//! - `view`: what the host shows.
+//! - `view`: what the host shows; `body`: what a notification tells of a message.
 
+pub mod body;
 pub mod handler;
 pub mod media;
 pub mod relations;

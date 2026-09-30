@@ -17,11 +17,10 @@ use messenger_core::traits::SystemClock;
 use messenger_core::{Envelope, EventSource, Inbound, MessengerConfig, MessengerError, PubKey, RawEvent, RelayUrl, Result, Timestamp};
 use messenger_dm::pushtags::{author_key, author_mark};
 use messenger_dm::relationship::{inbound_decision, InboundDecision};
-use messenger_dm::view::preview;
+use messenger_dm::body::body_of;
 use messenger_dm::DmService;
 use messenger_groups::wire::{self, Opened, T_INVITE, T_JOIN_REQUEST, T_WELCOME};
 use messenger_groups::service::MEMBERSHIP_JOINED;
-use messenger_media::MediaKind;
 use messenger_store::{chats, groups, messages, Store};
 use nostr::key::Keys;
 use std::path::Path;
@@ -151,8 +150,7 @@ impl Describe {
         };
 
         let (body, chat) = match envelope.t.as_str() {
-            T_TEXT => (text_body(envelope.as_text()), Some(chat_id.clone())),
-            T_MEDIA => (media_body(&envelope), Some(chat_id.clone())),
+            T_TEXT | T_MEDIA => (body_of(&envelope), Some(chat_id.clone())),
             T_EDIT | T_DELETE | T_CONTROL => return Ok(Outcome::Quiet { reason: Reason::NotAMessage }),
             T_INVITE => {
                 let invite: wire::Invite = wire::dm_body(&envelope)?;
@@ -174,7 +172,7 @@ impl Describe {
             }
             other if other.starts_with("group.") => return Ok(Outcome::Quiet { reason: Reason::NotAMessage }),
             // Types from a newer app: shown by the sender's name, the app will say more.
-            _ => (text_body(envelope.str_field("text")), Some(chat_id.clone())),
+            _ => (body_of(&envelope), Some(chat_id.clone())),
         };
 
         let (title, picture, muted) = match self.dm.chat(&chat_id).await? {
@@ -225,8 +223,7 @@ impl Describe {
         }
         let envelope = Envelope::parse(&message.content).unwrap_or_else(|_| Envelope::text(&message.content));
         let body = match envelope.t.as_str() {
-            T_TEXT => text_body(envelope.as_text()),
-            T_MEDIA => media_body(&envelope),
+            T_TEXT | T_MEDIA => body_of(&envelope),
             T_EDIT | T_DELETE => return Ok(Outcome::Quiet { reason: Reason::NotAMessage }),
             _ => return Ok(Outcome::Quiet { reason: Reason::NotAMessage }),
         };
@@ -245,22 +242,6 @@ impl Describe {
             count,
         }))
     }
-}
-
-fn text_body(text: Option<&str>) -> Option<Body> {
-    let text = preview(text.unwrap_or_default());
-    (!text.is_empty()).then_some(Body::Text { text })
-}
-
-/// What a notification says of a file is its kind and name: a descriptor
-/// the app would refuse to download is still a file somebody sent.
-fn media_body(envelope: &Envelope) -> Option<Body> {
-    let kind = envelope.str_field("kind").and_then(MediaKind::parse)?;
-    Some(Body::Media {
-        kind: kind.as_str().to_string(),
-        name: preview(envelope.str_field("name").unwrap_or_default()),
-        caption: envelope.str_field("caption").map(preview).filter(|c| !c.is_empty()),
-    })
 }
 
 /// A signed event as JSON, checked as far as its shape goes; the

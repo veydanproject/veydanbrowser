@@ -636,7 +636,7 @@ impl DmService {
             if let Some(c) = self.chat(&chat.id).await?.filter(|c| !c.is_muted) {
                 effects.push(Effect::Notify(Notice {
                     title: c.title,
-                    body: Some(line),
+                    body: crate::body::body_of(&envelope),
                     chat_id: Some(chat.id.clone()),
                     sender: Some(peer.as_hex().to_string()),
                     request: c.mode == "request_received",

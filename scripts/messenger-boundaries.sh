@@ -31,7 +31,7 @@ allowed() {
     identity)  echo "messenger-core messenger-store" ;;
     ingress)   echo "messenger-core messenger-store messenger-identity" ;;
     contacts)  echo "messenger-core messenger-store messenger-http" ;;
-    dm)        echo "messenger-core messenger-store messenger-contacts" ;;
+    dm)        echo "messenger-core messenger-store messenger-contacts messenger-links" ;;
     media)     echo "messenger-core messenger-store messenger-http" ;;
     groups)    echo "messenger-core messenger-store messenger-media messenger-dm messenger-links" ;;
     push)      echo "messenger-core messenger-http" ;;

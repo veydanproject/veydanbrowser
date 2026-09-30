@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use desktop_notify::{AppInfo, Notifier, Toast};
-use messenger_notify::{Body, ChatKind, DesktopSettings, Outcome};
+use messenger_notify::{Body, ChatKind, DesktopSettings, LinkKind, Outcome};
 use messenger_runtime::MessengerRuntime;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -45,6 +45,7 @@ const AVATAR_MAX_BYTES: usize = 2 * 1024 * 1024;
 /// The words of the user's language. The page sends them (`i18n.ts` holds
 /// every string of the app); these are the words until it does.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Words {
     pub app: String,
     pub new_message: String,
@@ -56,6 +57,22 @@ pub struct Words {
     pub group_invite: String,
     pub group_request: String,
     pub group_welcome: String,
+    pub photo: String,
+    pub video: String,
+    pub voice: String,
+    pub circle: String,
+    pub audio: String,
+    pub file: String,
+    /// Pictures and videos sent together; `{n}` is how many.
+    pub album: String,
+    /// Files sent together; `{n}` is how many.
+    pub files: String,
+    /// `{name}` is the group's.
+    pub link_group: String,
+    pub link_group_nameless: String,
+    /// `{name}` is the person's.
+    pub link_contact: String,
+    pub link_contact_nameless: String,
 }
 
 impl Default for Words {
@@ -69,7 +86,122 @@ impl Default for Words {
             group_invite: "Invites you to a group".into(),
             group_request: "Asks to join the group".into(),
             group_welcome: "You are in the group".into(),
+            photo: "Photo".into(),
+            video: "Video".into(),
+            voice: "Voice message".into(),
+            circle: "Video message".into(),
+            audio: "Audio".into(),
+            file: "File".into(),
+            album: "Album: {n}".into(),
+            files: "Files: {n}".into(),
+            link_group: "Group “{name}”".into(),
+            link_group_nameless: "Link to a group".into(),
+            link_contact: "Contact: {name}".into(),
+            link_contact_nameless: "Contact".into(),
         }
+    }
+}
+
+/// `12400` → `0:12`; an hour and more as `1:02:03`.
+fn duration(ms: u64) -> String {
+    let s = (ms + 500) / 1000;
+    let (h, m, s) = (s / 3600, s % 3600 / 60, s % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// Files are told by their name; a picture, a video, a recording by what it is.
+fn named(kind: &str) -> bool {
+    kind == "file" || kind == "audio"
+}
+
+/// One message in the user's words: the same line the card in the app
+/// makes (`push/wording.ts`) and the phone (`Notifier.kt`).
+fn body_line(body: &Body, words: &Words) -> String {
+    match body {
+        Body::Text { text } => text.clone(),
+        Body::Link { link: LinkKind::Group, title } if title.is_empty() => format!("🔗 {}", words.link_group_nameless),
+        Body::Link { link: LinkKind::Group, title } => format!("🔗 {}", words.link_group.replace("{name}", title)),
+        Body::Link { link: LinkKind::Contact, title } if title.is_empty() => format!("👤 {}", words.link_contact_nameless),
+        Body::Link { link: LinkKind::Contact, title } => format!("👤 {}", words.link_contact.replace("{name}", title)),
+        Body::Link { link: LinkKind::Web, title } => format!("🔗 {title}"),
+        Body::Media { kind, name, caption, duration_ms, .. } => {
+            let (emoji, word) = match kind.as_str() {
+                "image" => ("📷", &words.photo),
+                "video" => ("🎬", &words.video),
+                "voice" => ("🎤", &words.voice),
+                "circle" => ("⭕", &words.circle),
+                "audio" => ("🎵", &words.audio),
+                _ => ("📎", &words.file),
+            };
+            if named(kind) {
+                let name = if name.is_empty() { word } else { name };
+                match caption {
+                    Some(caption) => format!("{emoji} {name} · {caption}"),
+                    None => format!("{emoji} {name}"),
+                }
+            } else if let Some(caption) = caption {
+                format!("{emoji} {caption}")
+            } else if let Some(ms) = duration_ms {
+                format!("{emoji} {word} ({})", duration(*ms))
+            } else {
+                format!("{emoji} {word}")
+            }
+        }
+        Body::Invite { group_name } => format!("{}: {group_name}", words.group_invite),
+        Body::JoinRequest { group_name } => format!("{}: {group_name}", words.group_request),
+        Body::Welcome { group_name } => format!("{}: {group_name}", words.group_welcome),
+    }
+}
+
+/// Files sent together, as far as they came: an album, or a few documents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Album {
+    batch: String,
+    files: bool,
+    n: u32,
+    caption: Option<String>,
+}
+
+impl Album {
+    /// The album a message belongs to, if it was sent with others.
+    fn of(body: &Body) -> Option<Self> {
+        match body {
+            Body::Media { kind, caption, batch: Some(batch), .. } if kind != "voice" && kind != "circle" => {
+                Some(Self { batch: batch.clone(), files: named(kind), n: 1, caption: caption.clone() })
+            }
+            _ => None,
+        }
+    }
+
+    fn line(&self, words: &Words) -> String {
+        let head = if self.files {
+            format!("📎 {}", words.files.replace("{n}", &self.n.to_string()))
+        } else {
+            format!("🖼 {}", words.album.replace("{n}", &self.n.to_string()))
+        };
+        match &self.caption {
+            Some(caption) => format!("{head} · {caption}"),
+            None => head,
+        }
+    }
+}
+
+/// One line of a chat's notification: who wrote, where it matters, and what.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Line {
+    /// "Anna: " in a group, "Message request · " from a stranger.
+    prefix: String,
+    text: String,
+    album: Option<Album>,
+}
+
+impl Line {
+    fn shown(&self) -> String {
+        format!("{}{}", self.prefix, self.text)
     }
 }
 
@@ -117,12 +249,27 @@ pub fn route(window: WindowSeen, enabled: bool, available: bool) -> Route {
 /// What one chat's notification says so far.
 #[derive(Default)]
 struct Stack {
-    lines: VecDeque<String>,
+    lines: VecDeque<Line>,
     count: u32,
 }
 
 impl Stack {
-    fn push(&mut self, line: Option<String>) {
+    /// One more of an album that is coming joins its line, which then says
+    /// how many there are, not which.
+    fn push(&mut self, line: Option<Line>, words: &Words) {
+        if let Some(line) = &line {
+            if let (Some(next), Some(last)) = (&line.album, self.lines.back_mut()) {
+                if let Some(album) = last.album.as_mut().filter(|a| a.batch == next.batch) {
+                    album.n += next.n;
+                    album.files &= next.files;
+                    if album.caption.is_none() {
+                        album.caption.clone_from(&next.caption);
+                    }
+                    last.text = album.line(words);
+                    return;
+                }
+            }
+        }
         self.count += 1;
         if let Some(line) = line {
             self.lines.push_back(line);
@@ -141,7 +288,7 @@ impl Stack {
                 words.new_message.clone()
             };
         }
-        let mut out: Vec<String> = self.lines.iter().cloned().collect();
+        let mut out: Vec<String> = self.lines.iter().map(Line::shown).collect();
         let left_out = self.count.saturating_sub(self.lines.len() as u32);
         if left_out > 0 {
             out.push(words.more.replace("{n}", &left_out.to_string()));
@@ -156,30 +303,26 @@ impl Stack {
 pub struct Worded {
     pub key: String,
     pub title: String,
-    pub line: Option<String>,
+    pub line: Option<Line>,
     pub picture: Option<String>,
 }
 
 pub fn word(outcome: Outcome, words: &Words) -> Option<Worded> {
     match outcome {
         Outcome::Show(n) => {
-            let text = match n.body {
-                None => words.new_message.clone(),
-                Some(Body::Text { text }) => text,
-                Some(Body::Media { name, caption, .. }) => format!("📎 {}", caption.unwrap_or(name)),
-                Some(Body::Invite { group_name }) => format!("{}: {group_name}", words.group_invite),
-                Some(Body::JoinRequest { group_name }) => format!("{}: {group_name}", words.group_request),
-                Some(Body::Welcome { group_name }) => format!("{}: {group_name}", words.group_welcome),
+            let prefix = match n.kind {
+                ChatKind::Group => format!("{}: ", n.sender),
+                ChatKind::Request => format!("{} · ", words.request),
+                ChatKind::Dm => String::new(),
             };
-            let line = match n.kind {
-                ChatKind::Group => format!("{}: {text}", n.sender),
-                ChatKind::Request => format!("{} · {text}", words.request),
-                ChatKind::Dm => text,
+            let (text, album) = match &n.body {
+                None => (words.new_message.clone(), None),
+                Some(body) => (body_line(body, words), Album::of(body)),
             };
             Some(Worded {
                 key: n.chat.unwrap_or_else(|| NO_CHAT.into()),
                 title: n.title,
-                line: Some(line),
+                line: Some(Line { prefix, text, album }),
                 picture: n.picture,
             })
         }
@@ -283,7 +426,7 @@ impl DesktopNotify {
         let body = {
             let mut stacks = self.stacks.lock().unwrap();
             let stack = stacks.entry(w.key.clone()).or_default();
-            stack.push(w.line);
+            stack.push(w.line, &words);
             stack.body(&words)
         };
         self.notifier.show(Toast { key: w.key, title: w.title, body, image, silent: !sound });
@@ -527,13 +670,22 @@ mod tests {
         Words::default()
     }
 
+    /// A line as `word` makes it, of a chat without names in it.
+    fn plain_line(text: &str) -> Option<Line> {
+        Some(Line { prefix: String::new(), text: text.into(), album: None })
+    }
+
+    fn shown_line(w: Worded) -> Option<String> {
+        w.line.map(|l| l.shown())
+    }
+
     #[test]
     fn a_stack_keeps_the_last_lines_and_counts_the_rest() {
         let mut s = Stack::default();
-        s.push(Some("one".into()));
+        s.push(plain_line("one"), &words());
         assert_eq!(s.body(&words()), "one");
         for i in 2..=7 {
-            s.push(Some(format!("line {i}")));
+            s.push(plain_line(&format!("line {i}")), &words());
         }
         assert_eq!(s.body(&words()), "line 3\nline 4\nline 5\nline 6\nline 7\n+2 more");
     }
@@ -541,9 +693,9 @@ mod tests {
     #[test]
     fn a_plain_stack_only_counts() {
         let mut s = Stack::default();
-        s.push(None);
+        s.push(None, &words());
         assert_eq!(s.body(&words()), "New message");
-        s.push(None);
+        s.push(None, &words());
         assert_eq!(s.body(&words()), "2 new messages");
     }
 
@@ -562,21 +714,69 @@ mod tests {
         })
     }
 
+    fn media(kind: &str, name: &str, caption: Option<&str>, duration_ms: Option<u64>, batch: Option<&str>) -> Option<Body> {
+        Some(Body::Media {
+            kind: kind.into(),
+            name: name.into(),
+            caption: caption.map(String::from),
+            duration_ms,
+            batch: batch.map(String::from),
+        })
+    }
+
     #[test]
     fn lines_say_who_wrote_where_it_matters() {
         let text = Some(Body::Text { text: "hi".into() });
         let w = word(notice(ChatKind::Group, text.clone()), &words()).unwrap();
-        assert_eq!((w.key.as_str(), w.title.as_str(), w.line.as_deref()), ("group:g", "Team", Some("Alice: hi")));
-        assert_eq!(word(notice(ChatKind::Dm, text.clone()), &words()).unwrap().line.as_deref(), Some("hi"));
+        assert_eq!((w.key.as_str(), w.title.as_str()), ("group:g", "Team"));
+        assert_eq!(shown_line(w).as_deref(), Some("Alice: hi"));
+        assert_eq!(shown_line(word(notice(ChatKind::Dm, text.clone()), &words()).unwrap()).as_deref(), Some("hi"));
         assert_eq!(
-            word(notice(ChatKind::Request, text), &words()).unwrap().line.as_deref(),
+            shown_line(word(notice(ChatKind::Request, text), &words()).unwrap()).as_deref(),
             Some("Message request · hi")
         );
-        assert_eq!(word(notice(ChatKind::Dm, None), &words()).unwrap().line.as_deref(), Some("New message"));
+        assert_eq!(shown_line(word(notice(ChatKind::Dm, None), &words()).unwrap()).as_deref(), Some("New message"));
         assert_eq!(
-            word(notice(ChatKind::Dm, Some(Body::Invite { group_name: "X".into() })), &words()).unwrap().line.as_deref(),
+            shown_line(word(notice(ChatKind::Dm, Some(Body::Invite { group_name: "X".into() })), &words()).unwrap()).as_deref(),
             Some("Invites you to a group: X")
         );
+    }
+
+    #[test]
+    fn a_file_is_told_by_what_it_is() {
+        let line = |body: Option<Body>| shown_line(word(notice(ChatKind::Dm, body), &words()).unwrap()).unwrap();
+        assert_eq!(line(media("image", "IMG_1.jpg", None, None, None)), "📷 Photo");
+        assert_eq!(line(media("image", "IMG_1.jpg", Some("the sea"), None, None)), "📷 the sea");
+        assert_eq!(line(media("video", "v.mp4", None, Some(42_000), None)), "🎬 Video (0:42)");
+        assert_eq!(line(media("voice", "voice.weba", None, Some(12_400), None)), "🎤 Voice message (0:12)");
+        assert_eq!(line(media("circle", "c.webm", None, Some(3_723_000), None)), "⭕ Video message (1:02:03)");
+        assert_eq!(line(media("file", "report.pdf", None, None, None)), "📎 report.pdf");
+        assert_eq!(line(media("file", "report.pdf", Some("by Friday"), None, None)), "📎 report.pdf · by Friday");
+        assert_eq!(line(media("audio", "", None, None, None)), "🎵 Audio");
+
+        let link = |link: LinkKind, title: &str| line(Some(Body::Link { link, title: title.into() }));
+        assert_eq!(link(LinkKind::Web, "example.org/a"), "🔗 example.org/a");
+        assert_eq!(link(LinkKind::Group, "Club"), "🔗 Group “Club”");
+        assert_eq!(link(LinkKind::Group, ""), "🔗 Link to a group");
+        assert_eq!(link(LinkKind::Contact, "Anna"), "👤 Contact: Anna");
+    }
+
+    #[test]
+    fn pictures_sent_together_are_one_line_that_counts_them() {
+        let w = words();
+        let mut s = Stack::default();
+        let push = |s: &mut Stack, body: Option<Body>| s.push(word(notice(ChatKind::Group, body), &w).unwrap().line, &w);
+        push(&mut s, Some(Body::Text { text: "look".into() }));
+        push(&mut s, media("image", "1.jpg", None, None, Some("b1")));
+        assert_eq!(s.body(&w), "Alice: look\nAlice: 📷 Photo", "one picture is a picture");
+        push(&mut s, media("video", "2.mp4", Some("our trip"), None, Some("b1")));
+        push(&mut s, media("image", "3.jpg", None, None, Some("b1")));
+        assert_eq!(s.body(&w), "Alice: look\nAlice: 🖼 Album: 3 · our trip");
+        // Another album is another line; documents are counted as files.
+        push(&mut s, media("file", "a.pdf", None, None, Some("b2")));
+        push(&mut s, media("file", "b.pdf", None, None, Some("b2")));
+        assert_eq!(s.body(&w), "Alice: look\nAlice: 🖼 Album: 3 · our trip\nAlice: 📎 Files: 2");
+        assert_eq!(s.count, 3, "an album counts as one message of the chat");
     }
 
     #[test]

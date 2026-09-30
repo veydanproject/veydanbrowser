@@ -18,7 +18,7 @@ export const NOTICE_TAP_EVENT = 'messenger://notice-tap';
 
 function words(): MessengerNoticeWords {
   const tt = get(t);
-  // Templates go as they are: Rust puts the number in `{n}`.
+  // Templates go as they are: Rust puts the number in `{n}` and the name in `{name}`.
   return {
     app: 'Veydan Space',
     new_message: tt('msg_notice_new'),
@@ -28,6 +28,18 @@ function words(): MessengerNoticeWords {
     group_invite: tt('msg_notice_group_invite'),
     group_request: tt('msg_notice_group_request'),
     group_welcome: tt('msg_notice_group_welcome'),
+    photo: tt('msg_notice_photo'),
+    video: tt('msg_notice_video'),
+    voice: tt('msg_notice_voice'),
+    circle: tt('msg_notice_circle'),
+    audio: tt('msg_notice_audio'),
+    file: tt('msg_notice_file'),
+    album: tt('msg_notice_album'),
+    files: tt('msg_notice_files'),
+    link_group: tt('msg_notice_link_group'),
+    link_group_nameless: tt('msg_notice_link_group_nameless'),
+    link_contact: tt('msg_notice_link_contact'),
+    link_contact_nameless: tt('msg_notice_link_contact_nameless'),
   };
 }
 

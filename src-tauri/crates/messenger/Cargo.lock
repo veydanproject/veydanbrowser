@@ -1492,6 +1492,7 @@ dependencies = [
  "hmac",
  "messenger-contacts",
  "messenger-core",
+ "messenger-links",
  "messenger-store",
  "nostr",
  "serde",

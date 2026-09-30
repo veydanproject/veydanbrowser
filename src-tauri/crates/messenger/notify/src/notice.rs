@@ -16,20 +16,9 @@ pub enum ChatKind {
     Group,
 }
 
-/// What the message was, without a word of any language.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "t", rename_all = "snake_case")]
-pub enum Body {
-    Text { text: String },
-    /// `kind` is the media kind (`image`, `video`, `audio`, `file`, `voice`, `circle`).
-    Media { kind: String, name: String, caption: Option<String> },
-    /// Somebody invites me to a group of that name.
-    Invite { group_name: String },
-    /// Somebody asks to join a group I manage.
-    JoinRequest { group_name: String },
-    /// A group I asked to join lets me in.
-    Welcome { group_name: String },
-}
+/// What the message was, without a word of any language: the same facts the
+/// running app tells of a message it takes in itself.
+pub use messenger_core::{Body, LinkKind};
 
 /// A message the phone may show in full.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

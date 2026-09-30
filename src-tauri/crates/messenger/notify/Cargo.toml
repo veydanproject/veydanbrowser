@@ -17,7 +17,6 @@ messenger-ingress.workspace = true
 messenger-contacts.workspace = true
 messenger-dm.workspace = true
 messenger-groups.workspace = true
-messenger-media.workspace = true
 messenger-transport.workspace = true
 nostr.workspace = true
 nostr-sdk.workspace = true
@@ -32,3 +31,4 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tempfile.workspace = true
 sqlx.workspace = true
 messenger-testkit.workspace = true
+messenger-media.workspace = true

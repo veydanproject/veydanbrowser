@@ -29,10 +29,26 @@ internal sealed class Outcome {
   }
 }
 
-/** What a message was, without a word of any language. */
+/**
+ * The text under `key`, or null when there is none. `optString` gives the
+ * word "null" for a JSON null, and a notification would show it.
+ */
+internal fun JSONObject.str(key: String): String? =
+  if (isNull(key)) null else optString(key).takeIf { it.isNotEmpty() }
+
+/** What a message was, without a word of any language (`messenger_core::Body`). */
 internal sealed class Body {
   data class Text(val text: String) : Body()
-  data class Media(val kind: String, val name: String, val caption: String?) : Body()
+  /** A message that is one link: `link` is `web`, `group` or `contact`; `title` what it names. */
+  data class Link(val link: String, val title: String?) : Body()
+  data class Media(
+    val kind: String,
+    val name: String?,
+    val caption: String?,
+    val durationMs: Long?,
+    /** Files sent together carry one. */
+    val batch: String?,
+  ) : Body()
   data class Invite(val groupName: String) : Body()
   data class JoinRequest(val groupName: String) : Body()
   data class Welcome(val groupName: String) : Body()
@@ -40,12 +56,19 @@ internal sealed class Body {
   companion object {
     fun from(json: JSONObject?): Body? {
       json ?: return null
-      return when (json.optString("t")) {
-        "text" -> Text(json.optString("text"))
-        "media" -> Media(json.optString("kind"), json.optString("name"), json.optString("caption").takeIf { it.isNotEmpty() })
-        "invite" -> Invite(json.optString("group_name"))
-        "join_request" -> JoinRequest(json.optString("group_name"))
-        "welcome" -> Welcome(json.optString("group_name"))
+      return when (json.str("t")) {
+        "text" -> json.str("text")?.let { Text(it) }
+        "link" -> Link(json.str("link") ?: "web", json.str("title"))
+        "media" -> Media(
+          kind = json.str("kind") ?: "file",
+          name = json.str("name"),
+          caption = json.str("caption"),
+          durationMs = json.optLong("duration_ms", 0).takeIf { it > 0 },
+          batch = json.str("batch"),
+        )
+        "invite" -> Invite(json.str("group_name") ?: "")
+        "join_request" -> JoinRequest(json.str("group_name") ?: "")
+        "welcome" -> Welcome(json.str("group_name") ?: "")
         else -> null
       }
     }
@@ -67,12 +90,12 @@ internal data class Notice(
 ) {
   companion object {
     fun from(json: JSONObject) = Notice(
-      kind = json.optString("kind", "dm"),
-      chat = json.optString("chat").takeIf { Push.isChatKey(it) },
-      title = json.optString("title"),
-      sender = json.optString("sender"),
-      senderKey = json.optString("sender_key"),
-      picture = json.optString("picture").takeIf { it.startsWith("https://") },
+      kind = json.str("kind") ?: "dm",
+      chat = json.str("chat")?.takeIf { Push.isChatKey(it) },
+      title = json.str("title") ?: "",
+      sender = json.str("sender") ?: "",
+      senderKey = json.str("sender_key") ?: "",
+      picture = json.str("picture")?.takeIf { it.startsWith("https://") },
       body = Body.from(json.optJSONObject("body")),
       muted = json.optBoolean("muted", false),
       hideOnLockscreen = json.optBoolean("hide_on_lockscreen", false),
@@ -92,9 +115,9 @@ internal data class PlainNotice(
 ) {
   companion object {
     fun from(json: JSONObject) = PlainNotice(
-      kind = json.optString("kind", "dm"),
-      chat = json.optString("chat").takeIf { Push.isChatKey(it) },
-      title = json.optString("title").takeIf { it.isNotEmpty() },
+      kind = json.str("kind") ?: "dm",
+      chat = json.str("chat")?.takeIf { Push.isChatKey(it) },
+      title = json.str("title"),
       muted = json.optBoolean("muted", false),
       count = json.optInt("count", 1).coerceIn(1, 9999),
     )

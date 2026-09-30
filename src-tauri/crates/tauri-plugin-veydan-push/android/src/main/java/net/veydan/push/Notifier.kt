@@ -42,6 +42,11 @@ internal object Notifier {
   /** Messages the server only counted: one for all of them too. */
   private const val TAG_MORE = "more"
   private const val EXTRA_COUNT = "veydan_push_count"
+  /** The album the last line of a chat tells of: its batch, whether of files, how many, its caption. */
+  private const val EXTRA_ALBUM = "veydan_push_album"
+  private const val EXTRA_ALBUM_FILES = "veydan_push_album_files"
+  private const val EXTRA_ALBUM_N = "veydan_push_album_n"
+  private const val EXTRA_ALBUM_CAPTION = "veydan_push_album_caption"
   private const val MAX_LINES = 25
 
   /** Channels are what the user sees in the system settings, one switch each. */
@@ -74,12 +79,20 @@ internal object Notifier {
       .build()
     val me = Person.Builder().setName(context.getString(R.string.veydan_push_me)).build()
 
-    // The lines already on the screen for this chat stay; the new one joins them.
-    val style = shown(context, tag)?.let { NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it) }
+    // The lines already on the screen for this chat stay; the new one joins
+    // them. One more of an album that is coming joins its line instead,
+    // which then says how many there are.
+    val before = shown(context, tag)
+    val style = before?.let { NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it) }
       ?: NotificationCompat.MessagingStyle(me)
     style.setGroupConversation(group)
     if (group) style.setConversationTitle(notice.title)
-    style.addMessage(line(context, notice), System.currentTimeMillis(), sender)
+    val next = Album.of(notice.body, notice.count)
+    val joined = next?.let { Album.last(before)?.join(it) }
+    if (joined != null && style.messages.isNotEmpty()) style.messages.removeAt(style.messages.size - 1)
+    val album = joined ?: next
+    val text = if (album != null && album.n > 1) request(context, notice) + album.line(context) else line(context, notice)
+    style.addMessage(text, System.currentTimeMillis(), sender)
     while (style.messages.size > MAX_LINES) style.messages.removeAt(0)
 
     val builder = NotificationCompat.Builder(context, if (group) CHANNEL_GROUPS else CHANNEL_DM)
@@ -90,6 +103,8 @@ internal object Notifier {
       .setAutoCancel(true)
       .setSilent(notice.muted)
       .setContentIntent(open(context, if (group) Push.TYPE_GROUP else Push.TYPE_DM, notice.chat))
+      // What the last line is an album of, for the next of its files.
+      .addExtras(album?.bundle() ?: Bundle())
     // A chat of its own in the system's eyes: its face becomes the
     // notification's, and it goes to the "Conversations" section.
     notice.chat?.let { chat ->
@@ -203,26 +218,96 @@ internal object Notifier {
       .setContentIntent(open(context, if (group) Push.TYPE_GROUP else Push.TYPE_DM, plain.chat))
   }
 
-  /** The one line of a message, in this phone's words. */
+  /** "Message request · " before whatever a stranger sent. */
+  private fun request(context: Context, notice: Notice): String =
+    if (notice.kind == "request") context.getString(R.string.veydan_push_request) + " · " else ""
+
+  /**
+   * The one line of a message, in this phone's words: the same line the card
+   * in the app makes (`push/wording.ts`) and a computer (`desktop_notify.rs`).
+   */
   private fun line(context: Context, notice: Notice): String {
     val more = if (notice.count > 1) " " + context.getString(R.string.veydan_push_more, notice.count - 1) else ""
     val body = notice.body ?: return context.getString(R.string.veydan_push_one) + more
     val text = when (body) {
       is Body.Text -> body.text
-      is Body.Media -> body.caption ?: when (body.kind) {
-        "image" -> context.getString(R.string.veydan_push_media_image)
-        "video" -> context.getString(R.string.veydan_push_media_video)
-        "audio" -> context.getString(R.string.veydan_push_media_audio)
-        "voice" -> context.getString(R.string.veydan_push_media_voice)
-        "circle" -> context.getString(R.string.veydan_push_media_circle)
-        else -> context.getString(R.string.veydan_push_media_file, body.name)
+      is Body.Link -> when (body.link) {
+        "group" -> "🔗 " + (body.title?.let { context.getString(R.string.veydan_push_link_group, it) }
+          ?: context.getString(R.string.veydan_push_link_group_nameless))
+        "contact" -> "👤 " + (body.title?.let { context.getString(R.string.veydan_push_link_contact, it) }
+          ?: context.getString(R.string.veydan_push_link_contact_nameless))
+        else -> "🔗 " + (body.title ?: "")
       }
+      is Body.Media -> media(context, body)
       is Body.Invite -> context.getString(R.string.veydan_push_invite, body.groupName)
       is Body.JoinRequest -> context.getString(R.string.veydan_push_join_request, body.groupName)
       is Body.Welcome -> context.getString(R.string.veydan_push_welcome, body.groupName)
     }
-    val request = if (notice.kind == "request") context.getString(R.string.veydan_push_request) + " · " else ""
-    return request + text + more
+    return request(context, notice) + text + more
+  }
+
+  /** Files are told by their name; a picture, a video, a recording by what it is. */
+  private fun media(context: Context, body: Body.Media): String {
+    val (emoji, word) = when (body.kind) {
+      "image" -> "📷" to R.string.veydan_push_photo
+      "video" -> "🎬" to R.string.veydan_push_video
+      "voice" -> "🎤" to R.string.veydan_push_voice
+      "circle" -> "⭕" to R.string.veydan_push_circle
+      "audio" -> "🎵" to R.string.veydan_push_audio
+      else -> "📎" to R.string.veydan_push_file
+    }
+    if (word == R.string.veydan_push_file || word == R.string.veydan_push_audio) {
+      val name = body.name ?: context.getString(word)
+      return "$emoji " + (body.caption?.let { "$name · $it" } ?: name)
+    }
+    body.caption?.let { return "$emoji $it" }
+    val length = body.durationMs?.let { " (${duration(it)})" } ?: ""
+    return "$emoji ${context.getString(word)}$length"
+  }
+
+  /** `12400` → `0:12`; an hour and more as `1:02:03`. */
+  private fun duration(ms: Long): String {
+    val s = (ms + 500) / 1000
+    val (h, m, sec) = Triple(s / 3600, s % 3600 / 60, s % 60)
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+  }
+
+  /** Files sent together, as far as they came: an album, or a few documents. */
+  private data class Album(val batch: String, val files: Boolean, val n: Int, val caption: String?) {
+    fun join(next: Album): Album? =
+      if (next.batch != batch) null else copy(files = files && next.files, n = n + next.n, caption = caption ?: next.caption)
+
+    fun line(context: Context): String {
+      val head = if (files) "📎 " + context.getString(R.string.veydan_push_files, n)
+        else "🖼 " + context.getString(R.string.veydan_push_album, n)
+      return caption?.let { "$head · $it" } ?: head
+    }
+
+    fun bundle() = Bundle().apply {
+      putString(EXTRA_ALBUM, batch)
+      putBoolean(EXTRA_ALBUM_FILES, files)
+      putInt(EXTRA_ALBUM_N, n)
+      caption?.let { putString(EXTRA_ALBUM_CAPTION, it) }
+    }
+
+    companion object {
+      /**
+       * The album a message belongs to. A push that stands for several
+       * events names the last of them: the ones before it came in the same
+       * moment, and are taken as files of the same album.
+       */
+      fun of(body: Body?, count: Int): Album? {
+        if (body !is Body.Media || body.batch == null || body.kind == "voice" || body.kind == "circle") return null
+        return Album(body.batch, body.kind == "file" || body.kind == "audio", count, body.caption)
+      }
+
+      /** What the last line of a notification on the screen is an album of. */
+      fun last(shown: android.app.Notification?): Album? {
+        val extras = shown?.extras ?: return null
+        val batch = extras.getString(EXTRA_ALBUM) ?: return null
+        return Album(batch, extras.getBoolean(EXTRA_ALBUM_FILES), extras.getInt(EXTRA_ALBUM_N, 1), extras.getString(EXTRA_ALBUM_CAPTION))
+      }
+    }
   }
 
   private fun shown(context: Context, tag: String): android.app.Notification? {

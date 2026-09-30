@@ -13,11 +13,6 @@ use crate::describe::https;
 use crate::notice::{Body, ChatKind, Notice, Outcome, Plain};
 use crate::settings::{Content, Settings};
 
-/// Codes a notice carries instead of text (see `messenger-groups`).
-const INVITE: &str = "group_invite";
-const REQUEST: &str = "group_request";
-const WELCOME: &str = "group_welcome";
-
 /// Who wrote, as the app would show them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Face {
@@ -29,8 +24,9 @@ pub struct Face {
 /// phone that gets no keys, only that something came is said.
 pub fn live(notice: &messenger_core::Notice, face: Face, settings: &Settings, locked: bool) -> Outcome {
     let group = notice.chat_id.as_deref().is_some_and(|c| c.starts_with("group:"));
-    let code = notice.body.as_deref().filter(|b| [INVITE, REQUEST, WELCOME].contains(b));
-    let kind = if group && code != Some(INVITE) {
+    // An invite names a group, and comes from a person outside it.
+    let invite = matches!(notice.body, Some(Body::Invite { .. }));
+    let kind = if group && !invite {
         ChatKind::Group
     } else if notice.request {
         ChatKind::Request
@@ -48,13 +44,6 @@ pub fn live(notice: &messenger_core::Notice, face: Face, settings: &Settings, lo
         });
     }
 
-    let body = match (code, notice.body.as_deref()) {
-        (Some(INVITE), _) => Some(Body::Invite { group_name: notice.title.clone() }),
-        (Some(REQUEST), _) => Some(Body::JoinRequest { group_name: notice.title.clone() }),
-        (Some(WELCOME), _) => Some(Body::Welcome { group_name: notice.title.clone() }),
-        (_, Some(text)) if !text.is_empty() => Some(Body::Text { text: text.to_string() }),
-        _ => None,
-    };
     // An invite comes from a person, not from the group it names.
     let title = if kind == ChatKind::Group { notice.title.clone() } else { face.name.clone() };
     Outcome::Show(Notice {
@@ -64,7 +53,7 @@ pub fn live(notice: &messenger_core::Notice, face: Face, settings: &Settings, lo
         sender: face.name,
         sender_key: notice.sender.clone().unwrap_or_default(),
         picture: https(face.picture),
-        body: body.filter(|_| settings.content == Content::SenderText),
+        body: notice.body.clone().filter(|_| settings.content == Content::SenderText),
         muted: false,
         hide_on_lockscreen: settings.lockscreen_hidden,
         count: 1,
@@ -75,14 +64,18 @@ pub fn live(notice: &messenger_core::Notice, face: Face, settings: &Settings, lo
 mod tests {
     use super::*;
 
-    fn notice(chat: Option<&str>, body: Option<&str>) -> messenger_core::Notice {
+    fn notice(chat: Option<&str>, body: Option<Body>) -> messenger_core::Notice {
         messenger_core::Notice {
             title: "Team".into(),
-            body: body.map(str::to_string),
+            body,
             chat_id: chat.map(str::to_string),
             sender: Some("ab".repeat(32)),
             request: false,
         }
+    }
+
+    fn text(t: &str) -> Option<Body> {
+        Some(Body::Text { text: t.into() })
     }
 
     fn face() -> Face {
@@ -102,7 +95,7 @@ mod tests {
 
     #[test]
     fn group_message_names_the_group_and_the_author() {
-        let n = shown(live(&notice(Some("group:g"), Some("hi")), face(), &settings(Content::SenderText), false));
+        let n = shown(live(&notice(Some("group:g"), text("hi")), face(), &settings(Content::SenderText), false));
         assert_eq!(n.kind, ChatKind::Group);
         assert_eq!(n.title, "Team");
         assert_eq!(n.sender, "Alice");
@@ -112,7 +105,7 @@ mod tests {
 
     #[test]
     fn sender_only_keeps_the_text_in_the_app() {
-        let n = shown(live(&notice(Some("dm:p"), Some("secret")), face(), &settings(Content::Sender), false));
+        let n = shown(live(&notice(Some("dm:p"), text("secret")), face(), &settings(Content::Sender), false));
         assert_eq!(n.kind, ChatKind::Dm);
         assert_eq!(n.title, "Alice");
         assert_eq!(n.body, None);
@@ -121,7 +114,7 @@ mod tests {
     #[test]
     fn nothing_and_a_lock_say_only_that_something_came() {
         for (content, locked) in [(Content::None, false), (Content::SenderText, true)] {
-            match live(&notice(Some("group:g"), Some("secret")), face(), &settings(content), locked) {
+            match live(&notice(Some("group:g"), text("secret")), face(), &settings(content), locked) {
                 Outcome::Plain(p) => {
                     assert_eq!(p.title.as_deref(), Some("Team"));
                     assert_eq!(p.chat.as_deref(), Some("group:g"));
@@ -129,26 +122,26 @@ mod tests {
                 other => panic!("expected plain, got {other:?}"),
             }
         }
-        match live(&notice(Some("dm:p"), Some("secret")), face(), &settings(Content::None), false) {
+        match live(&notice(Some("dm:p"), text("secret")), face(), &settings(Content::None), false) {
             Outcome::Plain(p) => assert_eq!(p.title, None, "a person's name is not given away"),
             other => panic!("expected plain, got {other:?}"),
         }
     }
 
     #[test]
-    fn codes_become_bodies() {
-        let n = shown(live(&notice(None, Some("group_invite")), face(), &settings(Content::SenderText), false));
+    fn an_invite_comes_from_a_person_and_a_welcome_from_the_group() {
+        let n = shown(live(&notice(None, Some(Body::Invite { group_name: "Team".into() })), face(), &settings(Content::SenderText), false));
         assert_eq!(n.kind, ChatKind::Dm);
         assert_eq!(n.title, "Alice", "an invite comes from a person");
         assert_eq!(n.body, Some(Body::Invite { group_name: "Team".into() }));
-        let n = shown(live(&notice(Some("group:g"), Some("group_welcome")), face(), &settings(Content::SenderText), false));
+        let n = shown(live(&notice(Some("group:g"), Some(Body::Welcome { group_name: "Team".into() })), face(), &settings(Content::SenderText), false));
         assert_eq!(n.kind, ChatKind::Group);
         assert_eq!(n.body, Some(Body::Welcome { group_name: "Team".into() }));
     }
 
     #[test]
     fn a_request_is_marked_and_pictures_are_https_only() {
-        let mut n0 = notice(Some("dm:p"), Some("hello"));
+        let mut n0 = notice(Some("dm:p"), text("hello"));
         n0.request = true;
         let f = Face { name: "Bob".into(), picture: Some("http://x/b.png".into()) };
         let n = shown(live(&n0, f, &settings(Content::SenderText), false));
