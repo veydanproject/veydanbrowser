@@ -210,11 +210,19 @@ impl MessengerRuntime {
     }
 
     /// Media servers of the embedded manifest for the current region.
-    /// Credentials are never in a manifest; the user adds them.
+    /// Credentials are never in a manifest; the user adds them. A server an
+    /// earlier manifest brought and this one no longer lists is removed;
+    /// the user's own servers stay.
     pub(crate) async fn seed_media_servers(&self) -> Result<()> {
         let manifest = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
         let region = self.relays.region().await.unwrap_or_else(|_| REGION_FALLBACK.into());
-        for (i, m) in manifest.media_for_region(&region).into_iter().enumerate() {
+        let listed = manifest.media_for_region(&region);
+        for old in self.media.servers().await? {
+            if old.source == "manifest" && !listed.iter().any(|m| m.id == old.id) {
+                self.media.remove_server(&old.id).await?;
+            }
+        }
+        for (i, m) in listed.into_iter().enumerate() {
             self.media
                 .put_server(MediaServerInput {
                     id: Some(m.id.clone()),

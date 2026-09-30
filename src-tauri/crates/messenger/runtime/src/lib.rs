@@ -669,6 +669,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn media_servers_follow_the_manifest_and_keep_the_users_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = MessengerConfig::new(dir.path().join("messenger"));
+        let secrets = Arc::new(MemorySecretStore::unlocked());
+        let rt = MessengerRuntime::start(cfg.clone(), secrets.clone()).await.unwrap();
+        // What an earlier manifest brought, and what the user added.
+        let old = MediaServerInput {
+            id: Some("veydan-node-1-s3".into()),
+            kind: "s3".into(),
+            url: "https://node-1.veydan.net:9000".into(),
+            bucket: Some("veydan-media".into()),
+            source: Some("manifest".into()),
+            ..Default::default()
+        };
+        rt.media_server_put(old).await.unwrap();
+        rt.media_server_put(MediaServerInput { kind: "blossom".into(), url: "https://mine.example".into(), ..Default::default() })
+            .await
+            .unwrap();
+        rt.shutdown().await;
+
+        let rt = MessengerRuntime::start(cfg, secrets).await.unwrap();
+        let ids: Vec<String> = rt.media_servers().await.unwrap().into_iter().map(|s| s.id).collect();
+        assert!(!ids.contains(&"veydan-node-1-s3".to_string()), "gone from the manifest, gone from the app");
+        assert!(ids.contains(&"veydan-node-1-media".to_string()));
+        assert!(ids.contains(&"blossom-mine-example".to_string()), "the user's own server stays: {ids:?}");
+        rt.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn locked_secret_store_is_reported_not_fatal() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = MessengerConfig::new(dir.path().join("messenger"));

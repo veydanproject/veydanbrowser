@@ -51,3 +51,6 @@ user1/
 # VPush build output (the folder has its own .gitignore too)
 VPush/target/
 VPush/dist/
+
+# Server kits: kept locally, not in the repo
+deploy/

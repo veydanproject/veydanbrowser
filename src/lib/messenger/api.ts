@@ -560,8 +560,7 @@ import { inSection } from './content/shared/sections';
 const demo = !isTauri && demoEnabled() ? buildDemo() : null;
 let mockIdentity: MessengerIdentity | null = demo?.identity ?? null;
 let mockRelays: MessengerRelay[] = [
-  { url: 'wss://relay.damus.io', relay_id: 'pub-damus', source: 'manifest', regions: ['default'], read: true, write: true, enabled: true, auth_type: 'api_key', state: 'connected' },
-  { url: 'wss://nos.lol', relay_id: 'pub-nos', source: 'manifest', regions: ['default'], read: true, write: true, enabled: false, auth_type: null, state: 'disconnected' },
+  { url: 'wss://node-1.veydan.net', relay_id: 'veydan-node-1', source: 'manifest', regions: ['default', 'ru'], read: true, write: true, enabled: true, auth_type: 'api_key', state: 'connected' },
 ];
 let mockNotify: MessengerNotifySettings = { content: 'sender_text', lockscreen_hidden: false, locked: false };
 let mockDesktopNotify: MessengerDesktopNotify = { enabled: true, sound: true, available: true, close_to_tray: false };
@@ -585,7 +584,7 @@ const emptyProfile = (pubkey: string): MessengerProfile => ({
 
 let mockChats: MessengerChat[] = demo?.chats ?? [];
 let mockMediaServers: MessengerMediaServer[] = [
-  { id: 'veydan-node-1-s3', kind: 's3', url: 'https://node-1.veydan.net:9000', bucket: 'veydan-media', region: 'us-east-1', access_key: null, has_secret: false, priority: 10, enabled: true, source: 'manifest', public_base: 'https://node-1.veydan.net:9000/veydan-media' },
+  { id: 'veydan-node-1-media', kind: 'blossom', url: 'https://node-1.veydan.net/media', bucket: null, region: null, access_key: null, has_secret: false, priority: 10, enabled: true, source: 'manifest', public_base: 'https://node-1.veydan.net/media' },
 ];
 const mockMessages: Record<string, MessengerMessage[]> = demo?.messages ?? {};
 let mockGroups: MessengerGroup[] = demo?.groups ?? [];
@@ -908,7 +907,6 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
         relays: on
           ? [
               { url: 'wss://node-1.veydan.net', status: 'ok' },
-              { url: 'wss://nos.lol', status: 'pending' },
               { url: 'wss://relay.example.org', status: 'not_allowed', detail: 'this server does not watch this relay' },
             ]
           : [],
