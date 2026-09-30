@@ -5,7 +5,6 @@ package net.veydan.push
 
 import android.Manifest
 import android.app.Activity
-import android.content.Intent
 import android.os.Build
 import android.util.Log
 import android.webkit.WebView
@@ -49,13 +48,10 @@ class VeydanPushPlugin(private val activity: Activity) : Plugin(activity) {
     activity.runOnUiThread {
       ProcessLifecycleOwner.get().lifecycle.addObserver(PushState.screen)
     }
-    // A tap may be what started the app.
-    Notifier.readTap(activity.intent)?.let { PushState.putTap(it) }
+    // Taps are caught by `Taps`, which exists before any plugin does.
   }
 
-  override fun onNewIntent(intent: Intent) {
-    val tap = Notifier.readTap(intent) ?: return
-    PushState.putTap(tap)
+  internal fun tapped() {
     trigger("tap", JSObject())
   }
 

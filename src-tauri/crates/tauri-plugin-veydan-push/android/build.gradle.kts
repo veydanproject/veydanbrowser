@@ -81,6 +81,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    // The same version lifecycle-process brings along.
+    implementation("androidx.startup:startup-runtime:1.1.1")
     // The last line of releases built with Kotlin 2.0; the project compiles
     // with Kotlin 1.9, which reads metadata up to 2.0 and no further.
     implementation("com.google.firebase:firebase-messaging:24.1.2")

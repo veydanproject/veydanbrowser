@@ -17,6 +17,7 @@
   import AppLockGate from '$lib/components/AppLockGate.svelte';
   import { notesLock } from '$lib/store/notes-lock.svelte';
   import { messengerStore } from '$lib/messenger/store.svelte';
+  import { startPushBridge } from '$lib/messenger/push/bridge';
 
   let { children }: { children: Snippet } = $props();
 
@@ -45,6 +46,10 @@
     syncAndroidChrome($theme);
     void notesLock.listen();
     messengerStore.ensureLoaded().catch(() => {});
+    // Taps on notifications are followed from the start of the app, not
+    // from the first screen of the messenger that is shown. Without the
+    // messenger compiled in this does nothing.
+    startPushBridge().catch(() => {});
   });
 </script>
 

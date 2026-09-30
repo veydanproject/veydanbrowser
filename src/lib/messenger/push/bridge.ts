@@ -17,25 +17,57 @@ let started = false;
 /** What came from outside the app is checked before it is used as a route. */
 const CHAT = /^group:[0-9a-f]{64}$/;
 
-async function followTap() {
+async function takeRoute(): Promise<string | null> {
   const tap = await messengerApi.push.takeTap().catch(() => null);
-  if (!tap) return;
+  if (!tap) return null;
   // A push about a direct message names no chat: the server does not know
   // who wrote. The list of chats shows which one has something new.
-  await goto(tap.chat && CHAT.test(tap.chat) ? chatHref(tap.chat) : BASE);
+  return tap.chat && CHAT.test(tap.chat) ? chatHref(tap.chat) : BASE;
 }
 
-/** Started once, by the first screen of the messenger that is shown. */
+async function followTap() {
+  const route = await takeRoute();
+  if (route) await goto(route);
+}
+
+let launch: Promise<string | null> | null = null;
+let launchClaimed = false;
+
+/**
+ * Where the tapped notification that started the app leads, if one did.
+ *
+ * The first to ask gets the route, everybody after gets null. The host's
+ * start page asks it before sending the app to its default screen: the two
+ * are one decision. Anybody else going to the chat on their own would race
+ * the start page, which is shown only once the app lock lets it, and the
+ * later of the two would win.
+ */
+export async function launchRoute(): Promise<string | null> {
+  launch ??= takeRoute();
+  const route = await launch;
+  if (!route || launchClaimed) return null;
+  launchClaimed = true;
+  return route;
+}
+
+/** Started once, by the app's shell. */
 export async function startPushBridge() {
   if (started) return;
   started = true;
+
+  // Asked early, while the start page may still wait for the app lock.
+  launch ??= takeRoute();
 
   locale.subscribe((l) => { pushStore.setLocale(l); });
   await pushStore.load();
   if (!pushStore.view?.device.supported) return;
 
-  // The tap that opened the app happened before there was anybody to tell.
-  await followTap();
+  // At the start address the start page follows the tap; anywhere else (a
+  // page reloaded during development) nobody else will.
+  if (location.pathname !== '/') {
+    const route = await launchRoute();
+    if (route) await goto(route);
+  }
   if (isTauriHost) {
     const { listen } = await import('@tauri-apps/api/event');
     await listen(PUSH_TAP_EVENT, () => { followTap(); });

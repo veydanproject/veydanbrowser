@@ -8,6 +8,7 @@
   import { t } from '$lib/mobile/i18n';
   import { APPS, availableApps, loadDefaultApp } from '$lib/mobile/apps';
   import { messengerStore } from '$lib/messenger/store.svelte';
+  import { launchRoute } from '$lib/messenger/push/bridge';
 
   let ready = $state(false);
 
@@ -19,7 +20,14 @@
     return 'home_evening';
   }
 
-  onMount(() => {
+  onMount(async () => {
+    // A tapped notification that started the app leads further than the
+    // default app. Without the messenger compiled in there is none.
+    const tapped = await launchRoute();
+    if (tapped) {
+      goto(tapped, { replaceState: true });
+      return;
+    }
     const id = loadDefaultApp();
     const app = APPS.find((a) => a.id === id && a.id !== 'settings');
     if (app) {
