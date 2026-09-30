@@ -1594,6 +1594,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "messenger-notify"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "messenger-contacts",
+ "messenger-core",
+ "messenger-dm",
+ "messenger-groups",
+ "messenger-ingress",
+ "messenger-media",
+ "messenger-store",
+ "messenger-testkit",
+ "messenger-transport",
+ "nostr",
+ "nostr-sdk",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "messenger-preview"
 version = "0.1.0"
 dependencies = [
@@ -1641,6 +1665,7 @@ dependencies = [
  "messenger-ingress",
  "messenger-links",
  "messenger-media",
+ "messenger-notify",
  "messenger-preview",
  "messenger-push",
  "messenger-store",
@@ -1674,6 +1699,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "messenger-core",
+ "messenger-dm",
+ "messenger-notify",
  "messenger-runtime",
  "messenger-store",
  "serde_json",
@@ -3594,6 +3621,20 @@ name = "zeroize"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "zerotrie"

@@ -10,6 +10,7 @@
 //! `messenger-cli` tomorrow. Nothing here knows about Tauri.
 
 pub mod media;
+pub mod notify;
 
 /// Region used when the stored one cannot be read.
 pub(crate) const REGION_FALLBACK: &str = "default";

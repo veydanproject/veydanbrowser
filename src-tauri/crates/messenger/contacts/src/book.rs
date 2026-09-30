@@ -71,6 +71,22 @@ impl ContactService {
             .collect())
     }
 
+    /// How this person is called here: my nickname for them, else what
+    /// their profile says, else a short npub.
+    pub async fn label_of(&self, pubkey: &PubKey) -> Result<String> {
+        if let Some(c) = self.get(pubkey).await? {
+            return Ok(c.label());
+        }
+        if let Some(p) = self.profiles.get(pubkey).await? {
+            return Ok(p.label());
+        }
+        let npub = PublicKey::from_hex(pubkey.as_hex())
+            .ok()
+            .and_then(|p| p.to_bech32().ok())
+            .unwrap_or_else(|| pubkey.as_hex().to_string());
+        Ok(format!("{}…{}", &npub[..12.min(npub.len())], &npub[npub.len().saturating_sub(4)..]))
+    }
+
     pub async fn get(&self, pubkey: &PubKey) -> Result<Option<ContactView>> {
         Ok(self.list().await?.into_iter().find(|c| c.pubkey == pubkey.as_hex()))
     }

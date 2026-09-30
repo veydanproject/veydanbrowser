@@ -246,6 +246,37 @@ impl GroupService {
         Ok(out)
     }
 
+    /// Every key of every group this device is in, for a copy kept where
+    /// a process without the vault can read it (the push handler).
+    pub async fn export_keys(&self) -> Result<Vec<(String, GroupKey)>> {
+        let mut out = Vec::new();
+        for row in repo::list(&self.store).await? {
+            if row.membership != MEMBERSHIP_JOINED {
+                continue;
+            }
+            for key in self.all_keys(&row.id).await? {
+                out.push((row.id.clone(), key));
+            }
+        }
+        Ok(out)
+    }
+
+    /// What `export_keys` would give, without the secrets: a fingerprint
+    /// that changes when a key is added or a group joined or left.
+    pub async fn keys_fingerprint(&self) -> Result<String> {
+        let mut ids = Vec::new();
+        for row in repo::list(&self.store).await? {
+            if row.membership != MEMBERSHIP_JOINED {
+                continue;
+            }
+            for id in repo::key_ids(&self.store, &row.id).await? {
+                ids.push(format!("{}:{}", row.id, id));
+            }
+        }
+        ids.sort();
+        Ok(ids.join(","))
+    }
+
     pub(crate) async fn link_secret(&self, group_id: &str, epoch: u32) -> Result<Option<LinkSecret>> {
         match self.secrets.get(&link_ref(group_id, epoch)).await? {
             Some(bytes) => Ok(Some(LinkSecret::from_bytes(&bytes)?)),

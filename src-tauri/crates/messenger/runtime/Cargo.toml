@@ -23,6 +23,7 @@ messenger-groups.workspace = true
 messenger-links.workspace = true
 messenger-preview.workspace = true
 messenger-push.workspace = true
+messenger-notify.workspace = true
 sha2.workspace = true
 hex.workspace = true
 getrandom.workspace = true

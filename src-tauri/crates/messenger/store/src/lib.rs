@@ -65,6 +65,36 @@ impl Store {
         Ok(Self { pool })
     }
 
+    /// The database of a running app, opened by somebody else in the same
+    /// process or another (a push handler): one connection, no writes, no
+    /// migrations. A schema newer or older than this code knows is refused,
+    /// since a push may come before the app has migrated after an update.
+    pub async fn open_read_only(config: &MessengerConfig) -> Result<Self> {
+        let options = SqliteConnectOptions::new()
+            .filename(config.db_path())
+            .read_only(true)
+            .create_if_missing(false)
+            .busy_timeout(std::time::Duration::from_secs(2));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .map_err(storage)?;
+        let store = Self { pool };
+        let have = store.schema_version().await?;
+        let want = Self::latest_migration();
+        if have != want {
+            store.close().await;
+            return Err(MessengerError::Storage(format!("schema is at {have}, this code knows {want}")));
+        }
+        Ok(store)
+    }
+
+    /// Version of the last migration compiled into this crate.
+    pub fn latest_migration() -> i64 {
+        sqlx::migrate!("./migrations").migrations.iter().map(|m| m.version).max().unwrap_or(0)
+    }
+
     /// In-memory database for tests. Same migrations, no file.
     pub async fn open_in_memory() -> Result<Self> {
         let options = SqliteConnectOptions::from_str("sqlite::memory:")
@@ -116,5 +146,31 @@ mod tests {
         // Reopening is idempotent.
         let again = Store::open(&cfg).await.unwrap();
         assert!(again.schema_version().await.unwrap() >= 1);
+    }
+
+    #[tokio::test]
+    async fn a_reader_sees_what_the_app_wrote_and_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = MessengerConfig::new(dir.path().join("msg"));
+        assert!(Store::open_read_only(&cfg).await.is_err(), "no database yet");
+
+        let app = Store::open(&cfg).await.unwrap();
+        chats::ensure_dm(&app, "aa").await.unwrap();
+        let reader = Store::open_read_only(&cfg).await.unwrap();
+        assert_eq!(reader.schema_version().await.unwrap(), Store::latest_migration());
+        assert!(chats::get(&reader, "dm:aa").await.unwrap().is_some());
+        assert!(chats::set_pinned(&reader, "dm:aa", true).await.is_err(), "read-only");
+
+        // Written after the reader opened: still seen (WAL, no snapshot held).
+        chats::ensure_dm(&app, "bb").await.unwrap();
+        assert!(chats::get(&reader, "dm:bb").await.unwrap().is_some());
+        reader.close().await;
+
+        // A database from another version of the app is refused.
+        sqlx::query("UPDATE _sqlx_migrations SET version = version + 1000 WHERE version = (SELECT MAX(version) FROM _sqlx_migrations)")
+            .execute(app.pool())
+            .await
+            .unwrap();
+        assert!(Store::open_read_only(&cfg).await.is_err());
     }
 }

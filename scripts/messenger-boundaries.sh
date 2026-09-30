@@ -35,8 +35,9 @@ allowed() {
     media)     echo "messenger-core messenger-store messenger-http" ;;
     groups)    echo "messenger-core messenger-store messenger-media messenger-dm messenger-links" ;;
     push)      echo "messenger-core messenger-http" ;;
-    runtime)   echo "messenger-core messenger-store messenger-transport messenger-identity messenger-ingress messenger-contacts messenger-dm messenger-media messenger-groups messenger-links messenger-preview messenger-push" ;;
-    testkit)   echo "messenger-core messenger-store messenger-runtime" ;;
+    notify)    echo "messenger-core messenger-store messenger-ingress messenger-contacts messenger-dm messenger-groups messenger-media messenger-transport" ;;
+    runtime)   echo "messenger-core messenger-store messenger-transport messenger-identity messenger-ingress messenger-contacts messenger-dm messenger-media messenger-groups messenger-links messenger-preview messenger-push messenger-notify" ;;
+    testkit)   echo "messenger-core messenger-store messenger-runtime messenger-notify messenger-dm" ;;
     *)         echo "__unknown__" ;;
   esac
 }

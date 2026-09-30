@@ -50,7 +50,8 @@ pub(crate) struct OutboundGate {
 }
 
 impl DmService {
-    pub(crate) async fn load_relation(&self, peer: &PubKey) -> Result<Relationship> {
+    /// What stands between me and `peer`, as the store has it.
+    pub async fn load_relation(&self, peer: &PubKey) -> Result<Relationship> {
         Ok(match dm_relations::get(&self.store, peer.as_hex()).await? {
             Some(r) => Relationship {
                 my_contact: MyContact::parse(&r.my_contact).unwrap_or(MyContact::None),

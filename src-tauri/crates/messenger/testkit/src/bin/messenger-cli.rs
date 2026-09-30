@@ -35,7 +35,7 @@ use std::time::Duration;
 fn usage() -> ! {
     eprintln!(
         "usage: messenger-cli [--data-dir DIR] <keygen [--password PW] | import <nsec|ncryptsec> <secret> [--password PW] \
-         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] [--locale L] | push-status | push-test | push-off>"
+         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] [--locale L] | push-status | push-test | push-off | wrap <to> <text…> | notify-describe <event.json> [--type dm|group] [--group ID]>"
     );
     std::process::exit(2)
 }
@@ -482,6 +482,52 @@ async fn main() {
             println!("outcome {}  trace {}", answer.outcome, answer.trace);
         }
         "push-off" => print_push(&rt.push_set_enabled(false).await.unwrap_or_else(die)),
+        "wrap" => {
+            // The gift wrap of a text to `to`, printed, not sent: what a relay
+            // and a push server would see of it.
+            if args.len() < 2 {
+                usage();
+            }
+            let to = messenger_core::PubKey::parse(&args.remove(0)).unwrap_or_else(|| usage());
+            let bundle = rt.notify_bundle().await.unwrap_or_else(die).unwrap_or_else(|| {
+                eprintln!("error: no identity");
+                std::process::exit(1)
+            });
+            let keys = bundle.keys().unwrap_or_else(die);
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+            let wrapped = messenger_dm::wrap::wrap(&keys, &to, &messenger_core::Envelope::text(&args.join(" ")).encode(), now, None)
+                .unwrap_or_else(die);
+            println!("{}", wrapped.to_peer.json);
+        }
+        "notify-describe" => {
+            // What the phone would show for this event, from this data directory.
+            // `--type dm|group`, `--group <id>` as the push would name them.
+            if args.is_empty() {
+                usage();
+            }
+            let kind = take_flag(&mut args, "--type").unwrap_or_else(|| "dm".into());
+            let group = take_flag(&mut args, "--group");
+            let event = std::fs::read_to_string(&args[0]).unwrap_or_else(|e| {
+                eprintln!("error: {}: {e}", args[0]);
+                std::process::exit(1)
+            });
+            let mut data = std::collections::BTreeMap::new();
+            data.insert("v".to_string(), "2".to_string());
+            data.insert("type".to_string(), kind);
+            data.insert("event".to_string(), event);
+            if let Some(g) = group {
+                data.insert("group_id".to_string(), g);
+            }
+            let push = messenger_notify::PushData::parse(&data).unwrap_or_else(die);
+            let bundle = rt.notify_bundle().await.unwrap_or_else(die).unwrap_or_else(|| {
+                eprintln!("error: no identity");
+                std::process::exit(1)
+            });
+            rt.shutdown().await;
+            let outcome = messenger_notify::describe(&data_dir, &bundle, &push).await.unwrap_or_else(die);
+            println!("{}", serde_json::to_string_pretty(&outcome).unwrap());
+            return;
+        }
         "groups" => {
             for g in rt.group_list().await.unwrap_or_else(die) {
                 println!(
