@@ -73,7 +73,7 @@ pub(crate) async fn run(
         Ok(p) => p,
         Err(e) => {
             eprintln!("desktop-notify: no session bus: {e}");
-            while rx.recv().await.is_some() {}
+            crate::drain(rx).await;
             return;
         }
     };
@@ -81,7 +81,7 @@ pub(crate) async fn run(
         (proxy.receive_action_invoked().await, proxy.receive_notification_closed().await)
     else {
         eprintln!("desktop-notify: cannot listen to the notification server");
-        while rx.recv().await.is_some() {}
+        crate::drain(rx).await;
         return;
     };
 
@@ -109,6 +109,12 @@ pub(crate) async fn run(
                         for (_, id) in shown.by_key.drain() {
                             let _ = proxy.close_notification(id).await;
                         }
+                    }
+                    Command::Shutdown(done) => {
+                        for (_, id) in shown.by_key.drain() {
+                            let _ = proxy.close_notification(id).await;
+                        }
+                        let _ = done.send(());
                     }
                 }
             }

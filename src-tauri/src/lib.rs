@@ -1272,6 +1272,8 @@ fn run_desktop() {
                 // tasks (bounded) so the kills actually complete before the
                 // process exits — otherwise children would be orphaned.
                 tauri::async_runtime::block_on(browser::launch::stop_all(&state.browser));
+                #[cfg(feature = "messenger")]
+                state.messenger.shutdown_notices();
             }
         });
 }

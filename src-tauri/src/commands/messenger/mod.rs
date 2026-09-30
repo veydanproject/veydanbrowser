@@ -124,6 +124,14 @@ impl MessengerState {
         self.desktop.clone()
     }
 
+    /// The app quits: the notifications of the messenger go with it.
+    pub(crate) fn shutdown_notices(&self) {
+        #[cfg(desktop)]
+        if let Some(d) = &self.desktop {
+            d.shutdown();
+        }
+    }
+
     /// The chat was read, or the page was seen: its notifications go.
     pub(crate) fn notices_seen(&self, key: Option<&str>) {
         #[cfg(desktop)]

@@ -205,15 +205,18 @@ pub struct DesktopNotify {
 impl DesktopNotify {
     /// Needs the tokio runtime of Tauri; call from `setup`.
     pub fn start(app: tauri::AppHandle, rt: Arc<MessengerRuntime>) -> Arc<Self> {
+        let cache = app.path().app_cache_dir().ok();
         let info = AppInfo {
+            id: app.config().identifier.clone(),
             name: app.package_info().name.clone(),
             desktop_entry: "veydanspace".into(),
             icon: "veydanspace".into(),
+            icon_file: cache.as_deref().and_then(icon_file),
         };
         let tapped = app.clone();
         let on_click = Arc::new(move |key: String| clicked(&tapped, key));
         let notifier = tauri::async_runtime::block_on(async move { Notifier::start(info, on_click) });
-        let avatars = app.path().app_cache_dir().ok().map(|d| d.join("notify-avatars"));
+        let avatars = cache.map(|d| d.join("notify-avatars"));
         Arc::new(Self {
             app,
             rt,
@@ -226,6 +229,12 @@ impl DesktopNotify {
 
     pub fn available(&self) -> bool {
         self.notifier.available()
+    }
+
+    /// The app quits: its notifications go with it (a click on one would
+    /// lead nowhere). Blocks for up to a second.
+    pub fn shutdown(&self) {
+        self.notifier.shutdown();
     }
 
     pub fn set_words(&self, words: Words) {
@@ -327,6 +336,18 @@ impl DesktopNotify {
         tokio::fs::write(&path, &bytes).await.ok()?;
         Some(path)
     }
+}
+
+/// The app's icon as a file, for systems that take the source's icon from
+/// one (Windows). Written once into the cache.
+fn icon_file(cache: &std::path::Path) -> Option<PathBuf> {
+    const ICON: &[u8] = include_bytes!("../../../icons/128x128.png");
+    let path = cache.join("notify-icon.png");
+    if std::fs::metadata(&path).map(|m| m.len() as usize).ok() != Some(ICON.len()) {
+        std::fs::create_dir_all(cache).ok()?;
+        std::fs::write(&path, ICON).ok()?;
+    }
+    Some(path)
 }
 
 /// A click: the window comes up and the page opens the chat.

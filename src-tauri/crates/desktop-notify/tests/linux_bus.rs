@@ -117,7 +117,7 @@ async fn one_per_key_replaced_cleared_clicked() {
         .unwrap();
 
     let (click_tx, mut click_rx) = mpsc::unbounded_channel();
-    let app = AppInfo { name: "Veydan Space".into(), desktop_entry: "veydanspace".into(), icon: "veydanspace".into() };
+    let app = AppInfo { id: "t".into(), name: "Veydan Space".into(), desktop_entry: "veydanspace".into(), icon: "veydanspace".into(), icon_file: None };
     let n = Notifier::start_on_bus(app, Arc::new(move |k| { let _ = click_tx.send(k); }), address);
     settle().await;
     assert!(n.available());
@@ -165,7 +165,7 @@ async fn one_per_key_replaced_cleared_clicked() {
 #[tokio::test(flavor = "multi_thread")]
 async fn no_server_is_not_available() {
     let (_bus, address) = private_bus();
-    let app = AppInfo { name: "x".into(), desktop_entry: "x".into(), icon: "x".into() };
+    let app = AppInfo { id: "x".into(), name: "x".into(), desktop_entry: "x".into(), icon: "x".into(), icon_file: None };
     let n = Notifier::start_on_bus(app, Arc::new(|_| {}), address);
     settle().await;
     assert!(!n.available());

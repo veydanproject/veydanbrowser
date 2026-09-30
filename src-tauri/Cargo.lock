@@ -1479,6 +1479,8 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "tokio",
+ "windows 0.62.2",
+ "windows-registry",
  "zbus",
 ]
 

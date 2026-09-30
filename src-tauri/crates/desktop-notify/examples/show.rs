@@ -10,9 +10,11 @@ use desktop_notify::{AppInfo, Notifier, Toast};
 #[tokio::main]
 async fn main() {
     let app = AppInfo {
+        id: "net.veydan.space.example".into(),
         name: "Veydan Space".into(),
         desktop_entry: "veydanspace".into(),
         icon: "veydanspace".into(),
+        icon_file: None,
     };
     let n = Notifier::start(app, Arc::new(|key| println!("clicked: {key}")));
     tokio::time::sleep(Duration::from_millis(300)).await;
