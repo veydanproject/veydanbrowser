@@ -111,14 +111,13 @@ jobs:
 
       # --all-targets so examples/ are compiled too. They construct backend
       # structs directly, which makes them the first thing a field change breaks.
-      # Default features only: this is the "main app unchanged" gate — the
-      # messenger module must not be compiled in here.
+      # Default features: the app as it ships, with the messenger.
       - name: Tests (app)
         run: cargo test --all-targets --manifest-path src-tauri/Cargo.toml
 
-      # Same tree with the messenger adapter compiled in.
-      - name: Tests (app + messenger feature)
-        run: cargo test --all-targets --manifest-path src-tauri/Cargo.toml --features messenger
+      # The app must still build without the messenger (it stays extractable).
+      - name: Tests (app without messenger)
+        run: cargo test --all-targets --manifest-path src-tauri/Cargo.toml --no-default-features
 
       # veydan-sync is a path dependency, not a workspace member, so its own
       # tests/ directory is invisible to the command above.
@@ -162,5 +161,5 @@ jobs:
       - name: Clippy (desktop-notify, blocking)
         run: cargo clippy --all-targets --manifest-path src-tauri/crates/desktop-notify/Cargo.toml -- -D warnings
       # The adapter's code for this system (overlay icon, badge) with it.
-      - name: Check (app + messenger feature)
-        run: cargo check --manifest-path src-tauri/Cargo.toml --features messenger
+      - name: Check (app)
+        run: cargo check --manifest-path src-tauri/Cargo.toml

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 #
 # One more instance of the dev build with its own data directory (--workdir),
-# next to a running `make dev` / `make dev-msg`: it reuses that build and its
+# next to a running `make dev`: it reuses that build and its
 # vite server, and unlike dev.sh kills neither.
 #
 # usage: scripts/run-profile.sh <workdir>     (or: make dev-profile WORKDIR=<dir>)
@@ -25,11 +25,11 @@ source "$SCRIPT_DIR/build-env.sh" >/dev/null
 
 BIN="$SCRIPT_DIR/src-tauri/target/debug/veydanspace"
 if [ ! -x "$BIN" ]; then
-  echo ">> no dev build yet: start 'make dev' (or 'make dev-msg') first" >&2
+  echo ">> no dev build yet: start 'make dev' first" >&2
   exit 1
 fi
 if ! (exec 3<>/dev/tcp/127.0.0.1/1420) 2>/dev/null; then
-  echo ">> the dev server is not running: start 'make dev' (or 'make dev-msg') first" >&2
+  echo ">> the dev server is not running: start 'make dev' first" >&2
   exit 1
 fi
 

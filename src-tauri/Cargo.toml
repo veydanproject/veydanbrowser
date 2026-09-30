@@ -55,7 +55,8 @@ messenger-notify = { path = "crates/messenger/notify", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"], optional = true }
 
 [features]
-default = []
+# The messenger is part of the app; --no-default-features builds it without.
+default = ["messenger"]
 # The push bridge exists on Android only, desktop-notify on computers only;
 # elsewhere the names stand for nothing.
 messenger = ["dep:messenger-core", "dep:messenger-runtime", "dep:messenger-notify", "dep:rustls", "dep:tauri-plugin-veydan-push", "dep:desktop-notify"]

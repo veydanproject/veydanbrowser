@@ -21,12 +21,8 @@ clean:
 dev:
 	@bash dev.sh
 
-# Dev build with the messenger module compiled in (4.0.1-alpha).
-dev-msg:
-	@MESSENGER=1 bash dev.sh
-
 # One more dev instance with its own data directory, next to a running
-# `make dev` / `make dev-msg`. usage: make dev-profile WORKDIR=<dir>
+# `make dev`. usage: make dev-profile WORKDIR=<dir>
 dev-profile:
 	@bash scripts/run-profile.sh "$(WORKDIR)"
 
@@ -40,13 +36,6 @@ msg-test:
 
 msg-check:
 	@bash scripts/messenger-boundaries.sh
-
-# Android with the messenger module compiled in.
-android-dev-msg:
-	@MESSENGER=1 bash scripts/android/dev.sh
-
-android-test-msg:
-	@MESSENGER=1 bash scripts/android/apk.sh test
 
 android-dev:
 	@bash scripts/android/dev.sh

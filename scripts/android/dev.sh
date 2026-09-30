@@ -24,8 +24,4 @@ fi
 adb reverse tcp:1430 tcp:1430
 adb reverse tcp:1431 tcp:1431
 
-# MESSENGER=1 compiles the messenger module in (docs/messenger-spec.md).
-FEATURES=()
-[ "${MESSENGER:-0}" = "1" ] && FEATURES=(--features messenger)
-
-exec pnpm tauri android dev --host 127.0.0.1 "${FEATURES[@]}" "$@"
+exec pnpm tauri android dev --host 127.0.0.1 "$@"

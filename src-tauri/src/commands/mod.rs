@@ -9,7 +9,7 @@ pub mod password;
 pub mod passwords;
 pub mod totp;
 
-// Messenger module: compiled only with `--features messenger` (4.0.1-alpha).
+// Messenger module: the `messenger` feature, on by default.
 #[cfg(feature = "messenger")]
 pub mod messenger;
 

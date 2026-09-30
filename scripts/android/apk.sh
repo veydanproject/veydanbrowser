@@ -57,10 +57,7 @@ EOT
 }
 
 echo ">> Building standalone APK ($MODE)"
-# MESSENGER=1 compiles the messenger module in (docs/messenger-spec.md).
-FEATURES=()
-[ "${MESSENGER:-0}" = "1" ] && FEATURES=(--features messenger)
-pnpm tauri android build "${FEATURES[@]}"
+pnpm tauri android build
 
 unsigned="$(newest_apk '*-unsigned.apk')"
 if [ -z "$unsigned" ]; then

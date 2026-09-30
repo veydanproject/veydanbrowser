@@ -139,9 +139,9 @@ veydanspace --workdir vasa                  # relative to the current directory
 veydanspace --workdir /home/user/vasadir
 VEYDAN_WORKDIR=/home/user/vasadir veydanspace
 
-make dev WORKDIR=vasa                       # dev build as a profile (also: make dev-msg WORKDIR=vasa)
+make dev WORKDIR=vasa                       # dev build as a profile
 ```
-In development the first `make dev` / `make dev-msg` builds the app and starts the dev server; every further one with `WORKDIR` joins it as one more instance. Run without `WORKDIR` it restarts the whole environment.
+In development the first `make dev` builds the app and starts the dev server; every further one with `WORKDIR` joins it as one more instance. Run without `WORKDIR` it restarts the whole environment.
 Without the flag the app uses its default data directory. Starting a profile that is already running brings its window to the front. Moving a profile directory is not supported: paths inside it are stored absolute.
 
 ### Migrating from Veydan Browser
