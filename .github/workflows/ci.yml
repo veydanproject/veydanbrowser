@@ -96,6 +96,7 @@ jobs:
             libssl-dev \
             patchelf \
             build-essential \
+            dbus \
             curl wget file
 
       - uses: dtolnay/rust-toolchain@stable
@@ -105,6 +106,7 @@ jobs:
           workspaces: |
             src-tauri
             src-tauri/crates/veydan-sync
+            src-tauri/crates/desktop-notify
           key: ci
 
       # --all-targets so examples/ are compiled too. They construct backend
@@ -123,6 +125,11 @@ jobs:
       - name: Tests (veydan-sync)
         run: cargo test --all-targets --manifest-path src-tauri/crates/veydan-sync/Cargo.toml
 
+      # desktop-notify is a path dependency as well. Its Linux test runs a
+      # notification server of its own on a private dbus-daemon.
+      - name: Tests (desktop-notify)
+        run: cargo test --all-targets --manifest-path src-tauri/crates/desktop-notify/Cargo.toml
+
       # Informational only: the tree carries ~50 pre-existing lints, so failing
       # on them would block every PR. Drop continue-on-error once it is clean.
       # `cargo fmt --check` is deliberately absent — the tree is not
@@ -130,3 +137,30 @@ jobs:
       - name: Clippy (non-blocking)
         continue-on-error: true
         run: cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml
+
+  # The messenger's notifications on a computer have code for each system
+  # (WinRT, UserNotifications) that a Linux runner never compiles.
+  desktop-notify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+            src-tauri/crates/desktop-notify
+          key: desktop-notify
+      - name: Tests (desktop-notify)
+        run: cargo test --all-targets --manifest-path src-tauri/crates/desktop-notify/Cargo.toml
+      - name: Clippy (desktop-notify, blocking)
+        run: cargo clippy --all-targets --manifest-path src-tauri/crates/desktop-notify/Cargo.toml -- -D warnings
+      # The adapter's code for this system (overlay icon, badge) with it.
+      - name: Check (app + messenger feature)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features messenger
