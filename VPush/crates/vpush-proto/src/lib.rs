@@ -128,25 +128,12 @@ pub struct RelayWatch {
     pub groups: bool,
 }
 
-/// A group to watch, and what the user calls it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GroupWatch {
-    /// 64 hex characters.
-    pub id: String,
-    /// Shown in the push: "Group: <name>". Kept for this device only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
 /// Body of `PUT /v1/devices/{device_id}`: everything about the device, every
 /// time. What is not named is no longer watched.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevicePut {
     pub app_id: String,
     pub channel: Channel,
-    /// Language of the push texts: `ru`, `en-US`. English when unknown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub locale: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
     #[serde(default)]
@@ -158,8 +145,9 @@ pub struct DevicePut {
     pub author_key: Option<String>,
     #[serde(default)]
     pub relays: Vec<RelayWatch>,
+    /// The user's groups: 64 hex characters each.
     #[serde(default)]
-    pub groups: Vec<GroupWatch>,
+    pub groups: Vec<String>,
 }
 
 /// What the server does with a relay the device named.
@@ -203,7 +191,6 @@ pub struct DeviceView {
     pub device_id: String,
     pub app_id: String,
     pub provider: String,
-    pub locale: String,
     pub prefs: Prefs,
     /// `active`, or `dead_token`: the push service says the token is gone.
     pub state: String,
@@ -211,7 +198,7 @@ pub struct DeviceView {
     pub updated_at: u64,
     pub expires_at: u64,
     pub relays: Vec<RelayView>,
-    pub groups: Vec<GroupWatch>,
+    pub groups: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_push_at: Option<u64>,
     /// `delivered`, `dead_token`, `rejected`, `retry`.
@@ -297,16 +284,31 @@ impl PushType {
             Self::ManifestUpdate => "manifest_update",
         }
     }
+
+    /// Handled by the device without showing anything. The rest is shown,
+    /// in the device's own words: the server writes no texts.
+    pub fn is_silent(self) -> bool {
+        matches!(self, Self::Sync | Self::ManifestUpdate)
+    }
 }
 
 /// Version of [`Payload`]. A device that meets a higher one should ask the
 /// user to update the app instead of guessing.
-pub const PAYLOAD_VERSION: u32 = 1;
+pub const PAYLOAD_VERSION: u32 = 2;
+
+/// The most the string form of a push may weigh, in bytes: every key and
+/// every value of [`Payload::to_data`] added up. FCM refuses a data map
+/// above 4096; the rest is room for what the transport adds on the way.
+pub const FCM_DATA_BUDGET: usize = 3900;
 
 /// What arrives on the device, the same through every provider.
 ///
 /// Providers that carry only strings (FCM) get it through [`Payload::to_data`]:
 /// the same keys, every value a string.
+///
+/// A `dm` or `group` push carries the event itself in `event` when it fits,
+/// and `event_id` with `relay` when it does not: one form or the other,
+/// never both. The device opens the event and shows what it finds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Payload {
     pub v: u32,
@@ -319,17 +321,7 @@ pub struct Payload {
     pub relay: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
-    /// The name this device gave the group when it registered.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group_name: Option<String>,
-    /// Text to show when the device cannot make a better one. Absent in
-    /// silent pushes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body: Option<String>,
-    /// The event itself, as JSON, when it fits. Otherwise the device takes
-    /// it from `relay` by `event_id`.
+    /// The event itself, as JSON, when it fits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<String>,
     /// How many events this push stands for, when more than one.
@@ -351,9 +343,6 @@ impl Payload {
             event_id: None,
             relay: None,
             group_id: None,
-            group_name: None,
-            title: None,
-            body: None,
             event: None,
             count: None,
             data: None,
@@ -361,9 +350,22 @@ impl Payload {
         }
     }
 
-    /// Shown to the user by the device, or handled without a sound.
+    /// Handled by the device without showing anything.
     pub fn is_silent(&self) -> bool {
-        self.title.is_none() && self.body.is_none()
+        self.kind.is_silent()
+    }
+
+    /// What the string form weighs: every key and every value added up.
+    pub fn data_len(&self) -> usize {
+        self.to_data()
+            .iter()
+            .map(|(key, value)| key.len() + value.len())
+            .sum()
+    }
+
+    /// Whether a push service takes the push as it is.
+    pub fn fits(&self) -> bool {
+        self.data_len() <= FCM_DATA_BUDGET
     }
 
     /// The same keys as in the JSON form, every value a string.
@@ -379,9 +381,6 @@ impl Payload {
         put("event_id", &self.event_id);
         put("relay", &self.relay);
         put("group_id", &self.group_id);
-        put("group_name", &self.group_name);
-        put("title", &self.title);
-        put("body", &self.body);
         put("event", &self.event);
         put("data", &self.data);
         put("trace", &self.trace);
@@ -400,8 +399,8 @@ mod tests {
     fn json_and_string_forms_have_the_same_keys() {
         let mut p = Payload::new(PushType::Group);
         p.event_id = Some("e1".into());
-        p.group_name = Some("Team".into());
-        p.title = Some("Group: Team".into());
+        p.relay = Some("wss://r".into());
+        p.group_id = Some("g1".into());
         p.count = Some(3);
 
         let json = serde_json::to_value(&p).unwrap();
@@ -411,18 +410,27 @@ mod tests {
         assert_eq!(json_keys, data_keys);
         assert_eq!(data["type"], "group");
         assert_eq!(data["count"], "3");
-        assert_eq!(data["v"], "1");
+        assert_eq!(data["v"], "2");
     }
 
     #[test]
     fn absent_fields_are_not_sent() {
         let p = Payload::new(PushType::ManifestUpdate);
-        assert!(p.is_silent());
         assert_eq!(
             serde_json::to_string(&p).unwrap(),
-            r#"{"v":1,"type":"manifest_update"}"#
+            r#"{"v":2,"type":"manifest_update"}"#
         );
         assert_eq!(p.to_data().len(), 2);
+    }
+
+    #[test]
+    fn whether_a_push_is_shown_is_decided_by_its_type() {
+        for kind in [PushType::Dm, PushType::Group, PushType::Test, PushType::Broadcast] {
+            assert!(!Payload::new(kind).is_silent(), "{kind:?}");
+        }
+        for kind in [PushType::Sync, PushType::ManifestUpdate] {
+            assert!(Payload::new(kind).is_silent(), "{kind:?}");
+        }
     }
 
     #[test]
@@ -431,5 +439,21 @@ mod tests {
         p.event = Some(r#"{"kind":1059}"#.into());
         let back: Payload = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn the_weight_is_every_key_and_value_of_the_string_form() {
+        let mut p = Payload::new(PushType::Dm);
+        p.trace = Some("abcd1234".into());
+        // `v`=`2`, `type`=`dm`, `trace`=`abcd1234`: 1+1, 4+2, 5+8.
+        assert_eq!(p.data_len(), 21);
+        assert!(p.fits());
+
+        p.event = Some("x".repeat(FCM_DATA_BUDGET - 21 - "event".len()));
+        assert_eq!(p.data_len(), FCM_DATA_BUDGET);
+        assert!(p.fits(), "the budget itself fits");
+
+        p.event.as_mut().unwrap().push('x');
+        assert!(!p.fits(), "one byte over does not");
     }
 }

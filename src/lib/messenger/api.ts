@@ -876,7 +876,6 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
     mockPush = { ...mockPush, status: { ...mockPush.status, dm: Boolean(a?.dm), groups: Boolean(a?.groups) } };
     return mockPush;
   },
-  messenger_push_set_locale: () => undefined,
   messenger_push_refresh: (): MessengerPushView => mockPush,
   messenger_push_test: (): MessengerPushTest => ({ outcome: 'delivered', trace: '5f3a9c1e' }),
   messenger_push_take_tap: () => null,
@@ -948,7 +947,6 @@ export const messengerApi = {
     /** Nothing goes back to the server of the manifest. */
     setServer: (url: string | null) => invoke<MessengerPushView>('messenger_push_set_server', { url }),
     setPrefs: (dm: boolean, groups: boolean) => invoke<MessengerPushView>('messenger_push_set_prefs', { dm, groups }),
-    setLocale: (locale: string) => invoke<void>('messenger_push_set_locale', { locale }),
     refresh: () => invoke<MessengerPushView>('messenger_push_refresh'),
     test: () => invoke<MessengerPushTest>('messenger_push_test'),
     takeTap: () => invoke<MessengerPushTap | null>('messenger_push_take_tap'),

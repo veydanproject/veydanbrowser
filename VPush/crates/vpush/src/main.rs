@@ -79,13 +79,6 @@ enum Ctl {
         /// Token of the device.
         #[arg(long)]
         token: String,
-        #[arg(long, default_value = "VPush")]
-        title: String,
-        #[arg(long, default_value = "Test push")]
-        body: String,
-        /// No title and no text: the device handles it without showing anything.
-        #[arg(long)]
-        silent: bool,
     },
 }
 
@@ -146,15 +139,10 @@ fn run(cli: Cli) -> anyhow::Result<()> {
                     app,
                     provider,
                     token,
-                    title,
-                    body,
-                    silent,
                 } => Request::TestPush {
                     app,
                     provider: provider.parse().map_err(anyhow::Error::msg)?,
                     token,
-                    title: (!silent).then_some(title),
-                    body: (!silent).then_some(body),
                 },
                 Ctl::Log(LogCmd::Set { spec, ttl }) => Request::LogSet {
                     spec,

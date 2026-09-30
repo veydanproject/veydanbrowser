@@ -48,6 +48,7 @@ veydan-sync = { path = "crates/veydan-sync" }
 # docs/messenger-spec.md. The adapter lives in src/commands/messenger/.
 messenger-core = { path = "crates/messenger/core", optional = true }
 messenger-runtime = { path = "crates/messenger/runtime", optional = true }
+messenger-notify = { path = "crates/messenger/notify", optional = true }
 # With the messenger compiled in, the process holds two rustls crypto
 # providers (aws-lc-rs from the host tree, ring from nostr-sdk) and rustls
 # refuses to guess; the adapter installs aws-lc-rs explicitly at start-up.
@@ -56,7 +57,7 @@ rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"],
 [features]
 default = []
 # The push bridge exists on Android only; elsewhere the name stands for nothing.
-messenger = ["dep:messenger-core", "dep:messenger-runtime", "dep:rustls", "dep:tauri-plugin-veydan-push"]
+messenger = ["dep:messenger-core", "dep:messenger-runtime", "dep:messenger-notify", "dep:rustls", "dep:tauri-plugin-veydan-push"]
 
 # ── Desktop only: browser, proxies, SSH/SFTP, backup, tray, updater ──────────
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
@@ -119,3 +120,9 @@ tauri-plugin-veydan-push = { path = "crates/tauri-plugin-veydan-push", optional 
 ksni = "0.3"
 # Answer WebKitGTK media permission requests (camera / microphone in notes)
 webkit2gtk = "2"
+
+[profile.release]
+# Symbol tables go; the dynamic exports (Tauri's and the push handler's
+# `Java_*`) stay. Android packages the library as cargo leaves it, and a
+# push starts a process that loads the whole of it before it can answer.
+strip = "symbols"

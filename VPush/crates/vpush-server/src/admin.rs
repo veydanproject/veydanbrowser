@@ -40,9 +40,6 @@ pub enum Request {
         app: String,
         provider: ProviderKind,
         token: String,
-        /// Absent with `body`: a silent push.
-        title: Option<String>,
-        body: Option<String>,
     },
     /// The devices of one owner, and what is watched for each.
     Devices { owner: String },
@@ -106,7 +103,6 @@ pub struct DeviceLine {
     pub app_id: String,
     pub provider: String,
     pub token: String,
-    pub locale: String,
     pub app_version: Option<String>,
     pub state: String,
     pub dm: bool,
@@ -138,18 +134,16 @@ impl From<Device> for DeviceLine {
                     format!("{} ({what})", r.url)
                 })
                 .collect(),
+            // The first characters of an id are enough to tell groups apart
+            // in a listing; the whole one is in the database.
             watched_groups: d
                 .groups
                 .iter()
-                .map(|g| match &g.name {
-                    Some(name) => format!("{} {name}", &g.id[..g.id.len().min(12)]),
-                    None => g.id[..g.id.len().min(12)].to_string(),
-                })
+                .map(|id| id[..id.len().min(12)].to_string())
                 .collect(),
             device_id: d.device_id,
             app_id: d.app_id,
             provider: d.provider,
-            locale: d.locale,
             app_version: d.app_version,
             state: d.state,
             dm: d.prefs.dm,
@@ -280,9 +274,7 @@ async fn handle(request: Request, state: &AdminState) -> Response {
             app,
             provider,
             token,
-            title,
-            body,
-        } => test_push(state, &app, provider, token, title, body).await,
+        } => test_push(state, &app, provider, token).await,
         Request::Devices { owner } => {
             // An owner is named as people name them: npub or hex.
             let pubkey = match nostr::key::PublicKey::parse(owner.trim()) {
@@ -305,25 +297,17 @@ async fn handle(request: Request, state: &AdminState) -> Response {
     }
 }
 
-async fn test_push(
-    state: &AdminState,
-    app: &str,
-    kind: ProviderKind,
-    token: String,
-    title: Option<String>,
-    body: Option<String>,
-) -> Response {
+async fn test_push(state: &AdminState, app: &str, kind: ProviderKind, token: String) -> Response {
     let provider = match state.providers.get(app, kind) {
         Ok(p) => p,
         Err(e) => return Response::err(e),
     };
     let trace = crate::api::next_request_id();
     let mut payload = Payload::new(PushType::Test);
-    payload.title = title;
-    payload.body = body;
     payload.trace = Some(trace.clone());
     let message = Message {
         payload,
+        fallback: None,
         collapse_key: None,
         ttl: TEST_TTL,
         urgent: true,

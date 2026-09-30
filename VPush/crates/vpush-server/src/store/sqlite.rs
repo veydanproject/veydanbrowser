@@ -9,7 +9,7 @@ use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
 };
 use sqlx::{Pool, Row, Sqlite};
-use vpush_proto::{GroupWatch, Prefs};
+use vpush_proto::Prefs;
 
 use super::{Counts, Device, DeviceInput, Result, Store, StoreError, WatchedRelay};
 
@@ -89,21 +89,13 @@ impl SqliteStore {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-        let groups = sqlx::query(
-            "SELECT group_id, name FROM device_groups WHERE device = ? ORDER BY group_id",
+        let groups = sqlx::query_scalar::<_, String>(
+            "SELECT group_id FROM device_groups WHERE device = ? ORDER BY group_id",
         )
         .bind(id)
         .fetch_all(&self.pool)
         .await
-        .map_err(db)?
-        .into_iter()
-        .map(|r| {
-            Ok(GroupWatch {
-                id: r.try_get("group_id").map_err(db)?,
-                name: r.try_get("name").map_err(db)?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+        .map_err(db)?;
 
         let secs = |name: &str| -> Result<u64> {
             Ok(row.try_get::<i64, _>(name).map_err(db)?.max(0) as u64)
@@ -114,7 +106,6 @@ impl SqliteStore {
             app_id: row.try_get("app_id").map_err(db)?,
             provider: row.try_get("provider").map_err(db)?,
             token: row.try_get("token").map_err(db)?,
-            locale: row.try_get("locale").map_err(db)?,
             app_version: row.try_get("app_version").map_err(db)?,
             prefs: Prefs {
                 dm: row.try_get::<i64, _>("pref_dm").map_err(db)? != 0,
@@ -171,7 +162,7 @@ impl Store for SqliteStore {
                     "UPDATE devices SET
                         app_id = ?, provider = ?,
                         state = CASE WHEN token = ? THEN state ELSE 'active' END,
-                        token = ?, channel_json = ?, locale = ?, app_version = ?,
+                        token = ?, channel_json = ?, app_version = ?,
                         pref_dm = ?, pref_groups = ?, author_key = ?,
                         updated_at = ?, expires_at = ?
                      WHERE id = ?",
@@ -181,7 +172,6 @@ impl Store for SqliteStore {
                 .bind(&d.token)
                 .bind(&d.token)
                 .bind(&d.channel_json)
-                .bind(&d.locale)
                 .bind(&d.app_version)
                 .bind(d.prefs.dm)
                 .bind(d.prefs.groups)
@@ -206,10 +196,10 @@ impl Store for SqliteStore {
                 }
                 sqlx::query(
                     "INSERT INTO devices
-                        (pubkey, device_id, app_id, provider, token, channel_json, locale,
+                        (pubkey, device_id, app_id, provider, token, channel_json,
                          app_version, pref_dm, pref_groups, author_key,
                          created_at, updated_at, expires_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&d.pubkey)
                 .bind(&d.device_id)
@@ -217,7 +207,6 @@ impl Store for SqliteStore {
                 .bind(&d.provider)
                 .bind(&d.token)
                 .bind(&d.channel_json)
-                .bind(&d.locale)
                 .bind(&d.app_version)
                 .bind(d.prefs.dm)
                 .bind(d.prefs.groups)
@@ -255,16 +244,13 @@ impl Store for SqliteStore {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
-        for group in &d.groups {
-            sqlx::query(
-                "INSERT OR REPLACE INTO device_groups (device, group_id, name) VALUES (?, ?, ?)",
-            )
-            .bind(id)
-            .bind(&group.id)
-            .bind(&group.name)
-            .execute(&mut *tx)
-            .await
-            .map_err(db)?;
+        for group_id in &d.groups {
+            sqlx::query("INSERT OR REPLACE INTO device_groups (device, group_id) VALUES (?, ?)")
+                .bind(id)
+                .bind(group_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
         }
 
         tx.commit().await.map_err(db)
@@ -372,7 +358,6 @@ mod tests_support {
             provider: "fcm".into(),
             token: token.into(),
             channel_json: None,
-            locale: "ru".into(),
             app_version: Some("4.0.1".into()),
             prefs: Prefs::default(),
             author_key: None,
@@ -381,10 +366,7 @@ mod tests_support {
                 dm: true,
                 groups: true,
             }],
-            groups: vec![GroupWatch {
-                id: "11".repeat(32),
-                name: Some("Команда".into()),
-            }],
+            groups: vec!["11".repeat(32)],
             now: 1000,
             expires_at: 2000,
         }
@@ -410,11 +392,10 @@ mod tests {
 
         let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
         assert_eq!(d.token, "t1");
-        assert_eq!(d.locale, "ru");
         assert_eq!(d.state, "active");
         assert_eq!((d.created_at, d.updated_at, d.expires_at), (1000, 1000, 2000));
         assert_eq!(d.relays.len(), 1);
-        assert_eq!(d.groups[0].name.as_deref(), Some("Команда"));
+        assert_eq!(d.groups, ["11".repeat(32)]);
         assert!(s.device(ALICE, "phone-2").await.unwrap().is_none());
         assert!(s.device(BOB, "phone-1").await.unwrap().is_none());
     }
@@ -468,20 +449,6 @@ mod tests {
         assert!(s.device(ALICE, "phone-1").await.unwrap().is_none());
         assert!(s.device(BOB, "phone-1").await.unwrap().is_some());
         assert_eq!(s.counts().await.unwrap().devices, 1);
-    }
-
-    #[tokio::test]
-    async fn names_of_a_group_are_kept_apart_by_device() {
-        let s = store().await;
-        let mut a = input(ALICE, "phone-1", "t1");
-        a.groups[0].name = Some("Работа".into());
-        let mut b = input(BOB, "phone-1", "t2");
-        b.groups[0].name = Some("Спам".into());
-        s.put_device(a, 10).await.unwrap();
-        s.put_device(b, 10).await.unwrap();
-
-        let a = s.device(ALICE, "phone-1").await.unwrap().unwrap();
-        assert_eq!(a.groups[0].name.as_deref(), Some("Работа"));
     }
 
     #[tokio::test]
@@ -541,7 +508,7 @@ mod tests {
 
         let s = SqliteStore::open(&path).await.unwrap();
         s.put_device(input(ALICE, "phone-1", "t1"), 10).await.unwrap();
-        assert_eq!(s.schema_version().await.unwrap(), 2);
+        assert_eq!(s.schema_version().await.unwrap(), 3);
         s.close().await;
 
         let s = SqliteStore::open(&path).await.unwrap();
@@ -552,16 +519,14 @@ mod tests {
 }
 
 
-fn recipient(row: &SqliteRow, group_name: Option<String>) -> Result<super::Recipient> {
+fn recipient(row: &SqliteRow) -> Result<super::Recipient> {
     Ok(super::Recipient {
         pubkey: row.try_get("pubkey").map_err(db)?,
         device_id: row.try_get("device_id").map_err(db)?,
         app_id: row.try_get("app_id").map_err(db)?,
         provider: row.try_get("provider").map_err(db)?,
         token: row.try_get("token").map_err(db)?,
-        locale: row.try_get("locale").map_err(db)?,
         author_key: row.try_get("author_key").map_err(db)?,
-        group_name,
     })
 }
 
@@ -661,7 +626,7 @@ impl super::WatchStore for SqliteStore {
 
     async fn dm_recipients(&self, pubkey: &str, now: u64) -> Result<Vec<super::Recipient>> {
         sqlx::query(
-            "SELECT d.pubkey, d.device_id, d.app_id, d.provider, d.token, d.locale, d.author_key
+            "SELECT d.pubkey, d.device_id, d.app_id, d.provider, d.token, d.author_key
              FROM devices d
              WHERE d.pubkey = ? AND d.pref_dm = 1 AND d.state = 'active' AND d.expires_at > ?
                AND EXISTS (SELECT 1 FROM device_relays r WHERE r.device = d.id AND r.dm = 1)
@@ -673,14 +638,13 @@ impl super::WatchStore for SqliteStore {
         .await
         .map_err(db)?
         .iter()
-        .map(|row| recipient(row, None))
+        .map(recipient)
         .collect()
     }
 
     async fn group_recipients(&self, group_id: &str, now: u64) -> Result<Vec<super::Recipient>> {
         sqlx::query(
-            "SELECT d.pubkey, d.device_id, d.app_id, d.provider, d.token, d.locale, d.author_key,
-                    g.name AS group_name
+            "SELECT d.pubkey, d.device_id, d.app_id, d.provider, d.token, d.author_key
              FROM device_groups g JOIN devices d ON d.id = g.device
              WHERE g.group_id = ? AND d.pref_groups = 1 AND d.state = 'active' AND d.expires_at > ?
                AND EXISTS (SELECT 1 FROM device_relays r WHERE r.device = d.id AND r.groups = 1)
@@ -692,7 +656,7 @@ impl super::WatchStore for SqliteStore {
         .await
         .map_err(db)?
         .iter()
-        .map(|row| recipient(row, row.try_get("group_name").map_err(db)?))
+        .map(recipient)
         .collect()
     }
 
@@ -736,7 +700,7 @@ mod watch_tests {
         let mut bob = input("bb", "phone", "t3");
         bob.relays[0].groups = false;
         bob.relays.push(WatchedRelay { url: "wss://nos.lol".into(), dm: false, groups: true });
-        bob.groups = vec![GroupWatch { id: "22".repeat(32), name: None }];
+        bob.groups = vec!["22".repeat(32)];
         s.put_device(bob, 10).await.unwrap();
 
         let plan = s.watch_plan(1500).await.unwrap();
@@ -776,15 +740,9 @@ mod watch_tests {
     }
 
     #[tokio::test]
-    async fn every_device_of_the_owner_is_told_and_each_by_its_own_name_of_the_group() {
+    async fn every_device_of_the_owner_is_told_and_a_group_is_told_to_every_owner() {
         let s = SqliteStore::in_memory().await.unwrap();
-        let mut phone = input("aa", "phone", "t1");
-        phone.groups[0].name = Some("Работа".into());
-        let mut tablet = input("aa", "tablet", "t2");
-        tablet.groups[0].name = None;
-        let mut bob = input("bb", "phone", "t3");
-        bob.groups[0].name = Some("Спам".into());
-        for d in [phone, tablet, bob] {
+        for d in [input("aa", "phone", "t1"), input("aa", "tablet", "t2"), input("bb", "phone", "t3")] {
             s.put_device(d, 10).await.unwrap();
         }
 
@@ -792,8 +750,8 @@ mod watch_tests {
         assert_eq!(dm.iter().map(|r| r.device_id.as_str()).collect::<Vec<_>>(), ["phone", "tablet"]);
 
         let group = s.group_recipients(&"11".repeat(32), 1500).await.unwrap();
-        let names: Vec<_> = group.iter().map(|r| (r.token.as_str(), r.group_name.as_deref())).collect();
-        assert_eq!(names, [("t1", Some("Работа")), ("t2", None), ("t3", Some("Спам"))]);
+        let tokens: Vec<_> = group.iter().map(|r| r.token.as_str()).collect();
+        assert_eq!(tokens, ["t1", "t2", "t3"]);
         assert!(s.group_recipients(&"99".repeat(32), 1500).await.unwrap().is_empty());
     }
 

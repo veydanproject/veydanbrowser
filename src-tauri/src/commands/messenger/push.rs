@@ -179,6 +179,8 @@ pub fn spawn_bridge(app: tauri::AppHandle, rt: std::sync::Arc<messenger_runtime:
             eprintln!("messenger push: cannot listen for tokens: {e}");
         }
 
+        tauri::async_runtime::spawn(keep_handler_keys(app.clone(), rt.clone()));
+
         let mut told: Option<bool> = None;
         loop {
             let live = match rt.status().await {
@@ -303,15 +305,6 @@ pub async fn messenger_push_set_prefs(
     Ok(PushView { device: device(&app).await?, status })
 }
 
-/// Language of the push texts: the language of the app.
-#[tauri::command]
-pub async fn messenger_push_set_locale(locale: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
-    let rt = state.messenger.runtime()?;
-    rt.push_set_locale(&locale).await.map_err(map_err)?;
-    rt.push_reconcile(false).await.map_err(map_err)?;
-    Ok(())
-}
-
 /// Tells the push server again, now.
 #[tauri::command]
 pub async fn messenger_push_refresh(
@@ -372,3 +365,97 @@ pub async fn messenger_push_clear(key: Option<String>, app: tauri::AppHandle) ->
 #[cfg(not(target_os = "android"))]
 #[allow(dead_code)]
 fn _unused(_: AppError) {}
+
+// ─── The keys and the settings of the push handler ──────────────────────────
+
+/// What a notification may say. Kept by the messenger; the push handler
+/// reads it from there.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct NotifySettings {
+    /// `sender_text` | `sender` | `none`
+    pub content: String,
+    pub lockscreen_hidden: bool,
+    /// A PIN or password guards the app: the handler gets no keys, and a
+    /// notification says only that something came, whatever `content` says.
+    pub locked: bool,
+}
+
+#[cfg(target_os = "android")]
+static KEYS_KICK: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// The app's lock was set or taken off: the handler's keys follow at once.
+pub fn lock_changed() {
+    #[cfg(target_os = "android")]
+    KEYS_KICK.notify_one();
+}
+
+/// Gives the push handler the keys while the settings want it to have them
+/// and no lock guards the app; takes them away otherwise. Runs for as long
+/// as the app does, looking again every 20 s and whenever kicked.
+#[cfg(target_os = "android")]
+async fn keep_handler_keys(app: tauri::AppHandle, rt: std::sync::Arc<messenger_runtime::MessengerRuntime>) {
+    use std::time::Duration;
+    use tauri::Manager;
+
+    let Some(push) = app.try_state::<VeydanPush<tauri::Wry>>() else { return };
+
+    // What the handler has now: a fingerprint of the bundle, or nothing.
+    // Unknown at start, so the first round always speaks.
+    let mut given: Option<Option<String>> = None;
+    loop {
+        let wanted = match app.try_state::<AppState>() {
+            Some(state) => match rt.notify_wants_keys().await {
+                Ok(w) => w && !crate::commands::notes::lock::lock_enabled(&state).await,
+                Err(e) => {
+                    eprintln!("messenger notify: {e}");
+                    false
+                }
+            },
+            None => false,
+        };
+        let fingerprint = if wanted { rt.notify_fingerprint().await.unwrap_or(None) } else { None };
+        if given.as_ref() != Some(&fingerprint) {
+            let done = match &fingerprint {
+                Some(_) => match rt.notify_bundle().await {
+                    Ok(Some(bundle)) => push.store_keys(&bundle.to_json()).await.map_err(|e| e.to_string()),
+                    Ok(None) => push.clear_keys().await.map_err(|e| e.to_string()),
+                    Err(e) => Err(e.to_string()),
+                },
+                None => push.clear_keys().await.map_err(|e| e.to_string()),
+            };
+            match done {
+                Ok(()) => given = Some(fingerprint),
+                Err(e) => eprintln!("messenger notify: the handler's keys were not updated: {e}"),
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(20)) => {}
+            _ = KEYS_KICK.notified() => {}
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn messenger_notify_get(state: tauri::State<'_, AppState>) -> CmdResult<NotifySettings> {
+    let rt = state.messenger.runtime()?;
+    let s = rt.notify_settings().await.map_err(map_err)?;
+    Ok(NotifySettings {
+        content: s.content.as_str().into(),
+        lockscreen_hidden: s.lockscreen_hidden,
+        locked: crate::commands::notes::lock::lock_enabled(&state).await,
+    })
+}
+
+#[tauri::command]
+pub async fn messenger_notify_set(
+    content: String,
+    lockscreen_hidden: bool,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<NotifySettings> {
+    use messenger_notify::{Content, Settings};
+    let rt = state.messenger.runtime()?;
+    let content = Content::parse(&content).ok_or_else(|| AppError::Other("notify_content".into()))?;
+    rt.notify_set_settings(Settings { content, lockscreen_hidden }).await.map_err(map_err)?;
+    lock_changed();
+    messenger_notify_get(state).await
+}

@@ -2,8 +2,8 @@
 //!
 //! The first event about a chat is pushed at once. What follows within the
 //! window is counted, not pushed, and when the window ends one more push
-//! says how many there were. So a burst of fifty messages wakes the phone
-//! twice, and none of the fifty goes untold.
+//! says how many there were, and names the last of them. So a burst of
+//! fifty messages wakes the phone twice, and none of the fifty goes untold.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -21,11 +21,43 @@ pub enum Verdict {
     Later { wake_in: Option<Duration> },
 }
 
+/// An event as the push at the end of a window names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    pub event_id: String,
+    pub relay: String,
+}
+
+/// What a window ended with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Due {
+    /// Events counted since the last push.
+    pub count: u32,
+    /// The last of them.
+    pub last: Named,
+}
+
 #[derive(Debug)]
 struct State {
     last: Instant,
-    /// Events counted since the last push.
-    waiting: u32,
+    /// Events counted since the last push, and the last of them.
+    waiting: Option<Due>,
+}
+
+impl State {
+    fn count(&self) -> u32 {
+        self.waiting.as_ref().map_or(0, |w| w.count)
+    }
+
+    fn counted(&mut self, event: Named) {
+        match &mut self.waiting {
+            Some(due) => {
+                due.count += 1;
+                due.last = event;
+            }
+            None => self.waiting = Some(Due { count: 1, last: event }),
+        }
+    }
 }
 
 pub struct Throttle {
@@ -44,46 +76,41 @@ impl Throttle {
         }
     }
 
-    pub fn event(&self, key: &Key, now: Instant) -> Verdict {
+    pub fn event(&self, key: &Key, now: Instant, event: Named) -> Verdict {
         let mut states = self.states.lock().unwrap();
         if states.len() >= Self::SWEEP_AT {
             let window = self.window;
-            states.retain(|_, s| s.waiting > 0 || now.duration_since(s.last) < window);
+            states.retain(|_, s| s.waiting.is_some() || now.duration_since(s.last) < window);
         }
         match states.get_mut(key) {
             Some(state) if now.duration_since(state.last) < self.window => {
-                state.waiting += 1;
-                let first = state.waiting == 1;
+                let first = state.waiting.is_none();
+                state.counted(event);
                 Verdict::Later {
                     wake_in: first.then(|| self.window - now.duration_since(state.last)),
                 }
             }
-            Some(state) if state.waiting > 0 => {
+            Some(state) if state.count() > 0 => {
                 // The window is over and its push has not gone out yet: this
                 // event goes with it.
-                state.waiting += 1;
+                state.counted(event);
                 Verdict::Later { wake_in: None }
             }
             _ => {
-                states.insert(key.clone(), State { last: now, waiting: 0 });
+                states.insert(key.clone(), State { last: now, waiting: None });
                 Verdict::Now
             }
         }
     }
 
-    /// The window of `key` ended: how many events the push is for. Zero when
-    /// there is nothing to push.
-    pub fn due(&self, key: &Key, now: Instant) -> u32 {
+    /// The window of `key` ended: what the push is for. `None` when there
+    /// is nothing to push.
+    pub fn due(&self, key: &Key, now: Instant) -> Option<Due> {
         let mut states = self.states.lock().unwrap();
-        match states.get_mut(key) {
-            Some(state) if state.waiting > 0 => {
-                let count = state.waiting;
-                state.waiting = 0;
-                state.last = now;
-                count
-            }
-            _ => 0,
-        }
+        let state = states.get_mut(key)?;
+        let due = state.waiting.take()?;
+        state.last = now;
+        Some(due)
     }
 
     pub fn len(&self) -> usize {
@@ -109,65 +136,85 @@ mod tests {
         Duration::from_secs(n)
     }
 
+    fn named(n: u64) -> Named {
+        Named { event_id: format!("e{n}"), relay: "wss://r".into() }
+    }
+
+    /// An event of the chat `chat`, numbered `n`.
+    fn event(t: &Throttle, chat: &str, at: Instant, n: u64) -> Verdict {
+        t.event(&key(chat), at, named(n))
+    }
+
+    /// How many the push at the end is for, and which event it names.
+    fn due(t: &Throttle, chat: &str, at: Instant) -> Option<(u32, String)> {
+        t.due(&key(chat), at).map(|d| (d.count, d.last.event_id))
+    }
+
     #[test]
     fn the_first_is_pushed_at_once_and_the_burst_is_counted() {
         let t = Throttle::new(WINDOW);
         let start = Instant::now();
-        assert_eq!(t.event(&key("dm"), start), Verdict::Now);
+        assert_eq!(event(&t, "dm", start, 1), Verdict::Now);
         assert_eq!(
-            t.event(&key("dm"), start + secs(5)),
+            event(&t, "dm", start + secs(5), 2),
             Verdict::Later { wake_in: Some(secs(15)) }
         );
         for i in 6..10 {
-            assert_eq!(t.event(&key("dm"), start + secs(i)), Verdict::Later { wake_in: None });
+            assert_eq!(event(&t, "dm", start + secs(i), i), Verdict::Later { wake_in: None });
         }
-        assert_eq!(t.due(&key("dm"), start + WINDOW), 5);
-        assert_eq!(t.due(&key("dm"), start + WINDOW), 0, "told once");
+        assert_eq!(due(&t, "dm", start + WINDOW), Some((5, "e9".into())), "the last one is named");
+        assert_eq!(due(&t, "dm", start + WINDOW), None, "told once");
     }
 
     #[test]
     fn the_push_at_the_end_opens_a_window_of_its_own() {
         let t = Throttle::new(WINDOW);
         let start = Instant::now();
-        t.event(&key("dm"), start);
-        t.event(&key("dm"), start + secs(1));
-        assert_eq!(t.due(&key("dm"), start + WINDOW), 1);
+        event(&t, "dm", start, 1);
+        event(&t, "dm", start + secs(1), 2);
+        assert_eq!(due(&t, "dm", start + WINDOW), Some((1, "e2".into())));
 
         assert!(matches!(
-            t.event(&key("dm"), start + WINDOW + secs(1)),
+            event(&t, "dm", start + WINDOW + secs(1), 3),
             Verdict::Later { wake_in: Some(_) }
         ));
-        assert_eq!(t.due(&key("dm"), start + WINDOW * 2), 1);
+        assert_eq!(due(&t, "dm", start + WINDOW * 2), Some((1, "e3".into())));
     }
 
     #[test]
     fn after_a_quiet_window_the_next_is_pushed_at_once() {
         let t = Throttle::new(WINDOW);
         let start = Instant::now();
-        assert_eq!(t.event(&key("dm"), start), Verdict::Now);
-        assert_eq!(t.due(&key("dm"), start + WINDOW), 0);
-        assert_eq!(t.event(&key("dm"), start + WINDOW + secs(1)), Verdict::Now);
+        assert_eq!(event(&t, "dm", start, 1), Verdict::Now);
+        assert_eq!(due(&t, "dm", start + WINDOW), None);
+        assert_eq!(event(&t, "dm", start + WINDOW + secs(1), 2), Verdict::Now);
     }
 
     #[test]
     fn chats_and_devices_do_not_hold_each_other_back() {
         let t = Throttle::new(WINDOW);
         let now = Instant::now();
-        assert_eq!(t.event(&key("dm"), now), Verdict::Now);
-        assert_eq!(t.event(&key("group:1"), now), Verdict::Now);
-        assert_eq!(t.event(&("owner".into(), "tablet".into(), "dm".into()), now), Verdict::Now);
-        assert_eq!(t.event(&("other".into(), "phone".into(), "dm".into()), now), Verdict::Now);
+        assert_eq!(event(&t, "dm", now, 1), Verdict::Now);
+        assert_eq!(event(&t, "group:1", now, 1), Verdict::Now);
+        assert_eq!(
+            t.event(&("owner".into(), "tablet".into(), "dm".into()), now, named(1)),
+            Verdict::Now
+        );
+        assert_eq!(
+            t.event(&("other".into(), "phone".into(), "dm".into()), now, named(1)),
+            Verdict::Now
+        );
     }
 
     #[test]
     fn an_event_that_comes_late_for_the_window_goes_with_its_push() {
         let t = Throttle::new(WINDOW);
         let start = Instant::now();
-        t.event(&key("dm"), start);
-        t.event(&key("dm"), start + secs(1));
+        event(&t, "dm", start, 1);
+        event(&t, "dm", start + secs(1), 2);
         // The one who was to come back is a little late.
-        assert_eq!(t.event(&key("dm"), start + WINDOW + secs(1)), Verdict::Later { wake_in: None });
-        assert_eq!(t.due(&key("dm"), start + WINDOW + secs(2)), 2);
+        assert_eq!(event(&t, "dm", start + WINDOW + secs(1), 3), Verdict::Later { wake_in: None });
+        assert_eq!(due(&t, "dm", start + WINDOW + secs(2)), Some((2, "e3".into())));
     }
 
     #[test]
@@ -175,13 +222,13 @@ mod tests {
         let t = Throttle::new(WINDOW);
         let start = Instant::now();
         for i in 0..Throttle::SWEEP_AT {
-            t.event(&key(&format!("group:{i}")), start);
+            event(&t, &format!("group:{i}"), start, 1);
         }
-        t.event(&key("group:0"), start + secs(1));
+        event(&t, "group:0", start + secs(1), 2);
         assert_eq!(t.len(), Throttle::SWEEP_AT);
 
-        t.event(&key("dm"), start + WINDOW + secs(1));
+        event(&t, "dm", start + WINDOW + secs(1), 1);
         assert_eq!(t.len(), 2, "the one that waits, and the new one");
-        assert_eq!(t.due(&key("group:0"), start + WINDOW + secs(1)), 1);
+        assert_eq!(due(&t, "group:0", start + WINDOW + secs(1)), Some((1, "e2".into())));
     }
 }

@@ -24,7 +24,7 @@ use messenger_core::traits::SystemClock;
 use messenger_core::{Clock, MessengerError, Result};
 use messenger_push::client::{server_address, PushError};
 use messenger_push::{
-    Channel, DeviceAnswer, DevicePut, GroupWatch, Prefs, RelayAnswer, RelayWatch, TestAnswer,
+    Channel, DeviceAnswer, DevicePut, Prefs, RelayAnswer, RelayWatch, TestAnswer,
     VpushClient,
 };
 use messenger_store::settings;
@@ -41,7 +41,6 @@ const KEY_SERVER: &str = "push.server_url";
 const KEY_CHANNEL: &str = "push.channel";
 const KEY_PREF_DM: &str = "push.prefs.dm";
 const KEY_PREF_GROUPS: &str = "push.prefs.groups";
-const KEY_LOCALE: &str = "push.locale";
 /// What was told last, and to whom: see [`Told`].
 const KEY_TOLD: &str = "push.told";
 const KEY_LAST_ERROR: &str = "push.last_error";
@@ -187,18 +186,9 @@ impl MessengerRuntime {
 
         let me = messenger_core::PubKey::parse(&keys.public_key().to_hex())
             .ok_or_else(|| MessengerError::Crypto("the key has no hex form".into()))?;
-        let mut groups: Vec<GroupWatch> = self
-            .groups()
-            .list(&me)
-            .await?
-            .into_iter()
-            .filter(|g| g.membership == "joined")
-            .map(|g| GroupWatch {
-                id: g.id,
-                name: Some(g.name).filter(|n| !n.trim().is_empty()),
-            })
-            .collect();
-        groups.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut groups: Vec<String> =
+            self.groups().list(&me).await?.into_iter().filter(|g| g.membership == "joined").map(|g| g.id).collect();
+        groups.sort();
 
         let channel_dto = match channel.provider.as_str() {
             "fcm" => Channel::Fcm { token: channel.token.clone() },
@@ -211,7 +201,6 @@ impl MessengerRuntime {
         Ok(DevicePut {
             app_id: channel.app_id.clone(),
             channel: channel_dto,
-            locale: self.push_setting(KEY_LOCALE).await?,
             app_version: channel.app_version.clone(),
             prefs: self.push_prefs().await?,
             author_key: Some(messenger_dm::pushtags::author_key(keys)),
@@ -428,17 +417,6 @@ impl MessengerRuntime {
         self.push_reconcile(true).await
     }
 
-    /// Language of the push texts: the language of the app.
-    pub async fn push_set_locale(&self, locale: &str) -> Result<()> {
-        let locale = locale.trim();
-        let ok = (2..=16).contains(&locale.len())
-            && locale.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-' || b == b'_');
-        if !ok {
-            return Err(MessengerError::Invalid("push_locale".into()));
-        }
-        settings::set(&self.store, KEY_LOCALE, locale).await
-    }
-
     /// Asks the server for a test push to this device.
     pub async fn push_test(&self) -> Result<TestAnswer> {
         let keys = self.session_keys().await?;
@@ -625,17 +603,10 @@ mod tests {
         }
         assert_eq!(asked(&s.server, "PUT").await.len(), 1);
 
-        s.rt.push_set_locale("ru-RU").await.unwrap();
-        s.rt.push_reconcile(false).await.unwrap();
+        s.rt.push_set_prefs(true, false).await.unwrap();
         let puts = asked(&s.server, "PUT").await;
         assert_eq!(puts.len(), 2);
         let body: Value = serde_json::from_slice(&puts[1].body).unwrap();
-        assert_eq!(body["locale"], "ru-RU");
-
-        s.rt.push_set_prefs(true, false).await.unwrap();
-        let puts = asked(&s.server, "PUT").await;
-        assert_eq!(puts.len(), 3);
-        let body: Value = serde_json::from_slice(&puts[2].body).unwrap();
         assert_eq!(body["prefs"], json!({ "dm": true, "groups": false }));
 
         // A new address at the push service, as after a reinstall.
@@ -643,14 +614,14 @@ mod tests {
         renewed.token = "a-new-token".into();
         s.rt.push_set_channel(Some(renewed)).await.unwrap();
         s.rt.push_reconcile(false).await.unwrap();
-        assert_eq!(asked(&s.server, "PUT").await.len(), 4);
+        assert_eq!(asked(&s.server, "PUT").await.len(), 3);
 
         // A relay turned off is a relay not to watch.
         s.rt.relays().set_enabled(RELAY, false).await.unwrap();
         s.rt.push_reconcile(false).await.unwrap();
         let puts = asked(&s.server, "PUT").await;
-        assert_eq!(puts.len(), 5);
-        let body: Value = serde_json::from_slice(&puts[4].body).unwrap();
+        assert_eq!(puts.len(), 4);
+        let body: Value = serde_json::from_slice(&puts[3].body).unwrap();
         assert_eq!(body["relays"], json!([]));
     }
 
@@ -686,7 +657,8 @@ mod tests {
     async fn the_silent_mode_silences_pushes_too() {
         let s = registered().await;
         s.rt.relays().set_silent(true).await.unwrap();
-        s.rt.push_set_locale("ru").await.unwrap();
+        // Something changed that the server would be told about.
+        settings::set_bool(&s.rt.store, KEY_PREF_GROUPS, false).await.unwrap();
 
         let status = s.rt.push_reconcile(true).await.unwrap();
         assert_eq!(status.state, "paused");

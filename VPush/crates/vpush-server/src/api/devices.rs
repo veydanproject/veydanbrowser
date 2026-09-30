@@ -15,8 +15,8 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use vpush_proto::{
-    Channel, DeviceAnswer, DevicePut, DeviceView, ErrorCode, GroupWatch, Payload, PushType,
-    RelayAnswer, RelayStatus, RelayView, TestAnswer,
+    Channel, DeviceAnswer, DevicePut, DeviceView, ErrorCode, Payload, PushType, RelayAnswer,
+    RelayStatus, RelayView, TestAnswer,
 };
 
 use super::{error, now, Api, RequestId};
@@ -24,10 +24,8 @@ use crate::auth::AuthError;
 use crate::delivery::retry::{self, RetryPolicy};
 use crate::delivery::{mask, Message, Outcome, ProviderKind, Target, TEST_TTL};
 use crate::store::{Device, DeviceInput, StoreError, WatchedRelay};
-use crate::texts::Texts;
 
 const MAX_TOKEN: usize = 4096;
-const MAX_GROUP_NAME: usize = 64;
 
 /// A refusal, on its way to become an answer.
 struct Refusal {
@@ -177,28 +175,6 @@ fn judge(api: &Api, url: &str) -> (String, RelayStatus, Option<String>) {
     (url, status, detail)
 }
 
-/// Names are shown on a lock screen: one line, no control characters, not long.
-fn clean_name(name: &str) -> Option<String> {
-    let cleaned: String = name
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let cleaned: String = cleaned.chars().take(MAX_GROUP_NAME).collect();
-    (!cleaned.is_empty()).then_some(cleaned)
-}
-
-fn clean_locale(locale: Option<&str>) -> String {
-    let locale = locale.unwrap_or("en").trim();
-    let ok = (2..=16).contains(&locale.len())
-        && locale
-            .bytes()
-            .all(|b| b.is_ascii_alphabetic() || b == b'-' || b == b'_');
-    if ok { locale.to_string() } else { "en".to_string() }
-}
-
 /// The request as the store takes it, and what to tell about each relay.
 fn accepted(
     api: &Api,
@@ -263,18 +239,14 @@ fn accepted(
         Some(_) => return Err(Refusal::bad("author_key is 64 hex characters")),
     };
 
-    let mut groups: Vec<GroupWatch> = Vec::with_capacity(put.groups.len());
+    let mut groups: Vec<String> = Vec::with_capacity(put.groups.len());
     for group in &put.groups {
-        if !is_hex64(&group.id) {
+        if !is_hex64(group) {
             return Err(Refusal::bad("a group id is 64 hex characters"));
         }
-        if groups.iter().any(|g| g.id == group.id) {
-            continue;
+        if !groups.contains(group) {
+            groups.push(group.clone());
         }
-        groups.push(GroupWatch {
-            id: group.id.clone(),
-            name: group.name.as_deref().and_then(clean_name),
-        });
     }
 
     // A relay the server refuses is told about and left out; the rest of
@@ -307,7 +279,6 @@ fn accepted(
         provider: kind.as_str().to_string(),
         token,
         channel_json,
-        locale: clean_locale(put.locale.as_deref()),
         app_version: put
             .app_version
             .map(|v| v.chars().filter(|c| !c.is_control()).take(40).collect()),
@@ -336,7 +307,6 @@ fn view(api: &Api, device: Device) -> DeviceView {
         device_id: device.device_id,
         app_id: device.app_id,
         provider: device.provider,
-        locale: device.locale,
         prefs: device.prefs,
         state: device.state,
         created_at: device.created_at,
@@ -515,13 +485,13 @@ pub async fn test(
             Refusal::new(StatusCode::UNPROCESSABLE_ENTITY, ErrorCode::ProviderDisabled, e)
         })?;
 
-        let (title, body) = Texts::of(&device.locale).test();
+        // The device shows a test push in its own words; the push says
+        // only what it is and how to find it in the log.
         let mut payload = Payload::new(PushType::Test);
-        payload.title = Some(title);
-        payload.body = Some(body);
         payload.trace = Some(rid.clone());
         let message = Message {
             payload,
+            fallback: None,
             collapse_key: None,
             ttl: TEST_TTL,
             urgent: true,
@@ -585,20 +555,10 @@ mod tests {
     }
 
     #[test]
-    fn names_are_made_fit_for_a_lock_screen() {
-        assert_eq!(clean_name("  Команда \n разработки\t").as_deref(), Some("Команда разработки"));
-        assert_eq!(clean_name("a\u{0007}b\u{200B}c").as_deref(), Some("ab\u{200B}c"));
-        assert_eq!(clean_name(" \n ").as_deref(), None);
-        assert_eq!(clean_name(&"я".repeat(200)).unwrap().chars().count(), 64);
-    }
-
-    #[test]
-    fn locales() {
-        assert_eq!(clean_locale(Some("ru-RU")), "ru-RU");
-        assert_eq!(clean_locale(Some(" en ")), "en");
-        assert_eq!(clean_locale(None), "en");
-        for bad in ["", "r", "ru; DROP", "../../etc", &"a".repeat(17)] {
-            assert_eq!(clean_locale(Some(bad)), "en", "{bad}");
+    fn group_ids_and_author_keys() {
+        assert!(is_hex64(&"ab".repeat(32)));
+        for bad in ["", &"AB".repeat(32), &"ab".repeat(31), &"zz".repeat(32)] {
+            assert!(!is_hex64(bad), "{bad}");
         }
     }
 }

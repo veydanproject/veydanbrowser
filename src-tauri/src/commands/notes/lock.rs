@@ -106,6 +106,13 @@ pub struct LockSetResult {
     pub recovery_key: Option<String>,
 }
 
+/// Whether a PIN or password guards the app. What is kept behind it stays
+/// out of reach of anything that runs without the user: the push handler
+/// gets no keys while this is true.
+pub(crate) async fn lock_enabled(state: &AppState) -> bool {
+    read_setting(state, HASH_KEY).await.is_some()
+}
+
 async fn read_setting(state: &AppState, key: &str) -> Option<String> {
     sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = ?")
         .bind(key)
@@ -378,6 +385,9 @@ pub async fn notes_lock_set(
             state.notes_lock.clear();
         }
     }
+    // The push handler holds keys only while there is no lock.
+    #[cfg(feature = "messenger")]
+    crate::commands::messenger::push::lock_changed();
     let _ = app.emit(EVENT_UNLOCKED, ());
     Ok(LockSetResult {
         status: status(&state).await,

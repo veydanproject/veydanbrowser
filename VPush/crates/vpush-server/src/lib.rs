@@ -13,7 +13,6 @@ pub mod relay;
 pub mod relays;
 pub mod serve;
 pub mod store;
-pub mod texts;
 pub mod version;
 
 pub use config::Config;

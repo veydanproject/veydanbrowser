@@ -14,6 +14,7 @@ use ring::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
+use vpush_proto::Payload;
 
 use super::{http, Attempt, Message, Outcome, ProviderKind, PushProvider, SendFuture, Target};
 use crate::config::FcmConfig;
@@ -241,7 +242,7 @@ impl FcmClient {
         }
     }
 
-    fn body(target: &Target, message: &Message) -> serde_json::Value {
+    fn body(target: &Target, message: &Message, payload: &Payload) -> serde_json::Value {
         let mut android = json!({
             "priority": if message.urgent { "HIGH" } else { "NORMAL" },
             "ttl": format!("{}s", message.ttl.as_secs()),
@@ -252,13 +253,13 @@ impl FcmClient {
         json!({
             "message": {
                 "token": target.token,
-                "data": message.payload.to_data(),
+                "data": payload.to_data(),
                 "android": android,
             }
         })
     }
 
-    async fn attempt(&self, target: &Target, message: &Message) -> Attempt {
+    async fn attempt(&self, target: &Target, message: &Message, payload: &Payload) -> Attempt {
         let token = match self.access_token().await {
             Ok(token) => token,
             Err(TokenError::Refused { status, detail }) => {
@@ -286,7 +287,7 @@ impl FcmClient {
             .http
             .post(url)
             .bearer_auth(&token)
-            .json(&Self::body(target, message))
+            .json(&Self::body(target, message, payload))
             .send()
             .await
         {
@@ -381,7 +382,22 @@ impl PushProvider for FcmClient {
     fn send<'a>(&'a self, target: &'a Target, message: &'a Message) -> SendFuture<'a> {
         Box::pin(async move {
             let started = Instant::now();
-            let mut attempt = self.attempt(target, message).await;
+            let mut attempt = self.attempt(target, message, &message.payload).await;
+            // FCM says `INVALID_ARGUMENT` for a data map it finds too big,
+            // among other things. A push that carried the event is sent
+            // once more without it; anything else is refused for good.
+            if attempt.code.as_deref() == Some("INVALID_ARGUMENT") {
+                if let Some(fallback) = &message.fallback {
+                    tracing::info!(
+                        trace = message.payload.trace.as_deref().unwrap_or(""),
+                        token = %target.masked(),
+                        bytes = message.payload.data_len(),
+                        detail = attempt.detail.as_deref(),
+                        "fcm refused the push with the event; sent again without it"
+                    );
+                    attempt = self.attempt(target, message, fallback).await;
+                }
+            }
             attempt.latency_ms = started.elapsed().as_millis() as u64;
             attempt
         })
@@ -454,24 +470,25 @@ mod tests {
 
     #[test]
     fn the_push_is_data_only() {
-        let mut payload = vpush_proto::Payload::new(vpush_proto::PushType::Dm);
-        payload.title = Some("Direct message".into());
-        let body = FcmClient::body(
-            &Target { token: "t".into() },
-            &Message {
-                payload,
-                collapse_key: Some("k".into()),
-                ttl: Duration::from_secs(60),
-                urgent: true,
-            },
-        );
+        let mut payload = Payload::new(vpush_proto::PushType::Dm);
+        payload.event = Some(r#"{"kind":1059}"#.into());
+        payload.trace = Some("abcd1234".into());
+        let message = Message {
+            payload: payload.clone(),
+            fallback: None,
+            collapse_key: Some("k".into()),
+            ttl: Duration::from_secs(60),
+            urgent: true,
+        };
+        let body = FcmClient::body(&Target { token: "t".into() }, &message, &payload);
         let message = &body["message"];
         assert!(message.get("notification").is_none());
         assert!(message["android"].get("notification").is_none());
         assert_eq!(message["android"]["priority"], "HIGH");
         assert_eq!(message["android"]["ttl"], "60s");
         assert_eq!(message["android"]["collapse_key"], "k");
-        assert_eq!(message["data"]["title"], "Direct message");
+        assert_eq!(message["data"]["event"], r#"{"kind":1059}"#);
+        assert_eq!(message["data"]["v"], "2");
         assert!(message["data"]
             .as_object()
             .unwrap()

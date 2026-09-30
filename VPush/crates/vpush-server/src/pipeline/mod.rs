@@ -3,7 +3,8 @@
 //! The server sees events as a relay does, sealed, so it decides little:
 //! whom the event is for, whether its author marked it as not worth a push,
 //! whether it was dealt with already, and whether the device was woken a
-//! moment ago. Everything that needs the content is the device's to decide.
+//! moment ago. Everything that needs the content is the device's to decide:
+//! the push carries the event itself, and the device opens it.
 //!
 //! Every event gets a `trace`. It is in every log line about the event and
 //! in the pushes it caused, so one search shows the whole way from the relay
@@ -23,9 +24,8 @@ use crate::api::{next_request_id, now};
 use crate::delivery::retry::{self, RetryPolicy};
 use crate::delivery::{mask, Message, Outcome, ProviderKind, Providers, Target};
 use crate::store::{AllStore, Recipient, Seen};
-use crate::texts::Texts;
 use classify::Subject;
-use throttle::{Throttle, Verdict};
+use throttle::{Named, Throttle, Verdict};
 
 /// How long the push service keeps a push for a phone that is off.
 const TTL: Duration = Duration::from_secs(24 * 3600);
@@ -69,6 +69,9 @@ struct Order {
     trace: String,
     relay: String,
     event_id: String,
+    /// The event as the relay gave it, JSON: what the push carries when it
+    /// fits. Shared by the orders of every recipient of the event.
+    event: Arc<str>,
     subject: Subject,
     to: Recipient,
 }
@@ -84,6 +87,14 @@ impl Order {
 
     fn key(&self) -> throttle::Key {
         (self.to.pubkey.clone(), self.to.device_id.clone(), self.chat())
+    }
+
+    /// The event as the push at the end of a window names it.
+    fn named(&self) -> Named {
+        Named {
+            event_id: self.event_id.clone(),
+            relay: self.relay.clone(),
+        }
     }
 }
 
@@ -170,6 +181,7 @@ impl Pipeline {
             return Ok(Dealt::Duplicate);
         }
 
+        let json: Arc<str> = event.as_json().into();
         let (mut pushed, mut later, mut own) = (0, 0, 0);
         for to in recipients {
             // A group event says nothing of its author on the outside but
@@ -184,10 +196,11 @@ impl Pipeline {
                 trace: trace.to_string(),
                 relay: relay.to_string(),
                 event_id: id.clone(),
+                event: Arc::clone(&json),
                 subject: subject.clone(),
                 to,
             };
-            match self.throttle.event(&order.key(), Instant::now()) {
+            match self.throttle.event(&order.key(), Instant::now(), order.named()) {
                 Verdict::Now => {
                     pushed += 1;
                     self.send(order, 1);
@@ -204,40 +217,54 @@ impl Pipeline {
     }
 
     /// Comes back when the window ends and pushes once for what was counted.
-    fn send_later(self: &Arc<Self>, order: Order, wait: Duration) {
+    fn send_later(self: &Arc<Self>, mut order: Order, wait: Duration) {
         let pipeline = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(wait).await;
-            let count = pipeline.throttle.due(&order.key(), Instant::now());
-            if count > 0 {
-                pipeline.send(order, count);
+            if let Some(due) = pipeline.throttle.due(&order.key(), Instant::now()) {
+                // The push names the last event counted. With one counted,
+                // that is the event of this order, and the push carries it.
+                order.event_id = due.last.event_id;
+                order.relay = due.last.relay;
+                pipeline.send(order, due.count);
             }
         });
     }
 
-    fn payload(order: &Order, count: u32) -> Payload {
-        let texts = Texts::of(&order.to.locale);
+    /// The push carries the event itself when it fits and stands for that
+    /// one event. A push for several events names the last of them: the
+    /// device cannot show them all from one, and takes them from the relay.
+    fn message(order: &Order, count: u32) -> Message {
         let mut payload = match &order.subject {
-            Subject::Dm { .. } => {
-                let mut p = Payload::new(PushType::Dm);
-                let (title, body) = texts.dm(count);
-                (p.title, p.body) = (Some(title), Some(body));
-                p
-            }
+            Subject::Dm { .. } => Payload::new(PushType::Dm),
             Subject::Group { id } => {
                 let mut p = Payload::new(PushType::Group);
-                let (title, body) = texts.group(order.to.group_name.as_deref(), count);
-                (p.title, p.body) = (Some(title), Some(body));
                 p.group_id = Some(id.clone());
-                p.group_name = order.to.group_name.clone();
                 p
             }
         };
-        payload.event_id = Some(order.event_id.clone());
-        payload.relay = Some(order.relay.clone());
         payload.count = (count > 1).then_some(count);
         payload.trace = Some(order.trace.clone());
-        payload
+
+        let mut by_id = payload.clone();
+        by_id.event_id = Some(order.event_id.clone());
+        by_id.relay = Some(order.relay.clone());
+
+        let mut whole = payload;
+        whole.event = Some(order.event.to_string());
+
+        let (payload, fallback) = if count == 1 && whole.fits() {
+            (whole, Some(by_id))
+        } else {
+            (by_id, None)
+        };
+        Message {
+            payload,
+            fallback,
+            collapse_key: Some(Self::collapse_key(order)),
+            ttl: TTL,
+            urgent: true,
+        }
     }
 
     /// A key the push service replaces a waiting push by: the newest word
@@ -270,12 +297,7 @@ impl Pipeline {
                     return;
                 }
             };
-            let message = Message {
-                payload: Self::payload(&order, count),
-                collapse_key: Some(Self::collapse_key(&order)),
-                ttl: TTL,
-                urgent: true,
-            };
+            let message = Self::message(&order, count);
             let delivery =
                 retry::deliver(provider.as_ref(), &target, &message, pipeline.retry).await;
             let outcome = match delivery.outcome {
@@ -293,6 +315,8 @@ impl Pipeline {
                 device = %order.to.device_id,
                 token = %target.masked(),
                 count,
+                with_event = message.payload.event.is_some(),
+                bytes = message.payload.data_len(),
                 outcome,
                 attempts = delivery.attempts.len(),
                 http_status = last.and_then(|a| a.http_status),

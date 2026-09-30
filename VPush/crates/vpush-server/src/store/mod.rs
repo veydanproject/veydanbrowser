@@ -9,7 +9,7 @@ mod sqlite;
 pub use sqlite::SqliteStore;
 
 use async_trait::async_trait;
-use vpush_proto::{GroupWatch, Prefs};
+use vpush_proto::Prefs;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -41,12 +41,12 @@ pub struct DeviceInput {
     pub provider: String,
     pub token: String,
     pub channel_json: Option<String>,
-    pub locale: String,
     pub app_version: Option<String>,
     pub prefs: Prefs,
     pub author_key: Option<String>,
     pub relays: Vec<WatchedRelay>,
-    pub groups: Vec<GroupWatch>,
+    /// Ids of the groups watched for the device.
+    pub groups: Vec<String>,
     /// Unix seconds.
     pub now: u64,
     pub expires_at: u64,
@@ -60,7 +60,6 @@ pub struct Device {
     pub app_id: String,
     pub provider: String,
     pub token: String,
-    pub locale: String,
     pub app_version: Option<String>,
     pub prefs: Prefs,
     pub author_key: Option<String>,
@@ -72,7 +71,7 @@ pub struct Device {
     pub last_push_at: Option<u64>,
     pub last_outcome: Option<String>,
     pub relays: Vec<WatchedRelay>,
-    pub groups: Vec<GroupWatch>,
+    pub groups: Vec<String>,
 }
 
 /// How many of what there is, for `vpush ctl`.
@@ -163,10 +162,7 @@ pub struct Recipient {
     pub app_id: String,
     pub provider: String,
     pub token: String,
-    pub locale: String,
     pub author_key: Option<String>,
-    /// What this device calls the group the push is about.
-    pub group_name: Option<String>,
 }
 
 /// What the server does on the relays.

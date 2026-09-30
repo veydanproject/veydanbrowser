@@ -2,12 +2,9 @@
 // SPDX-License-Identifier: LicenseRef-PolyForm-Perimeter-1.0.1
 
 // What the screens owe to notifications: a tap opens the chat it was about,
-// an opened chat takes its notification away, and the push server writes its
-// texts in the language of the app.
+// and an opened chat takes its notification away.
 
 import { goto } from '$app/navigation';
-import { get } from 'svelte/store';
-import { locale } from '$lib/i18n';
 import { isTauriHost, messengerApi, PUSH_TAP_EVENT } from '../api';
 import { BASE, chatHref } from '../mobile/routes';
 import { pushStore } from './pushStore.svelte';
@@ -58,7 +55,6 @@ export async function startPushBridge() {
   // Asked early, while the start page may still wait for the app lock.
   launch ??= takeRoute();
 
-  locale.subscribe((l) => { pushStore.setLocale(l); });
   await pushStore.load();
   if (!pushStore.view?.device.supported) return;
 
@@ -86,6 +82,3 @@ export function pushSeen(chatId?: string) {
   const key = chatId && CHAT.test(chatId) ? chatId : 'dm';
   messengerApi.push.clear(key).catch(() => {});
 }
-
-/** The language a test would expect, without waiting for the store. */
-export const currentLocale = () => get(locale);

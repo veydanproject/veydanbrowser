@@ -89,6 +89,10 @@ pub const TEST_TTL: Duration = Duration::from_secs(600);
 #[derive(Debug, Clone)]
 pub struct Message {
     pub payload: Payload,
+    /// The same push in its other form, `event_id` and `relay` in place of
+    /// the event, for a service that refuses the payload as too big. Only a
+    /// push that carries an event has one.
+    pub fallback: Option<Payload>,
     /// A later push with the same key replaces this one while it waits.
     pub collapse_key: Option<String>,
     /// How long the service keeps trying when the device is offline.

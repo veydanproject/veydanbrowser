@@ -53,27 +53,19 @@ pub struct RelayWatch {
     pub groups: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GroupWatch {
-    pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-}
-
 /// Everything about the device, sent whole every time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevicePut {
     pub app_id: String,
     pub channel: Channel,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub locale: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
     pub prefs: Prefs,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_key: Option<String>,
     pub relays: Vec<RelayWatch>,
-    pub groups: Vec<GroupWatch>,
+    /// Ids of the groups to watch, 64 hex characters each.
+    pub groups: Vec<String>,
 }
 
 /// What the server does with a relay the device named.

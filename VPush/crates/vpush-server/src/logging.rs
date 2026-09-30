@@ -36,7 +36,6 @@ const MODULES: &[&str] = &[
     "relays",
     "serve",
     "store",
-    "texts",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

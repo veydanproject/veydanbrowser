@@ -19,7 +19,7 @@
 //! messenger-cli [--data-dir DIR] delete <message-id>
 //! messenger-cli [--data-dir DIR] relation <npub|hex>
 //! messenger-cli [--data-dir DIR] request|accept|decline|block|unblock|remove <npub|hex>
-//! messenger-cli [--data-dir DIR] push-on <token> [--server URL] [--locale L]
+//! messenger-cli [--data-dir DIR] push-on <token> [--server URL]
 //! messenger-cli [--data-dir DIR] push-status | push-test | push-off
 //! ```
 //!
@@ -35,7 +35,7 @@ use std::time::Duration;
 fn usage() -> ! {
     eprintln!(
         "usage: messenger-cli [--data-dir DIR] <keygen [--password PW] | import <nsec|ncryptsec> <secret> [--password PW] \
-         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] [--locale L] | push-status | push-test | push-off | wrap <to> <text…> | notify-describe <event.json> [--type dm|group] [--group ID]>"
+         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] | push-status | push-test | push-off | wrap <to> <text…> | notify-describe <event.json> [--type dm|group] [--group ID]>"
     );
     std::process::exit(2)
 }
@@ -460,7 +460,6 @@ async fn main() {
                 usage();
             }
             let server = take_flag(&mut args, "--server");
-            let locale = take_flag(&mut args, "--locale");
             let channel = messenger_runtime::push::PushChannel {
                 provider: "fcm".into(),
                 token: args[0].clone(),
@@ -468,9 +467,6 @@ async fn main() {
                 app_version: Some(format!("cli {}", messenger_core::VERSION)),
             };
             rt.push_set_channel(Some(channel)).await.unwrap_or_else(die);
-            if let Some(locale) = locale {
-                rt.push_set_locale(&locale).await.unwrap_or_else(die);
-            }
             if let Some(server) = server {
                 rt.push_set_server(Some(server)).await.unwrap_or_else(die);
             }

@@ -193,17 +193,14 @@ fn registration() -> Value {
     json!({
         "app_id": APP,
         "channel": { "provider": "fcm", "token": "token-of-the-phone" },
-        "locale": "ru-RU",
         "relays": [
             { "url": "wss://node-1.veydan.net", "dm": true, "groups": true },
             { "url": "WSS://NOS.LOL/", "dm": true, "groups": false },
             { "url": "wss://relay.example.org" },
             { "url": "https://not-a-relay.example.org" },
         ],
-        "groups": [
-            { "id": "11".repeat(32), "name": "  Команда \n разработки " },
-            { "id": "22".repeat(32) },
-        ],
+        // The same group twice is watched once.
+        "groups": ["11".repeat(32), "22".repeat(32), "11".repeat(32)],
     })
 }
 
@@ -238,7 +235,7 @@ async fn a_device_is_registered_read_and_removed() {
     let get = server.ask(&alice, "GET", DEVICE, None).await;
     assert_eq!(get.status, 200, "{}", get.body);
     assert_eq!(get.body["state"], "active");
-    assert_eq!(get.body["locale"], "ru-RU");
+    assert!(get.body.get("locale").is_none(), "the server keeps no language");
     assert_eq!(get.body["provider"], "fcm");
     // Only what the server agreed to watch is kept.
     assert_eq!(
@@ -248,8 +245,7 @@ async fn a_device_is_registered_read_and_removed() {
             { "url": "wss://nos.lol", "dm": true, "groups": false, "status": "pending" },
         ])
     );
-    assert_eq!(get.body["groups"][0]["name"], "Команда разработки");
-    assert!(get.body["groups"][1].get("name").is_none());
+    assert_eq!(get.body["groups"], json!(["11".repeat(32), "22".repeat(32)]));
     // The token is the device's own business; it is not given back.
     assert!(!get.body.to_string().contains("token-of-the-phone"));
 
@@ -347,7 +343,9 @@ async fn what_the_server_does_not_serve() {
         ("unknown provider", json!({ "app_id": APP, "channel": { "provider": "pigeon" } })),
         ("empty token", json!({ "app_id": APP, "channel": { "provider": "fcm", "token": " " } })),
         ("group id", json!({ "app_id": APP, "channel": { "provider": "fcm", "token": "t" },
-                             "groups": [{ "id": "xyz" }] })),
+                             "groups": ["xyz"] })),
+        ("group as an object", json!({ "app_id": APP, "channel": { "provider": "fcm", "token": "t" },
+                                       "groups": [{ "id": "11".repeat(32) }] })),
         ("author key", json!({ "app_id": APP, "channel": { "provider": "fcm", "token": "t" },
                                "author_key": "short" })),
     ] {
@@ -375,7 +373,7 @@ async fn limits() {
 
     let mut r = registration();
     r["relays"] = json!([]);
-    r["groups"] = json!([{ "id": "11".repeat(32) }, { "id": "22".repeat(32) }, { "id": "33".repeat(32) }]);
+    r["groups"] = json!(["11".repeat(32), "22".repeat(32), "33".repeat(32)]);
     let answer = server.ask(&alice, "PUT", DEVICE, Some(r)).await;
     assert_eq!((answer.status, code(&answer)), (422, "limit_groups"));
 
@@ -415,7 +413,7 @@ async fn the_same_phone_under_a_new_identity() {
 }
 
 #[tokio::test]
-async fn a_test_push_is_sent_in_the_language_of_the_device() {
+async fn a_test_push_says_only_what_it_is() {
     let server = start_with("[limits]\ntest_per_hour = 2\n").await;
     server
         .fcm_answers(ResponseTemplate::new(200).set_body_json(json!({ "name": "m/1" })))
@@ -436,13 +434,10 @@ async fn a_test_push_is_sent_in_the_language_of_the_device() {
     assert_eq!(pushes.len(), 1);
     let message = &pushes[0]["message"];
     assert_eq!(message["token"], "token-of-the-phone");
+    // No text: the phone shows a test push in its own words.
     assert_eq!(
         message["data"],
-        json!({
-            "v": "1", "type": "test", "title": "VPush",
-            "body": "Тестовое уведомление: пуши работают.",
-            "trace": answer.body["trace"],
-        })
+        json!({ "v": "2", "type": "test", "trace": answer.body["trace"] })
     );
     assert!(message.get("notification").is_none());
 

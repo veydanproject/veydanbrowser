@@ -18,6 +18,9 @@
 //! forwarding call, it belongs in a messenger crate.
 
 pub mod push;
+// The push handler's entry into the messenger: a JNI export, Android only.
+#[cfg(target_os = "android")]
+pub mod notify_jni;
 
 use crate::error::{AppError, CmdResult};
 use crate::{vault, AppState};
@@ -349,6 +352,8 @@ pub async fn messenger_identity_delete(state: tauri::State<'_, AppState>) -> Cmd
     }
     rt.identity().delete().await.map_err(map_err)?;
     rt.refresh_signer().await.map_err(map_err)?;
+    // The push handler's copy of the keys goes with the identity.
+    push::lock_changed();
     Ok(())
 }
 

@@ -491,7 +491,6 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_set_prefs,
             #[cfg(feature = "messenger")]
-            commands::messenger::push::messenger_push_set_locale,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_refresh,
             #[cfg(feature = "messenger")]
@@ -500,6 +499,8 @@ fn run_mobile() {
             commands::messenger::push::messenger_push_take_tap,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_clear,
+            commands::messenger::push::messenger_notify_get,
+            commands::messenger::push::messenger_notify_set,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
             #[cfg(feature = "messenger")]
@@ -1120,7 +1121,6 @@ fn run_desktop() {
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_set_prefs,
             #[cfg(feature = "messenger")]
-            commands::messenger::push::messenger_push_set_locale,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_refresh,
             #[cfg(feature = "messenger")]
@@ -1129,6 +1129,8 @@ fn run_desktop() {
             commands::messenger::push::messenger_push_take_tap,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_clear,
+            commands::messenger::push::messenger_notify_get,
+            commands::messenger::push::messenger_notify_set,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_dm_send_text,
             #[cfg(feature = "messenger")]

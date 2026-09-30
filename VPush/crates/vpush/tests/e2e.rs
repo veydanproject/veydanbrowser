@@ -613,7 +613,6 @@ async fn a_message_on_a_gated_relay_becomes_a_push_and_the_key_of_the_relay_stay
     let body = serde_json::json!({
         "app_id": "net.veydan.mobile",
         "channel": { "provider": "fcm", "token": "token-of-the-phone" },
-        "locale": "en",
         "relays": [{ "url": relay_url, "dm": true, "groups": true }],
     })
     .to_string();
@@ -649,9 +648,13 @@ async fn a_message_on_a_gated_relay_becomes_a_push_and_the_key_of_the_relay_stay
         .collect();
     assert_eq!(pushes.len(), 1);
     let push: serde_json::Value = serde_json::from_slice(&pushes[0].body).unwrap();
+    assert_eq!(push["message"]["data"]["v"], "2");
     assert_eq!(push["message"]["data"]["type"], "dm");
-    assert_eq!(push["message"]["data"]["title"], "Direct message");
-    assert_eq!(push["message"]["data"]["event_id"], message.id.to_hex());
+    // The push carries the message itself, and no text of the server's.
+    let carried: serde_json::Value =
+        serde_json::from_str(push["message"]["data"]["event"].as_str().unwrap()).unwrap();
+    assert_eq!(carried["id"], message.id.to_hex());
+    assert!(push["message"]["data"].get("title").is_none());
 
     // The way of the event, from the relay to the push, by one number.
     let trace = push["message"]["data"]["trace"].as_str().unwrap();

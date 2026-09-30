@@ -13,7 +13,7 @@ use nostr::prelude::*;
 use nostr_sdk::local_relay::LocalRelay;
 use serde_json::{json, Value};
 use tokio::sync::watch;
-use vpush_proto::{GroupWatch, Prefs};
+use vpush_proto::Prefs;
 use vpush_server::config::Config;
 use vpush_server::delivery::fcm::{FcmClient, ServiceAccount};
 use vpush_server::delivery::retry::RetryPolicy;
@@ -164,7 +164,7 @@ impl Server {
     }
 
     /// A phone that watches direct messages and the group on every relay given.
-    async fn register(&self, owner: &Keys, device: &str, relays: &[&Relay], group_name: Option<&str>) -> DeviceInput {
+    async fn register(&self, owner: &Keys, device: &str, relays: &[&Relay]) -> DeviceInput {
         let input = DeviceInput {
             pubkey: owner.public_key().to_hex(),
             device_id: device.to_string(),
@@ -172,7 +172,6 @@ impl Server {
             provider: "fcm".to_string(),
             token: format!("token-of-{device}"),
             channel_json: None,
-            locale: "ru".to_string(),
             app_version: None,
             prefs: Prefs::default(),
             author_key: Some(author_key(owner)),
@@ -180,7 +179,7 @@ impl Server {
                 .iter()
                 .map(|r| WatchedRelay { url: r.url.clone(), dm: true, groups: true })
                 .collect(),
-            groups: vec![GroupWatch { id: GROUP.to_string(), name: group_name.map(str::to_string) }],
+            groups: vec![GROUP.to_string()],
             now: Timestamp::now().as_secs(),
             expires_at: Timestamp::now().as_secs() + 86_400,
         };
@@ -244,13 +243,22 @@ fn author_key(owner: &Keys) -> String {
 /// A sealed direct message, as a relay sees it: signed by a key made for
 /// it, dated somewhere in the last two days.
 fn wrap(to: &Keys, tags: &[&[&str]]) -> Event {
+    wrap_with(to, "sealed", tags)
+}
+
+fn wrap_with(to: &Keys, content: &str, tags: &[&[&str]]) -> Event {
     let mut all = vec![Tag::public_key(to.public_key())];
     all.extend(tags.iter().map(|t| Tag::parse(t.iter().copied()).unwrap()));
-    EventBuilder::new(Kind::GiftWrap, "sealed")
+    EventBuilder::new(Kind::GiftWrap, content)
         .tags(all)
         .custom_created_at(Timestamp::from_secs(Timestamp::now().as_secs() - 86_400))
         .finalize(&Keys::generate())
         .unwrap()
+}
+
+/// The event a push carries, opened.
+fn carried(data: &Value) -> Value {
+    serde_json::from_str(data["event"].as_str().expect("the push carries the event")).unwrap()
 }
 
 /// An event of the group, written by `author`.
@@ -269,11 +277,11 @@ fn group_event(author: &Keys, tags: &[&[&str]]) -> Event {
 const SHORT: Duration = Duration::from_millis(100);
 
 #[tokio::test]
-async fn a_direct_message_becomes_a_push_in_the_language_of_the_device() {
+async fn a_direct_message_becomes_a_push_that_carries_it() {
     let r = relay().await;
     let server = server(&[&r], SHORT).await;
     let alice = Keys::generate();
-    server.register(&alice, "phone", &[&r], None).await;
+    server.register(&alice, "phone", &[&r]).await;
     server.watching(&alice, &[&r]).await;
 
     let message = wrap(&alice, &[]);
@@ -282,12 +290,14 @@ async fn a_direct_message_becomes_a_push_in_the_language_of_the_device() {
     let pushes = server.pushes_are(1).await;
     assert_eq!(pushes[0]["token"], "token-of-phone");
     let data = &pushes[0]["data"];
+    assert_eq!(data["v"], "2");
     assert_eq!(data["type"], "dm");
-    assert_eq!(data["event_id"], message.id.to_hex());
-    assert_eq!(data["relay"], r.url);
-    assert_eq!(data["title"], "Личное сообщение");
-    assert_eq!(data["body"], "Новое сообщение");
-    assert!(data.get("count").is_none());
+    assert_eq!(carried(data), serde_json::to_value(&message).unwrap());
+    // The event is there, so where to find it is not; and no text: the
+    // device writes its own.
+    for absent in ["event_id", "relay", "count", "title", "body"] {
+        assert!(data.get(absent).is_none(), "{absent}: {data}");
+    }
     assert!(data["trace"].as_str().unwrap().len() >= 8);
     assert!(pushes[0].get("notification").is_none());
     assert_eq!(pushes[0]["android"]["priority"], "HIGH");
@@ -295,6 +305,25 @@ async fn a_direct_message_becomes_a_push_in_the_language_of_the_device() {
     let device = server.store.device(&alice.public_key().to_hex(), "phone").await.unwrap().unwrap();
     assert_eq!(device.last_outcome.as_deref(), Some("delivered"));
     assert_eq!(server.watch().status(&r.url), vpush_proto::RelayStatus::Ok);
+}
+
+#[tokio::test]
+async fn a_message_too_big_for_a_push_is_named_and_left_on_the_relay() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let alice = Keys::generate();
+    server.register(&alice, "phone", &[&r]).await;
+    server.watching(&alice, &[&r]).await;
+
+    let message = wrap_with(&alice, &"x".repeat(5_000), &[]);
+    r.publish(&message).await;
+
+    let pushes = server.pushes_are(1).await;
+    let data = &pushes[0]["data"];
+    assert_eq!(data["type"], "dm");
+    assert_eq!(data["event_id"], message.id.to_hex());
+    assert_eq!(data["relay"], r.url);
+    assert!(data.get("event").is_none(), "{data}");
 }
 
 #[tokio::test]
@@ -307,14 +336,14 @@ async fn what_was_on_the_relay_before_the_watch_began_is_not_pushed() {
     }
     r.publish(&group_event(&Keys::generate(), &[])).await;
 
-    server.register(&alice, "phone", &[&r], None).await;
+    server.register(&alice, "phone", &[&r]).await;
     server.watching(&alice, &[&r]).await;
     server.pushes_are(0).await;
 
     let fresh = wrap(&alice, &[]);
     r.publish(&fresh).await;
     let pushes = server.pushes_are(1).await;
-    assert_eq!(pushes[0]["data"]["event_id"], fresh.id.to_hex());
+    assert_eq!(carried(&pushes[0]["data"])["id"], fresh.id.to_hex());
 }
 
 #[tokio::test]
@@ -322,7 +351,7 @@ async fn what_is_marked_as_not_worth_a_push_is_not_pushed() {
     let r = relay().await;
     let server = server(&[&r], SHORT).await;
     let alice = Keys::generate();
-    server.register(&alice, "phone", &[&r], None).await;
+    server.register(&alice, "phone", &[&r]).await;
     server.watching(&alice, &[&r]).await;
 
     // A copy for the author's other devices, a signal, an operation of a group.
@@ -334,7 +363,7 @@ async fn what_is_marked_as_not_worth_a_push_is_not_pushed() {
     r.publish(&message).await;
 
     let pushes = server.pushes_are(1).await;
-    assert_eq!(pushes[0]["data"]["event_id"], message.id.to_hex());
+    assert_eq!(carried(&pushes[0]["data"])["id"], message.id.to_hex());
 }
 
 #[tokio::test]
@@ -342,7 +371,7 @@ async fn one_event_on_two_relays_is_one_push() {
     let (a, b) = (relay().await, relay().await);
     let server = server(&[&a, &b], SHORT).await;
     let alice = Keys::generate();
-    server.register(&alice, "phone", &[&a, &b], None).await;
+    server.register(&alice, "phone", &[&a, &b]).await;
     server.watching(&alice, &[&a, &b]).await;
 
     let message = wrap(&alice, &[]);
@@ -357,8 +386,8 @@ async fn every_device_of_the_owner_is_told() {
     let r = relay().await;
     let server = server(&[&r], SHORT).await;
     let alice = Keys::generate();
-    server.register(&alice, "phone", &[&r], None).await;
-    server.register(&alice, "tablet", &[&r], None).await;
+    server.register(&alice, "phone", &[&r]).await;
+    server.register(&alice, "tablet", &[&r]).await;
     server.watching(&alice, &[&r]).await;
 
     r.publish(&wrap(&alice, &[])).await;
@@ -374,14 +403,14 @@ async fn every_device_of_the_owner_is_told() {
 }
 
 #[tokio::test]
-async fn a_group_message_is_told_to_everybody_but_its_author_by_the_name_each_gave_the_group() {
+async fn a_group_message_is_told_to_everybody_but_its_author() {
     let r = relay().await;
     let server = server(&[&r], SHORT).await;
     let (alice, bob, carol) = (Keys::generate(), Keys::generate(), Keys::generate());
-    server.register(&alice, "alice-phone", &[&r], Some("Работа")).await;
-    server.register(&alice, "alice-tablet", &[&r], Some("Работа")).await;
-    server.register(&bob, "bob-phone", &[&r], Some("Коллеги")).await;
-    server.register(&carol, "carol-phone", &[&r], None).await;
+    server.register(&alice, "alice-phone", &[&r]).await;
+    server.register(&alice, "alice-tablet", &[&r]).await;
+    server.register(&bob, "bob-phone", &[&r]).await;
+    server.register(&carol, "carol-phone", &[&r]).await;
     for owner in [&alice, &bob, &carol] {
         server.watching(owner, &[&r]).await;
     }
@@ -397,17 +426,13 @@ async fn a_group_message_is_told_to_everybody_but_its_author_by_the_name_each_ga
     assert!(!told.contains_key("token-of-alice-phone"), "the author is not told of her own message");
     assert!(!told.contains_key("token-of-alice-tablet"), "on none of her devices");
 
-    let bob = &told["token-of-bob-phone"];
-    assert_eq!(bob["type"], "group");
-    assert_eq!(bob["group_id"], GROUP);
-    assert_eq!(bob["group_name"], "Коллеги");
-    assert_eq!(bob["title"], "Группа: Коллеги");
-    assert_eq!(bob["body"], "Новое сообщение");
-    assert_eq!(bob["event_id"], message.id.to_hex());
-
-    let carol = &told["token-of-carol-phone"];
-    assert_eq!(carol["title"], "Группа");
-    assert!(carol.get("group_name").is_none());
+    for token in ["token-of-bob-phone", "token-of-carol-phone"] {
+        let data = &told[token];
+        assert_eq!(data["type"], "group");
+        assert_eq!(data["group_id"], GROUP);
+        assert_eq!(carried(data), serde_json::to_value(&message).unwrap());
+        assert!(data.get("title").is_none() && data.get("group_name").is_none(), "{data}");
+    }
 }
 
 #[tokio::test]
@@ -415,12 +440,15 @@ async fn a_burst_wakes_the_phone_twice_and_the_second_push_counts_the_rest() {
     let r = relay().await;
     let server = server(&[&r], Duration::from_secs(2)).await;
     let alice = Keys::generate();
-    server.register(&alice, "phone", &[&r], Some("Работа")).await;
+    server.register(&alice, "phone", &[&r]).await;
     server.watching(&alice, &[&r]).await;
 
     let started = Instant::now();
+    let mut ids = Vec::new();
     for _ in 0..6 {
-        r.publish(&wrap(&alice, &[])).await;
+        let message = wrap(&alice, &[]);
+        ids.push(message.id.to_hex());
+        r.publish(&message).await;
     }
     // Another chat is not held back by this one.
     r.publish(&group_event(&Keys::generate(), &[])).await;
@@ -432,10 +460,17 @@ async fn a_burst_wakes_the_phone_twice_and_the_second_push_counts_the_rest() {
 
     let pushes = server.pushes_are(3).await;
     assert!(started.elapsed() >= Duration::from_secs(2));
+    let at_once = pushes[..2].iter().map(|p| &p["data"]).find(|d| d["type"] == "dm").unwrap();
     let last = &pushes[2]["data"];
     assert_eq!(last["type"], "dm");
     assert_eq!(last["count"], "5");
-    assert_eq!(last["body"], "Новых сообщений: 5");
+    // Five messages cannot be shown from one event: the push names one of
+    // the counted, and the phone takes them from the relay.
+    assert!(last.get("event").is_none(), "{last}");
+    assert_eq!(last["relay"], r.url);
+    let named = last["event_id"].as_str().unwrap();
+    assert!(ids.iter().any(|id| id == named), "{named} is one of the messages");
+    assert_ne!(carried(at_once)["id"], named, "and not the one pushed at once");
 }
 
 #[tokio::test]
@@ -443,7 +478,7 @@ async fn what_came_while_the_server_was_away_is_pushed_once_when_it_is_back() {
     let r = relay().await;
     let mut server = server(&[&r], SHORT).await;
     let alice = Keys::generate();
-    server.register(&alice, "phone", &[&r], None).await;
+    server.register(&alice, "phone", &[&r]).await;
     server.watching(&alice, &[&r]).await;
 
     let before = wrap(&alice, &[]);
@@ -459,7 +494,7 @@ async fn what_came_while_the_server_was_away_is_pushed_once_when_it_is_back() {
     server.start();
 
     let pushes = server.pushes_are(3).await;
-    let mut ids: Vec<_> = pushes.iter().map(|p| p["data"]["event_id"].as_str().unwrap().to_string()).collect();
+    let mut ids: Vec<_> = pushes.iter().map(|p| carried(&p["data"])["id"].as_str().unwrap().to_string()).collect();
     ids.sort();
     let mut expected = vec![before.id.to_hex(), missed.id.to_hex(), missed_in_group.id.to_hex()];
     expected.sort();
@@ -472,8 +507,8 @@ async fn a_device_that_leaves_takes_nothing_from_the_one_that_stays() {
     let server = server(&[&r], SHORT).await;
     let alice = Keys::generate();
     let owner = alice.public_key().to_hex();
-    server.register(&alice, "phone", &[&r], None).await;
-    server.register(&alice, "tablet", &[&r], None).await;
+    server.register(&alice, "phone", &[&r]).await;
+    server.register(&alice, "tablet", &[&r]).await;
     server.watching(&alice, &[&r]).await;
 
     assert!(server.store.delete_device(&owner, "tablet").await.unwrap());
@@ -499,7 +534,7 @@ async fn a_relay_that_is_not_on_the_list_is_not_connected_to() {
     let alice = Keys::generate();
     // The registration API would have left `other` out; the store is
     // written to directly here, as if it had not.
-    server.register(&alice, "phone", &[&listed, &other], None).await;
+    server.register(&alice, "phone", &[&listed, &other]).await;
     server.watching(&alice, &[&listed]).await;
 
     let urls: Vec<_> = server.watch().health().into_iter().map(|h| h.url).collect();

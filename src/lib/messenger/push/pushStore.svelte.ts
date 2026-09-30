@@ -72,15 +72,6 @@ class PushStore {
       this.test = await messengerApi.push.test();
       return messengerApi.push.status();
     });
-
-  /** The texts of pushes are written by the server, in this language. */
-  async setLocale(locale: string) {
-    try {
-      await messengerApi.push.setLocale(locale);
-    } catch {
-      // Not worth a word to the user: pushes come in English until it works.
-    }
-  }
 }
 
 export const pushStore = new PushStore();

@@ -33,11 +33,10 @@ fn registration() {
             token: "fcm-token-of-the-device".into()
         }
     );
-    assert_eq!(put.locale.as_deref(), Some("ru-RU"));
     assert_eq!(put.relays.len(), 2);
     assert!(!put.relays[1].groups);
-    assert_eq!(put.groups[0].name.as_deref(), Some("Команда"));
-    assert_eq!(put.groups[1].name, None);
+    assert_eq!(put.groups.len(), 2);
+    assert_eq!(put.groups[0], "11".repeat(32));
     assert_eq!(put.author_key.unwrap().len(), 64);
 }
 
@@ -48,7 +47,6 @@ fn the_least_a_registration_may_say() {
     assert_eq!(put.prefs, Prefs { dm: true, groups: true });
     assert!(put.relays.is_empty());
     assert!(put.groups.is_empty());
-    assert_eq!(put.locale, None);
     assert_eq!(put.author_key, None);
 }
 
@@ -88,12 +86,21 @@ fn refusal_with_the_servers_time() {
 
 #[test]
 fn pushes() {
+    // One event, carried whole: the device opens it and needs no relay.
     let dm: Payload = round_trip("push_dm.json");
     assert_eq!(dm.kind, PushType::Dm);
+    assert_eq!(dm.v, vpush_proto::PAYLOAD_VERSION);
     assert!(!dm.is_silent());
+    assert!(dm.fits());
+    let event: Value = serde_json::from_str(dm.event.as_deref().unwrap()).unwrap();
+    assert_eq!(event["kind"], 1059);
+    assert!(dm.event_id.is_none() && dm.relay.is_none(), "one form or the other");
 
+    // Several events: the last of them is named, and taken from the relay.
     let group: Payload = round_trip("push_group.json");
     assert_eq!(group.kind, PushType::Group);
     assert_eq!(group.count, Some(3));
     assert_eq!(group.to_data()["count"], "3");
+    assert!(group.event.is_none());
+    assert!(group.event_id.is_some() && group.relay.is_some());
 }

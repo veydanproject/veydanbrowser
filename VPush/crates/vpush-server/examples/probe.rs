@@ -86,10 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let body = json!({
                 "app_id": std::env::var("VPUSH_PROBE_APP").unwrap_or_else(|_| "net.veydan.mobile".into()),
                 "channel": { "provider": "fcm", "token": token },
-                "locale": std::env::var("VPUSH_PROBE_LOCALE").unwrap_or_else(|_| "ru".into()),
                 "app_version": "probe",
                 "relays": relays,
-                "groups": [{ "id": "11".repeat(32), "name": "Проба" }],
+                "groups": ["11".repeat(32)],
             });
             ("PUT", device, Some(body))
         }

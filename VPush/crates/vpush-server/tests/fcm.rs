@@ -13,7 +13,7 @@ use vpush_proto::{Payload, PushType};
 use vpush_server::delivery::fcm::{FcmClient, ServiceAccount};
 use vpush_server::delivery::retry::{deliver, RetryPolicy};
 use vpush_server::delivery::{Message, Outcome, PushProvider, Target};
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 const SEND: &str = "/v1/projects/veydan-test/messages:send";
@@ -75,12 +75,30 @@ fn target() -> Target {
 
 fn message() -> Message {
     let mut payload = Payload::new(PushType::Test);
-    payload.title = Some("VPush".into());
-    payload.body = Some("Test push".into());
     payload.trace = Some("abcd1234".into());
     Message {
         payload,
+        fallback: None,
         collapse_key: Some("test".into()),
+        ttl: Duration::from_secs(60),
+        urgent: true,
+    }
+}
+
+/// A push about a direct message that carries the event, with the other
+/// form ready for a service that will not take it.
+fn message_with_event() -> Message {
+    let mut payload = Payload::new(PushType::Dm);
+    payload.event = Some(r#"{"id":"e1","kind":1059,"content":"sealed"}"#.into());
+    payload.trace = Some("abcd1234".into());
+    let mut fallback = Payload::new(PushType::Dm);
+    fallback.event_id = Some("e1".into());
+    fallback.relay = Some("wss://node-1.veydan.net".into());
+    fallback.trace = Some("abcd1234".into());
+    Message {
+        payload,
+        fallback: Some(fallback),
+        collapse_key: Some("dm".into()),
         ttl: Duration::from_secs(60),
         urgent: true,
     }
@@ -125,10 +143,7 @@ async fn push_is_delivered_and_is_data_only() {
         body,
         json!({ "message": {
             "token": "device-token",
-            "data": {
-                "v": "1", "type": "test", "title": "VPush",
-                "body": "Test push", "trace": "abcd1234"
-            },
+            "data": { "v": "2", "type": "test", "trace": "abcd1234" },
             "android": { "priority": "HIGH", "ttl": "60s", "collapse_key": "test" }
         }})
     );
@@ -269,6 +284,55 @@ async fn invalid_argument_does_not_kill_the_token() {
     assert_eq!(delivery.outcome, Outcome::Rejected);
     assert_eq!(delivery.attempts.len(), 1, "no point in trying again");
     assert_eq!(delivery.attempts[0].http_status, Some(400));
+}
+
+#[tokio::test]
+async fn a_push_fcm_finds_too_big_is_sent_again_without_the_event() {
+    let server = MockServer::start().await;
+    mount_token(&server).await;
+    Mock::given(method("POST"))
+        .and(path(SEND))
+        .and(body_string_contains(r#""event":"#))
+        .respond_with(fcm_error(400, "INVALID_ARGUMENT", Some("INVALID_ARGUMENT")))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(SEND))
+        .respond_with(sent_ok())
+        .mount(&server)
+        .await;
+
+    let delivery = deliver(&client(&server), &target(), &message_with_event(), fast()).await;
+    assert_eq!(delivery.outcome, Outcome::Delivered, "{delivery:?}");
+    assert_eq!(delivery.attempts.len(), 1, "the second form is a part of the same attempt");
+
+    let sent = requests_to(&server, SEND).await;
+    assert_eq!(sent.len(), 2);
+    let data = |r: &Request| serde_json::from_slice::<Value>(&r.body).unwrap()["message"]["data"].clone();
+    assert!(data(&sent[0]).get("event").is_some());
+    assert_eq!(
+        data(&sent[1]),
+        json!({ "v": "2", "type": "dm", "event_id": "e1",
+                "relay": "wss://node-1.veydan.net", "trace": "abcd1234" })
+    );
+}
+
+#[tokio::test]
+async fn a_push_without_an_event_that_fcm_refuses_is_not_sent_again() {
+    let server = MockServer::start().await;
+    mount_token(&server).await;
+    Mock::given(method("POST"))
+        .and(path(SEND))
+        .respond_with(fcm_error(400, "INVALID_ARGUMENT", Some("INVALID_ARGUMENT")))
+        .mount(&server)
+        .await;
+
+    // The other form is refused too: it is sent once, and that is the end.
+    let mut message = message_with_event();
+    message.payload = message.fallback.take().unwrap();
+    let delivery = deliver(&client(&server), &target(), &message, fast()).await;
+    assert_eq!(delivery.outcome, Outcome::Rejected);
+    assert_eq!(requests_to(&server, SEND).await.len(), 1);
 }
 
 #[tokio::test]

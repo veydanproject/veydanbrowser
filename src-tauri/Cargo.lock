@@ -3749,6 +3749,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "messenger-notify"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "messenger-contacts",
+ "messenger-core",
+ "messenger-dm",
+ "messenger-groups",
+ "messenger-ingress",
+ "messenger-media",
+ "messenger-store",
+ "messenger-transport",
+ "nostr",
+ "nostr-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "messenger-preview"
 version = "0.1.0"
 dependencies = [
@@ -3794,6 +3815,7 @@ dependencies = [
  "messenger-ingress",
  "messenger-links",
  "messenger-media",
+ "messenger-notify",
  "messenger-preview",
  "messenger-push",
  "messenger-store",
@@ -6985,6 +7007,7 @@ dependencies = [
 name = "tauri-plugin-veydan-push"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "tauri",
@@ -7929,6 +7952,7 @@ dependencies = [
  "ksni",
  "lz4_flex",
  "messenger-core",
+ "messenger-notify",
  "messenger-runtime",
  "notify",
  "percent-encoding",
