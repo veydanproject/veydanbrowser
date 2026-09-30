@@ -11,11 +11,17 @@
   let editingServer = $state(false);
   let serverDraft = $state('');
 
-  onMount(() => { pushStore.load(); pushStore.loadNotify(); });
+  onMount(async () => {
+    await pushStore.load();
+    pushStore.loadNotify();
+    // A computer: no push, the app shows notifications itself.
+    if (pushStore.view && !pushStore.view.device.supported) pushStore.loadDesk();
+  });
 
   const view = $derived(pushStore.view);
   const status = $derived(view?.status ?? null);
   const device = $derived(view?.device ?? null);
+  const desktop = $derived(Boolean(device && !device.supported));
 
   const reasonText: Record<string, string> = {
     no_firebase_config: 'msg_push_reason_no_config',
@@ -47,13 +53,103 @@
   }
 </script>
 
+{#snippet contentChoices(phone: boolean)}
+  {#if pushStore.notify}
+    {@const n = pushStore.notify}
+    <div class="block">
+      <span class="label">{$t('msg_notify_title')}</span>
+      {#if n.locked}
+        <p class="muted small">{$t('msg_notify_locked')}</p>
+      {:else}
+        <p class="muted small">{$t(phone ? 'msg_notify_text' : 'msg_dnotify_content_text')}</p>
+      {/if}
+      <div class="choices" role="radiogroup" aria-label={$t('msg_notify_title')}>
+        {#each ['sender_text', 'sender', 'none'] as const as choice (choice)}
+          <button
+            class="choice"
+            class:on={n.content === choice}
+            role="radio"
+            aria-checked={n.content === choice}
+            disabled={pushStore.busy || n.locked}
+            onclick={() => pushStore.setNotify(choice, n.lockscreen_hidden)}
+          >{$t(`msg_notify_${choice}` as 'msg_notify_sender_text')}</button>
+        {/each}
+      </div>
+      {#if phone}
+        <div class="line">
+          <span>{$t('msg_notify_lockscreen')}</span>
+          <button
+            class="toggle"
+            class:on={n.lockscreen_hidden}
+            disabled={pushStore.busy || n.locked}
+            onclick={() => pushStore.setNotify(n.content, !n.lockscreen_hidden)}
+            aria-pressed={n.lockscreen_hidden}
+            aria-label={$t('msg_notify_lockscreen')}
+          ></button>
+        </div>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 <div class="card push">
-  <div class="card-title"><Icon name="bell" size={16} /> {$t('msg_push_title')}</div>
+  <div class="card-title"><Icon name="bell" size={16} /> {desktop ? $t('msg_dnotify_title') : $t('msg_push_title')}</div>
 
   {#if !view || !status || !device}
     <p class="muted">{pushStore.error || $t('msg_push_loading')}</p>
   {:else if !device.supported}
-    <p class="muted">{$t('msg_push_desktop')}</p>
+    {@const d = pushStore.desk}
+    <p class="muted">{$t('msg_dnotify_text')}</p>
+    {#if !d}
+      <p class="muted">{pushStore.error || $t('msg_push_loading')}</p>
+    {:else}
+      <div class="line">
+        <span>{$t('msg_dnotify_toggle')}</span>
+        <button
+          class="toggle"
+          class:on={d.enabled}
+          disabled={pushStore.busy}
+          onclick={() => pushStore.setDesk(!d.enabled, d.sound)}
+          aria-pressed={d.enabled}
+          aria-label={$t('msg_dnotify_toggle')}
+        ></button>
+      </div>
+      {#if d.enabled}
+        {#if !d.available}<p class="warn">{$t('msg_dnotify_unavailable')}</p>{/if}
+        <div class="line">
+          <span>{$t('msg_dnotify_sound')}</span>
+          <button
+            class="toggle"
+            class:on={d.sound}
+            disabled={pushStore.busy}
+            onclick={() => pushStore.setDesk(d.enabled, !d.sound)}
+            aria-pressed={d.sound}
+            aria-label={$t('msg_dnotify_sound')}
+          ></button>
+        </div>
+        {@render contentChoices(false)}
+        {#if !d.close_to_tray}
+          <div class="block">
+            <p class="warn">{$t('msg_dnotify_closing')}</p>
+            <div class="actions">
+              <button class="btn btn-ghost btn-sm" disabled={pushStore.busy} onclick={() => pushStore.keepRunning()}>
+                {$t('msg_dnotify_keep')}
+              </button>
+            </div>
+          </div>
+        {/if}
+        <div class="actions">
+          <button
+            class="btn btn-ghost btn-sm"
+            disabled={pushStore.busy || !d.available}
+            onclick={() => pushStore.testDesk('Veydan Space', $t('msg_dnotify_test_body'))}
+          >
+            {$t('msg_dnotify_test')}
+          </button>
+        </div>
+      {/if}
+    {/if}
+    {#if pushStore.error}<p class="warn">{errorText(pushStore.error)}</p>{/if}
   {:else}
     <p class="muted">{$t('msg_push_text')}</p>
     <p class="muted small">{$t('msg_push_privacy')}</p>
@@ -114,40 +210,7 @@
           ></button>
         </div>
 
-        {#if pushStore.notify}
-          {@const n = pushStore.notify}
-          <div class="block">
-            <span class="label">{$t('msg_notify_title')}</span>
-            {#if n.locked}
-              <p class="muted small">{$t('msg_notify_locked')}</p>
-            {:else}
-              <p class="muted small">{$t('msg_notify_text')}</p>
-            {/if}
-            <div class="choices" role="radiogroup" aria-label={$t('msg_notify_title')}>
-              {#each ['sender_text', 'sender', 'none'] as const as choice (choice)}
-                <button
-                  class="choice"
-                  class:on={n.content === choice}
-                  role="radio"
-                  aria-checked={n.content === choice}
-                  disabled={pushStore.busy || n.locked}
-                  onclick={() => pushStore.setNotify(choice, n.lockscreen_hidden)}
-                >{$t(`msg_notify_${choice}` as 'msg_notify_sender_text')}</button>
-              {/each}
-            </div>
-            <div class="line">
-              <span>{$t('msg_notify_lockscreen')}</span>
-              <button
-                class="toggle"
-                class:on={n.lockscreen_hidden}
-                disabled={pushStore.busy || n.locked}
-                onclick={() => pushStore.setNotify(n.content, !n.lockscreen_hidden)}
-                aria-pressed={n.lockscreen_hidden}
-                aria-label={$t('msg_notify_lockscreen')}
-              ></button>
-            </div>
-          </div>
-        {/if}
+        {@render contentChoices(true)}
 
         {#if status.state === 'registered'}
           <div class="block">

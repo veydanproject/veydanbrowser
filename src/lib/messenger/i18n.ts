@@ -368,8 +368,6 @@ export const messengerTranslations = {
     msg_settings_tab_notifications: 'Notifications',
     msg_push_title: 'Push notifications',
     msg_push_loading: 'Checking…',
-    msg_push_desktop:
-      'Push notifications are for the phone. On a computer the messenger receives messages while it is open.',
     msg_push_text:
       'The phone tells you about a new message even when the app is closed.',
     msg_push_privacy:
@@ -410,6 +408,16 @@ export const messengerTranslations = {
     msg_notice_request: 'Message request',
     msg_notice_new_many: '{n} new messages',
     msg_notice_more: '+{n} more',
+    msg_dnotify_title: 'Notifications on this computer',
+    msg_dnotify_text: 'While Veydan Space runs, a new message comes as a notification of the system when its window is not in front; when it is, as a card in the window. Muted chats stay silent.',
+    msg_dnotify_toggle: 'Show notifications',
+    msg_dnotify_sound: 'Sound',
+    msg_dnotify_content_text: 'Whoever looks at the screen sees what a notification shows. With a PIN on the app, a notification says only that something came.',
+    msg_dnotify_unavailable: 'The system does not show notifications now. Check that they are allowed for Veydan Space in the settings of the system.',
+    msg_dnotify_closing: 'Closing the window quits the app, and notifications stop coming.',
+    msg_dnotify_keep: 'Close to the tray',
+    msg_dnotify_test: 'Test notification',
+    msg_dnotify_test_body: 'Notifications work.',
     msg_push_relays_title: 'Relays the server watches for you',
     msg_push_relays_none: 'No relay is watched. Messages will not bring a push.',
     msg_push_relay_ok: 'watched',
@@ -939,8 +947,6 @@ export const messengerTranslations = {
     msg_settings_tab_notifications: 'Уведомления',
     msg_push_title: 'Пуш-уведомления',
     msg_push_loading: 'Проверяем…',
-    msg_push_desktop:
-      'Пуш-уведомления нужны на телефоне. На компьютере мессенджер получает сообщения, пока открыт.',
     msg_push_text:
       'Телефон сообщит о новом сообщении, даже когда приложение закрыто.',
     msg_push_privacy:
@@ -981,6 +987,16 @@ export const messengerTranslations = {
     msg_notice_request: 'Запрос на переписку',
     msg_notice_new_many: 'Новых сообщений: {n}',
     msg_notice_more: 'и ещё {n}',
+    msg_dnotify_title: 'Уведомления на этом компьютере',
+    msg_dnotify_text: 'Пока Veydan Space запущен, новое сообщение приходит системным уведомлением, если окно не на переднем плане, и карточкой в окне, если на переднем. Заглушённые чаты молчат.',
+    msg_dnotify_toggle: 'Показывать уведомления',
+    msg_dnotify_sound: 'Звук',
+    msg_dnotify_content_text: 'Что показывает уведомление, видит любой, кто смотрит на экран. С PIN-кодом на приложении уведомление говорит только, что что-то пришло.',
+    msg_dnotify_unavailable: 'Система сейчас не показывает уведомления. Проверьте, что они разрешены для Veydan Space в настройках системы.',
+    msg_dnotify_closing: 'Если закрыть окно, приложение завершится и уведомления перестанут приходить.',
+    msg_dnotify_keep: 'Закрывать в трей',
+    msg_dnotify_test: 'Проверить уведомление',
+    msg_dnotify_test_body: 'Уведомления работают.',
     msg_push_relays_title: 'Реле, за которыми сервер следит для вас',
     msg_push_relays_none: 'Сервер не следит ни за одним реле. Сообщения не вызовут пуш.',
     msg_push_relay_ok: 'следит',

@@ -8,6 +8,7 @@ import {
   messengerApi,
   messengerError,
   pushErrorCode,
+  type MessengerDesktopNotify,
   type MessengerNotifySettings,
   type MessengerPushTest,
   type MessengerPushView,
@@ -80,6 +81,25 @@ class PushStore {
       this.busy = false;
     }
   };
+
+  /** A computer's own notifications (no push: the app shows them while it runs). */
+  desk = $state<MessengerDesktopNotify | null>(null);
+  private async deskRun(action: () => Promise<MessengerDesktopNotify | void>) {
+    this.error = '';
+    this.busy = true;
+    try {
+      const v = await action();
+      if (v) this.desk = v;
+    } catch (e) {
+      this.error = messengerError(e);
+    } finally {
+      this.busy = false;
+    }
+  }
+  loadDesk = () => this.deskRun(() => messengerApi.desktopNotify.get());
+  setDesk = (enabled: boolean, sound: boolean) => this.deskRun(() => messengerApi.desktopNotify.set(enabled, sound));
+  keepRunning = () => this.deskRun(() => messengerApi.desktopNotify.keepRunning());
+  testDesk = (title: string, body: string) => this.deskRun(() => messengerApi.desktopNotify.test(title, body));
 
   /** "Not now": the question is not asked again. */
   decline = () =>

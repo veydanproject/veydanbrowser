@@ -413,6 +413,20 @@ pub async fn messenger_desktop_notify_test(
     Ok(())
 }
 
+/// Closing the window keeps the app running, in the tray: the one thing a
+/// computer needs for notifications to come after the window is closed.
+#[tauri::command]
+pub async fn messenger_desktop_notify_keep_running(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> CmdResult<DesktopNotifyView> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let tray = &state.tray_settings;
+    let (minimize, hidden) = (tray.minimize_to_tray.load(Relaxed), tray.start_hidden.load(Relaxed));
+    crate::commands::settings::tray_settings_set(minimize, true, hidden, app, state.clone()).await?;
+    messenger_desktop_notify_get(state).await
+}
+
 /// The page's words for notifications, in the user's language.
 #[tauri::command]
 pub fn messenger_notice_words(words: Words, state: tauri::State<'_, AppState>) -> CmdResult<()> {

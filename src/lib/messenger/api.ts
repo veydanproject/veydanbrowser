@@ -549,8 +549,10 @@ let mockRelays: MessengerRelay[] = [
 ];
 let mockNotify: MessengerNotifySettings = { content: 'sender_text', lockscreen_hidden: false, locked: false };
 let mockDesktopNotify: MessengerDesktopNotify = { enabled: true, sound: true, available: true, close_to_tray: false };
+// `messenger.demo.desk=1`: the demo is a computer (no push, notifications of its own).
+const mockDesk = typeof localStorage !== 'undefined' && localStorage.getItem('messenger.demo.desk') === '1';
 let mockPush: MessengerPushView = {
-  device: { supported: true, available: true, reason: null, detail: null, permission: 'prompt' },
+  device: { supported: !mockDesk, available: !mockDesk, reason: null, detail: null, permission: 'prompt' },
   status: {
     enabled: false, offered: false, server: 'https://vpush.veydan.net', server_custom: false,
     dm: true, groups: true, state: 'off', last_ok_at: null, expires_at: null, error: null, relays: [],
@@ -917,6 +919,7 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_desktop_notify_set: (a) => { mockDesktopNotify = { ...mockDesktopNotify, enabled: Boolean(a?.enabled), sound: Boolean(a?.sound) }; return mockDesktopNotify; },
   messenger_desktop_notify_test: () => undefined,
   messenger_notice_words: () => undefined,
+  messenger_desktop_notify_keep_running: () => { mockDesktopNotify = { ...mockDesktopNotify, close_to_tray: true }; return mockDesktopNotify; },
   messenger_notify_set: (a) => { mockNotify = { ...mockNotify, content: a?.content as MessengerNotifySettings['content'], lockscreen_hidden: Boolean(a?.lockscreenHidden) }; return mockNotify; },
 };
 
@@ -1001,6 +1004,8 @@ export const messengerApi = {
     set: (enabled: boolean, sound: boolean) => invoke<MessengerDesktopNotify>('messenger_desktop_notify_set', { enabled, sound }),
     test: (title: string, body: string) => invoke<void>('messenger_desktop_notify_test', { title, body }),
     words: (words: MessengerNoticeWords) => invoke<void>('messenger_notice_words', { words }),
+    /** Closing the window keeps the app in the tray, so notifications keep coming. */
+    keepRunning: () => invoke<MessengerDesktopNotify>('messenger_desktop_notify_keep_running'),
   },
 
   relays: {
