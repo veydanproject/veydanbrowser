@@ -613,6 +613,7 @@ async fn a_token_fcm_does_not_know_is_refused_and_counted() {
         serde_json::json!({
             "refused_rate_owner": 0, "refused_rate_ip": 0, "refused_devices_total": 0,
             "tokens_invalid": 0, "sync_pushes": 0, "lines_started_over": 0,
+            "group_events_unmarked": 0,
         })
     );
 

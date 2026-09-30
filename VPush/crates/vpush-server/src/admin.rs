@@ -107,7 +107,8 @@ impl Request {
 }
 
 /// A device as `vpush ctl devices` shows it: everything but the token,
-/// which is shown as its mark.
+/// which is shown as its mark, and the push keys of its groups, of which
+/// only their number is shown.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceLine {
     pub device_id: String,
@@ -148,11 +149,21 @@ impl From<Device> for DeviceLine {
                 })
                 .collect(),
             // The first characters of an id are enough to tell groups apart
-            // in a listing; the whole one is in the database.
+            // in a listing; the whole one is in the database. How many push
+            // keys the device registered for the group says whether it is
+            // pushed to about it: with none, registered before 0.3.0, it
+            // is not.
             watched_groups: d
                 .groups
                 .iter()
-                .map(|id| id[..id.len().min(12)].to_string())
+                .map(|group| {
+                    let keys = match group.keys.len() {
+                        0 => "no key".to_string(),
+                        1 => "1 key".to_string(),
+                        n => format!("{n} keys"),
+                    };
+                    format!("{} ({keys})", &group.id[..group.id.len().min(12)])
+                })
                 .collect(),
             device_id: d.device_id,
             app_id: d.app_id,
@@ -413,9 +424,46 @@ mod tests {
                     "refused_rate_owner": 0, "refused_rate_ip": 0,
                     "refused_devices_total": 0, "tokens_invalid": 0,
                     "sync_pushes": 0, "lines_started_over": 1,
+                    "group_events_unmarked": 0,
                 },
             })
         );
+    }
+
+    #[test]
+    fn a_device_is_shown_without_its_token_and_without_the_push_keys_of_its_groups() {
+        let group = |id: &str, keys: &[&str]| crate::store::WatchedGroup {
+            id: id.repeat(32),
+            keys: keys.iter().map(|key| key.repeat(32)).collect(),
+        };
+        let device = Device {
+            pubkey: "aa".repeat(32),
+            device_id: "phone-0001".into(),
+            app_id: "net.veydan.mobile".into(),
+            provider: "fcm".into(),
+            token: "token-of-the-phone".into(),
+            app_version: None,
+            prefs: vpush_proto::Prefs::default(),
+            author_key: Some("ab".repeat(32)),
+            state: "active".into(),
+            created_at: 1000,
+            updated_at: 1000,
+            expires_at: 2000,
+            last_push_at: None,
+            last_outcome: None,
+            token_checked_at: None,
+            relays: vec![],
+            groups: vec![group("11", &["c1", "c0"]), group("22", &["c1"]), group("33", &[])],
+        };
+        let line = DeviceLine::from(device);
+        assert_eq!(
+            line.watched_groups,
+            ["111111111111 (2 keys)", "222222222222 (1 key)", "333333333333 (no key)"]
+        );
+        let shown = serde_json::to_string(&line).unwrap();
+        for secret in ["token-of-the-phone", "c1c1", "c0c0", "abab"] {
+            assert!(!shown.contains(secret), "{secret}: {shown}");
+        }
     }
 
     #[test]

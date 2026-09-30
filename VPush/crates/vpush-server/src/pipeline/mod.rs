@@ -6,6 +6,11 @@
 //! moment ago, or too often. Everything that needs the content is the device's to decide:
 //! the push carries the event itself, and the device opens it.
 //!
+//! A group event is for nobody unless a holder of the key of the group
+//! marked it. The id of a group is on every event of the group, in the
+//! open, and anybody can sign an event that names it; without the mark a
+//! stranger would wake every member, and have their events carried to them.
+//!
 //! Every event gets a `trace`. It is in every log line about the event and
 //! in the pushes it caused, so one search shows the whole way from the relay
 //! to the phone.
@@ -40,6 +45,11 @@ pub const SEEN_FOR: u64 = 3 * 86_400;
 /// How far ahead of the server's clock an event may be dated: clocks differ
 /// by minutes, not by more.
 const AHEAD: u64 = 15 * 60;
+/// How many push keys of a group one event is held against. A group has one
+/// key, or two for a week after a change; more than that is what devices
+/// that slept through several changes still hold, and what strangers made
+/// up. Each costs a hash, and anybody can send an event.
+const GROUP_KEYS: usize = 64;
 
 /// What became of an event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +62,9 @@ pub enum Dealt {
     Quiet,
     /// For nobody who is registered.
     Nobody,
+    /// Of a group, and without a mark of a push key registered for it: not
+    /// from a member, as far as the server can tell.
+    Unmarked,
     /// Dealt with before: from another relay, or before a reconnect.
     Duplicate,
     /// Dated further from now than an event that was just written can be.
@@ -243,7 +256,18 @@ impl Pipeline {
                 }
                 all
             }
-            Subject::Group { id } => self.store.group_recipients(id, at).await?,
+            Subject::Group { id: group } => match self.members(trace, group, event, at).await? {
+                Some(members) => members,
+                None => {
+                    // Noted, like an event marked as not worth a push: a
+                    // relay gives it again with every asking, and it is
+                    // counted once.
+                    if self.store.first_seen(&id, Seen::Unmarked, at).await? {
+                        self.counters.group_events_unmarked.add();
+                    }
+                    return Ok(Dealt::Unmarked);
+                }
+            },
         };
         if recipients.is_empty() {
             self.store.first_seen(&id, Seen::Nobody, at).await?;
@@ -289,6 +313,46 @@ impl Pipeline {
             }
         }
         Ok(Dealt::Pushed { now: pushed, later, own, over })
+    }
+
+    /// The devices to tell about an event of a group: those that registered
+    /// a push key whose mark the event carries. A device of the group that
+    /// holds no such key is not among them.
+    ///
+    /// `None`: the event carries no mark of a key registered for the group.
+    /// That costs one reading of the keys of the group, and nothing when
+    /// the event carries no mark at all.
+    async fn members(
+        &self,
+        trace: &str,
+        group: &str,
+        event: &Event,
+        at: u64,
+    ) -> crate::store::Result<Option<Vec<Recipient>>> {
+        let marks = classify::group_marks(event);
+        if marks.is_empty() {
+            return Ok(None);
+        }
+        let mut keys = self.store.group_keys(group, at, GROUP_KEYS + 1).await?;
+        if keys.is_empty() {
+            // Nobody registered a key for the group: there is nothing to
+            // hold the mark against, and nobody to tell.
+            return Ok(Some(Vec::new()));
+        }
+        if keys.len() > GROUP_KEYS {
+            keys.truncate(GROUP_KEYS);
+            tracing::warn!(
+                trace,
+                group,
+                tried = GROUP_KEYS,
+                "a group has more push keys than an event is held against; the ones the fewest devices hold are left out"
+            );
+        }
+        let keys = classify::marking(event, &marks, keys);
+        if keys.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(self.store.group_recipients(group, &keys, at).await?))
     }
 
     /// Comes back when the window ends and pushes once for what was counted.

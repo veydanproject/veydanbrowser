@@ -10,6 +10,9 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=VPUSH_GIT_SHA");
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    // The migrations are compiled into the binary: a new file there is a
+    // reason to build again, and cargo does not see it by itself.
+    println!("cargo:rerun-if-changed=migrations");
 
     let sha = std::env::var("VPUSH_GIT_SHA")
         .ok()

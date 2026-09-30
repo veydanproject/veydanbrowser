@@ -88,7 +88,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "channel": { "provider": "fcm", "token": token },
                 "app_version": "probe",
                 "relays": relays,
-                "groups": ["11".repeat(32)],
+                // A group nobody writes to, with a push key nobody holds:
+                // enough to see that the registration is taken.
+                "groups": [{ "id": "11".repeat(32), "keys": ["22".repeat(32)] }],
             });
             ("PUT", device, Some(body))
         }

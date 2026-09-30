@@ -45,6 +45,9 @@ pub struct Counters {
     /// Times a relay's line had more to deal with than it has room for,
     /// and started over.
     pub lines_started_over: Counter,
+    /// Events of watched groups that carried no mark of a push key
+    /// registered for the group: not from a member, and pushed to nobody.
+    pub group_events_unmarked: Counter,
 }
 
 #[cfg(test)]
@@ -66,6 +69,7 @@ mod tests {
                 "tokens_invalid": 2,
                 "sync_pushes": 1,
                 "lines_started_over": 0,
+                "group_events_unmarked": 0,
             })
         );
     }

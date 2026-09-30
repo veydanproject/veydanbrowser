@@ -9,7 +9,7 @@
 
 use messenger_push::client::PushError;
 use messenger_push::{
-    Channel, DeviceAnswer, DevicePut, Info, Prefs, RelayStatus, RelayWatch, VpushClient,
+    Channel, DeviceAnswer, DevicePut, GroupWatch, Info, Prefs, RelayStatus, RelayWatch, VpushClient,
 };
 use nostr::key::Keys;
 use serde_json::{json, Value};
@@ -32,7 +32,13 @@ fn registration() -> DevicePut {
             RelayWatch { url: "wss://node-1.veydan.net".into(), dm: true, groups: true },
             RelayWatch { url: "wss://relay.example.org".into(), dm: true, groups: false },
         ],
-        groups: vec!["11".repeat(32), "22".repeat(32)],
+        groups: vec![
+            GroupWatch {
+                id: "11".repeat(32),
+                keys: vec!["c960ddf616adb9a57ac7d0eb04da5e25cf3d139c95d5828addb8f1f0ed50da28".into()],
+            },
+            GroupWatch { id: "22".repeat(32), keys: vec!["aa".repeat(32), "bb".repeat(32)] },
+        ],
     }
 }
 

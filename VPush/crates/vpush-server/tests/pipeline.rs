@@ -25,8 +25,10 @@ use vpush_server::delivery::Providers;
 use vpush_server::pipeline::classify::mark_of;
 use vpush_server::pipeline::{Dealt, Pipeline, Waking};
 use vpush_server::relays::{normalize, RelayPolicy};
+use vpush_server::auth::sha256_hex;
 use vpush_server::store::{
-    AllStore, DeviceInput, DeviceLimits, Seen, SqliteStore, Store, WatchStore, WatchedRelay,
+    AllStore, DeviceInput, DeviceLimits, Seen, SqliteStore, Store, WatchStore, WatchedGroup,
+    WatchedRelay,
 };
 use vpush_server::relay::{Tuning, Watch};
 use wiremock::matchers::{method, path};
@@ -328,7 +330,7 @@ fn phone(owner: &Keys, device: &str, relays: &[&Relay]) -> DeviceInput {
             .iter()
             .map(|r| WatchedRelay { url: r.url.clone(), dm: true, groups: true })
             .collect(),
-        groups: vec![GROUP.to_string()],
+        groups: vec![member_of(GROUP)],
         now: Timestamp::now().as_secs(),
         expires_at: Timestamp::now().as_secs() + 86_400,
         token_checked_at: None,
@@ -351,6 +353,26 @@ where
 /// belong to the owner will do.
 fn author_key(owner: &Keys) -> String {
     owner.public_key().to_hex().chars().rev().collect()
+}
+
+/// The push key of a group, as the messenger makes it from the key of the
+/// group. Here any 32 bytes the members of the group share will do.
+fn push_key(group: &str) -> String {
+    sha256_hex(format!("the key of {group}").as_bytes())
+}
+
+/// The push key of the key the group had before its key was changed.
+fn push_key_before(group: &str) -> String {
+    sha256_hex(format!("the key of {group} before it was changed").as_bytes())
+}
+
+/// What a member of a group registers: the group, and the push keys held.
+fn with_keys(group: &str, keys: &[String]) -> WatchedGroup {
+    WatchedGroup { id: group.to_string(), keys: keys.to_vec() }
+}
+
+fn member_of(group: &str) -> WatchedGroup {
+    with_keys(group, &[push_key(group)])
 }
 
 /// A sealed direct message, as a relay sees it: signed by a key made for
@@ -384,15 +406,27 @@ fn group_event(author: &Keys, tags: &[&[&str]]) -> Event {
     event_of(GROUP, author, tags)
 }
 
-/// An event of the group `group`, written by `author`.
+/// An event of the group `group`, written by `author`, a member: it carries
+/// the mark of the group's push key.
 fn event_of(group: &str, author: &Keys, tags: &[&[&str]]) -> Event {
+    marked(group, author, &[push_key(group)], tags)
+}
+
+/// An event of the group `group`, written by `author`, with the marks of
+/// these push keys on it: what a holder of each of them would have put.
+fn marked(group: &str, author: &Keys, push_keys: &[String], tags: &[&[&str]]) -> Event {
     let signer = Keys::generate();
-    let mark = mark_of(&author_key(author), &signer.public_key().to_hex()).unwrap();
+    let signed_by = signer.public_key().to_hex();
+    let mark = mark_of(&author_key(author), &signed_by).unwrap();
     let mut all = vec![
         Tag::parse(["h", group]).unwrap(),
         Tag::parse(["k", "key-1"]).unwrap(),
         Tag::parse(["vp", mark.as_str()]).unwrap(),
     ];
+    for key in push_keys {
+        let mark = mark_of(key, &signed_by).unwrap();
+        all.push(Tag::parse(["gp", mark.as_str()]).unwrap());
+    }
     all.extend(tags.iter().map(|t| Tag::parse(t.iter().copied()).unwrap()));
     EventBuilder::new(Kind::from(9u16), "sealed").tags(all).finalize(&signer).unwrap()
 }
@@ -525,6 +559,9 @@ async fn every_device_of_the_owner_is_told() {
     assert_eq!(tokens, ["token-of-phone", "token-of-tablet"]);
 }
 
+/// The event carries both marks: the one of the group (`gp`), by which bob
+/// and carol are told, and the one of the author (`vp`), by which alice,
+/// who holds the key of the group as they do, is not.
 #[tokio::test]
 async fn a_group_message_is_told_to_everybody_but_its_author() {
     let r = relay().await;
@@ -556,6 +593,231 @@ async fn a_group_message_is_told_to_everybody_but_its_author() {
         assert_eq!(carried(data), serde_json::to_value(&message).unwrap());
         assert!(data.get("title").is_none() && data.get("group_name").is_none(), "{data}");
     }
+}
+
+/// The tokens the pushes went to, sorted.
+fn tokens(pushes: &[Value]) -> Vec<&str> {
+    let mut tokens: Vec<_> = pushes.iter().map(|p| p["token"].as_str().unwrap()).collect();
+    tokens.sort();
+    tokens
+}
+
+/// The id of a group is on every one of its events, in the open: anybody
+/// can sign an event that names it. Without the mark of the group such an
+/// event wakes nobody, and is carried to nobody.
+#[tokio::test]
+async fn a_group_event_without_the_mark_of_the_group_is_told_to_nobody_and_counted() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let (bob, stranger) = (Keys::generate(), Keys::generate());
+    server.register(&bob, "bob-phone", &[&r]).await;
+    server.watching(&bob, &[&r]).await;
+
+    // No mark at all, as an app older than the mark writes and as whoever
+    // knows nothing of it does; and the mark of a key the stranger made up.
+    let bare = marked(GROUP, &stranger, &[], &[]);
+    let forged = marked(GROUP, &stranger, &[push_key("a guess")], &[]);
+    r.publish(&bare).await;
+    r.publish(&forged).await;
+    eventually("both are counted", || async { server.counters.group_events_unmarked.get() >= 2 }).await;
+    server.pushes_are(0).await;
+
+    // They are noted, and not counted a second time when a relay gives
+    // them again.
+    let pipeline = server.pipeline();
+    let now = Timestamp::now().as_secs();
+    for event in [&bare, &forged] {
+        assert!(!server.store.first_seen(&event.id.to_hex(), Seen::Pushed, now).await.unwrap());
+        assert_eq!(pipeline.event(&r.url, event, false).await, Dealt::Unmarked);
+    }
+    assert_eq!(server.counters.group_events_unmarked.get(), 2);
+
+    // A member writes, and bob is told.
+    let message = event_of(GROUP, &Keys::generate(), &[]);
+    r.publish(&message).await;
+    let pushes = server.pushes_are(1).await;
+    assert_eq!(pushes[0]["token"], "token-of-bob-phone");
+    assert_eq!(carried(&pushes[0]["data"]), serde_json::to_value(&message).unwrap());
+    assert_eq!(server.counters.group_events_unmarked.get(), 2);
+}
+
+/// What stands in a `gp` tag and is no mark is passed over, and no more
+/// than the first four tags are read.
+#[tokio::test]
+async fn what_is_no_mark_is_passed_over_and_the_fifth_tag_is_not_read() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let bob = Keys::generate();
+    server.register(&bob, "bob-phone", &[&r]).await;
+    let pipeline = server.pipeline();
+
+    // An event of the group with the `gp` tags `tags` makes of the mark of
+    // the group.
+    let with = |tags: fn(String) -> Vec<String>| {
+        let signer = Keys::generate();
+        let mark = mark_of(&push_key(GROUP), &signer.public_key().to_hex()).unwrap();
+        let mut all = vec![Tag::parse(["h", GROUP]).unwrap()];
+        all.extend(tags(mark).iter().map(|value| Tag::parse(["gp", value.as_str()]).unwrap()));
+        EventBuilder::new(Kind::from(9u16), "sealed").tags(all).finalize(&signer).unwrap()
+    };
+    fn no() -> String {
+        "not-a-mark".to_string()
+    }
+    let told = Dealt::Pushed { now: 1, later: 0, own: 0, over: 0 };
+
+    let shouted = with(|mark| vec![mark.to_uppercase()]);
+    assert_eq!(pipeline.event(&r.url, &shouted, false).await, Dealt::Unmarked);
+    let cut = with(|mark| vec![mark[..15].to_string()]);
+    assert_eq!(pipeline.event(&r.url, &cut, false).await, Dealt::Unmarked);
+    let fifth = with(|mark| vec![no(), no(), no(), no(), mark]);
+    assert_eq!(pipeline.event(&r.url, &fifth, false).await, Dealt::Unmarked);
+    assert_eq!(server.counters.group_events_unmarked.get(), 3);
+    server.pushes_are(0).await;
+
+    let fourth = with(|mark| vec![no(), no(), no(), mark]);
+    assert_eq!(pipeline.event(&r.url, &fourth, false).await, told);
+    server.pushes_are(1).await;
+}
+
+/// The key of a group was changed. For a week its events carry two marks:
+/// of the key of now, and of the one before, for the phones that slept
+/// through the change.
+#[tokio::test]
+async fn after_a_change_of_the_key_an_event_is_told_by_the_marks_it_carries() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let (awake, asleep) = (Keys::generate(), Keys::generate());
+    let (now, before) = (push_key(GROUP), push_key_before(GROUP));
+
+    // One phone registered after the change, with both keys. The other
+    // has not been opened since, and the server has the key before only.
+    let mut input = phone(&awake, "awake-phone", &[&r]);
+    input.groups = vec![with_keys(GROUP, &[now.clone(), before.clone()])];
+    server.put(input).await;
+    let mut input = phone(&asleep, "asleep-phone", &[&r]);
+    input.groups = vec![with_keys(GROUP, std::slice::from_ref(&before))];
+    server.put(input).await;
+    for owner in [&awake, &asleep] {
+        server.watching(owner, &[&r]).await;
+    }
+
+    // Within the week: both marks, and both phones are told, each once.
+    let both = marked(GROUP, &Keys::generate(), &[now.clone(), before], &[]);
+    r.publish(&both).await;
+    let pushes = server.pushes_are(2).await;
+    assert_eq!(tokens(&pushes), ["token-of-asleep-phone", "token-of-awake-phone"]);
+
+    // After it: the mark of the key of now only. The phone that never
+    // registered that key is not told.
+    let new_only = marked(GROUP, &Keys::generate(), &[now], &[]);
+    r.publish(&new_only).await;
+    let pushes = server.pushes_are(3).await;
+    assert_eq!(pushes[2]["token"], "token-of-awake-phone");
+    assert_eq!(carried(&pushes[2]["data"])["id"], new_only.id.to_hex());
+    assert_eq!(server.counters.group_events_unmarked.get(), 0, "both events came from members");
+}
+
+/// Whoever knows the id of a group can register for it. Without the key of
+/// the group they register a key of their own making, and are told nothing.
+#[tokio::test]
+async fn a_device_that_registered_a_wrong_key_for_a_group_is_told_nothing_of_it() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let (bob, mallory) = (Keys::generate(), Keys::generate());
+    server.register(&bob, "bob-phone", &[&r]).await;
+    let made_up = push_key("a guess");
+    let mut input = phone(&mallory, "mallory-phone", &[&r]);
+    input.groups = vec![with_keys(GROUP, std::slice::from_ref(&made_up))];
+    server.put(input).await;
+    for owner in [&bob, &mallory] {
+        server.watching(owner, &[&r]).await;
+    }
+
+    let message = event_of(GROUP, &Keys::generate(), &[]);
+    r.publish(&message).await;
+    let pushes = server.pushes_are(1).await;
+    assert_eq!(pushes[0]["token"], "token-of-bob-phone");
+
+    // And what somebody marks with the made-up key reaches the one who
+    // made it up, and no member.
+    r.publish(&marked(GROUP, &Keys::generate(), std::slice::from_ref(&made_up), &[])).await;
+    let pushes = server.pushes_are(2).await;
+    assert_eq!(pushes[1]["token"], "token-of-mallory-phone");
+}
+
+/// A device registered by 0.2.2 has its groups and no key of any: it waits
+/// for the app to register anew.
+#[tokio::test]
+async fn a_group_nobody_registered_a_key_for_is_for_nobody() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    let bob = Keys::generate();
+    let mut input = phone(&bob, "bob-phone", &[&r]);
+    input.groups = vec![with_keys(GROUP, &[])];
+    server.put(input).await;
+    let pipeline = server.pipeline();
+
+    let message = event_of(GROUP, &Keys::generate(), &[]);
+    assert_eq!(pipeline.event(&r.url, &message, false).await, Dealt::Nobody);
+    assert_eq!(
+        server.counters.group_events_unmarked.get(),
+        0,
+        "there is no key to hold the mark against: the event is not called a stranger's"
+    );
+    // Direct messages are pushed to such a device as before.
+    let dealt = pipeline.event(&r.url, &wrap(&bob, &[]), false).await;
+    assert_eq!(dealt, Dealt::Pushed { now: 1, later: 0, own: 0, over: 0 });
+    let pushes = server.pushes_are(1).await;
+    assert_eq!(pushes[0]["data"]["type"], "dm");
+
+    // The app registers anew, with the key, and is told of the group again.
+    server.register(&bob, "bob-phone", &[&r]).await;
+    let next = event_of(GROUP, &Keys::generate(), &[]);
+    assert_eq!(
+        pipeline.event(&r.url, &next, false).await,
+        Dealt::Pushed { now: 1, later: 0, own: 0, over: 0 }
+    );
+    server.pushes_are(2).await;
+}
+
+/// Anybody can register keys of their own making for a group they know
+/// the id of. An event is held against sixty-four keys and no more, and
+/// the key the members hold must not be the one that is left out.
+#[tokio::test]
+async fn keys_made_up_for_a_group_do_not_crowd_out_the_key_of_its_members() {
+    let r = relay().await;
+    let server = server(&[&r], SHORT).await;
+    // Two members. Their key is the last of all by its letters.
+    let members_key = "ff".repeat(32);
+    for n in 0..2 {
+        let mut input = phone(&Keys::generate(), &format!("member-{n}"), &[&r]);
+        input.groups = vec![with_keys(GROUP, std::slice::from_ref(&members_key))];
+        server.put(input).await;
+    }
+    // Seventy strangers, each with a key of its own making.
+    let made_up = |n: usize| format!("{n:064x}");
+    for n in 0..70 {
+        let mut input = phone(&Keys::generate(), &format!("stranger-{n}"), &[&r]);
+        input.groups = vec![with_keys(GROUP, &[made_up(n)])];
+        server.put(input).await;
+    }
+    let pipeline = server.pipeline();
+
+    let message = marked(GROUP, &Keys::generate(), std::slice::from_ref(&members_key), &[]);
+    assert_eq!(
+        pipeline.event(&r.url, &message, false).await,
+        Dealt::Pushed { now: 2, later: 0, own: 0, over: 0 }
+    );
+    // Of the made-up keys, each held by one device, the first sixty-three
+    // by their letters are tried, and the rest are not.
+    let tried = marked(GROUP, &Keys::generate(), &[made_up(62)], &[]);
+    assert_eq!(
+        pipeline.event(&r.url, &tried, false).await,
+        Dealt::Pushed { now: 1, later: 0, own: 0, over: 0 }
+    );
+    let left_out = marked(GROUP, &Keys::generate(), &[made_up(63)], &[]);
+    assert_eq!(pipeline.event(&r.url, &left_out, false).await, Dealt::Unmarked);
+    server.pushes_are(3).await;
 }
 
 #[tokio::test]
@@ -861,7 +1123,7 @@ async fn a_device_is_pushed_to_thirty_times_and_told_of_the_rest_in_one_push() {
     // Forty chats of one phone.
     let groups: Vec<String> = (1..=40).map(|n| format!("{n:064x}")).collect();
     let mut input = phone(&alice, "phone", &[&r]);
-    input.groups = groups.clone();
+    input.groups = groups.iter().map(|group| member_of(group)).collect();
     server.put(input).await;
 
     // Straight to the pipeline: a message in every one of them, at once.

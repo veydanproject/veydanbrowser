@@ -36,7 +36,14 @@ fn registration() {
     assert_eq!(put.relays.len(), 2);
     assert!(!put.relays[1].groups);
     assert_eq!(put.groups.len(), 2);
-    assert_eq!(put.groups[0], "11".repeat(32));
+    assert_eq!(put.groups[0].id, "11".repeat(32));
+    // The push key of the value in `spec/protocol.md`.
+    assert_eq!(
+        put.groups[0].keys,
+        ["c960ddf616adb9a57ac7d0eb04da5e25cf3d139c95d5828addb8f1f0ed50da28"]
+    );
+    // After a change of the key of a group: the key of now, and the one before.
+    assert_eq!(put.groups[1].keys, ["aa".repeat(32), "bb".repeat(32)]);
     assert_eq!(put.author_key.unwrap().len(), 64);
 }
 
@@ -58,6 +65,23 @@ fn a_relay_is_watched_for_everything_unless_said_otherwise() {
     )
     .unwrap();
     assert!(put.relays[0].dm && put.relays[0].groups);
+}
+
+/// The registration of an app older than 0.3.0 named a group by its id
+/// alone. It is not read: a group without a push key can be pushed to nobody.
+#[test]
+fn a_group_is_named_with_its_push_keys() {
+    let with = |groups: &str| {
+        serde_json::from_str::<DevicePut>(&format!(
+            r#"{{"app_id":"a","channel":{{"provider":"fcm","token":"t"}},"groups":{groups}}}"#
+        ))
+    };
+    let id = "11".repeat(32);
+    assert!(with(&format!(r#"[{{"id":"{id}","keys":["{id}"]}}]"#)).is_ok());
+    assert!(with(&format!(r#"["{id}"]"#)).is_err(), "an id alone");
+    assert!(with(&format!(r#"[{{"id":"{id}"}}]"#)).is_err(), "no keys");
+    assert!(with(&format!(r#"[{{"keys":["{id}"]}}]"#)).is_err(), "no id");
+    assert!(with(&format!(r#"[{{"id":"{id}","keys":"{id}"}}]"#)).is_err(), "a key, not a list of them");
 }
 
 #[test]

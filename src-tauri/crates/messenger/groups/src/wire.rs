@@ -167,10 +167,16 @@ fn verify_message(signed: &serde_json::Value, group_id: &str) -> Result<InnerMes
 ///
 /// `author` signs nothing here. It makes the mark by which the author's push
 /// server tells the author's events from the others; `quiet` says the event
-/// is not worth a push to anybody. See `messenger_dm::pushtags`.
+/// is not worth a push to anybody. The key makes the mark of the group, by
+/// which a push server tells an event of somebody in the group from one
+/// that only names it; `grace` is the key replaced not long ago, whose mark
+/// is for the phones that have not told their server the new one yet;
+/// what is `quiet` wakes no phone and is sealed without it. See
+/// `messenger_dm::pushtags`.
 pub fn seal(
     group_id: &str,
     key: &GroupKey,
+    grace: Option<&GroupKey>,
     payload: &Payload,
     created_at: i64,
     author: &Keys,
@@ -182,16 +188,26 @@ pub fn seal(
         .tag(Tag::parse(["h", group_id]).map_err(crypto)?)
         .tag(Tag::parse(["k", key.id().0.as_str()]).map_err(crypto)?)
         .tag(pushtags::author_tag(author, &once.public_key())?)
+        .tag(pushtags::group_tag(key.as_bytes(), &once.public_key())?)
         .custom_created_at(Timestamp::from_secs(created_at.max(0) as u64));
+    if let Some(before) = grace.filter(|before| *before != key) {
+        builder = builder.tag(pushtags::group_tag(before.as_bytes(), &once.public_key())?);
+    }
     if quiet {
         builder = builder.tag(pushtags::silent_tag()?);
     }
     wire(&builder.finalize(&once).map_err(crypto)?)
 }
 
-pub fn seal_message(group_id: &str, key: &GroupKey, signed: &Event, author: &Keys) -> Result<WireEvent> {
+pub fn seal_message(
+    group_id: &str,
+    key: &GroupKey,
+    grace: Option<&GroupKey>,
+    signed: &Event,
+    author: &Keys,
+) -> Result<WireEvent> {
     let payload = Payload { v: PAYLOAD_VERSION, t: "msg".into(), event: serde_json::to_value(signed)?, envelopes: vec![], keys: vec![] };
-    seal(group_id, key, &payload, signed.created_at.as_secs() as i64, author, false)
+    seal(group_id, key, grace, &payload, signed.created_at.as_secs() as i64, author, false)
 }
 
 /// Older keys for the holders of a newer one.
@@ -209,7 +225,7 @@ pub fn seal_chain(
         envelopes: vec![],
         keys: encode_keys(older),
     };
-    seal(group_id, key, &payload, created_at, author, true)
+    seal(group_id, key, None, &payload, created_at, author, true)
 }
 
 pub fn seal_op(
@@ -220,7 +236,7 @@ pub fn seal_op(
     author: &Keys,
 ) -> Result<WireEvent> {
     let payload = Payload { v: PAYLOAD_VERSION, t: "op".into(), event: serde_json::to_value(signed)?, envelopes, keys: vec![] };
-    seal(group_id, key, &payload, signed.created_at.as_secs() as i64, author, true)
+    seal(group_id, key, None, &payload, signed.created_at.as_secs() as i64, author, true)
 }
 
 /// Open the content of a group event and verify what is inside.
@@ -377,8 +393,8 @@ mod tests {
         let alice = Keys::generate();
         let key = GroupKey::generate().unwrap();
         let signed = sign_message(&alice, GID, r#"{"v":1,"t":"text","text":"secret words"}"#, 1_700_000_000, None).unwrap();
-        let a = seal_message(GID, &key, &signed, &alice).unwrap();
-        let b = seal_message(GID, &key, &signed, &alice).unwrap();
+        let a = seal_message(GID, &key, None, &signed, &alice).unwrap();
+        let b = seal_message(GID, &key, None, &signed, &alice).unwrap();
         let text = a.json.to_string();
         assert!(!text.contains(&alice.public_key().to_hex()), "the author is not on the outside");
         assert!(!text.contains("secret words"));
@@ -453,7 +469,7 @@ mod tests {
         let alice = Keys::generate();
         let key = GroupKey::generate().unwrap();
         let signed = sign_message(&alice, GID, r#"{"v":1,"t":"text","text":"hi"}"#, 1_700_000_000, None).unwrap();
-        let message = seal_message(GID, &key, &signed, &alice).unwrap();
+        let message = seal_message(GID, &key, None, &signed, &alice).unwrap();
         assert_eq!(outer_tag(&message, "silent"), None);
 
         let op = Op::new(GID, &me(&alice), vec![crate::op::OpId("p".into())], 5, OpBody::RotateKey).with_key(key.id());
@@ -473,7 +489,7 @@ mod tests {
         let (alice, bob) = (Keys::generate(), Keys::generate());
         let key = GroupKey::generate().unwrap();
         let signed = sign_message(&alice, GID, r#"{"v":1,"t":"text","text":"hi"}"#, 1_700_000_000, None).unwrap();
-        let sealed = seal_message(GID, &key, &signed, &alice).unwrap();
+        let sealed = seal_message(GID, &key, None, &signed, &alice).unwrap();
 
         let mark = outer_tag(&sealed, "vp").unwrap();
         let signer = sealed.json["pubkey"].as_str().unwrap();
@@ -482,8 +498,38 @@ mod tests {
 
         // Every event has a mark, and no two are alike: a mark says nothing
         // to the one who cannot check it.
-        let again = seal_message(GID, &key, &signed, &alice).unwrap();
+        let again = seal_message(GID, &key, None, &signed, &alice).unwrap();
         assert_ne!(outer_tag(&again, "vp").unwrap(), mark);
+    }
+
+    #[test]
+    fn the_group_is_recognized_by_the_holders_of_its_key_only() {
+        let alice = Keys::generate();
+        let (key, before, stranger) = (GroupKey::generate().unwrap(), GroupKey::generate().unwrap(), GroupKey::generate().unwrap());
+        let signed = sign_message(&alice, GID, r#"{"v":1,"t":"text","text":"hi"}"#, 1_700_000_000, None).unwrap();
+        let marks = |sealed: &WireEvent| -> Vec<String> {
+            let tags = sealed.json["tags"].as_array().unwrap();
+            tags.iter().filter(|t| t[0] == "gp").map(|t| t[1].as_str().unwrap().to_string()).collect()
+        };
+        let mark = |key: &GroupKey, sealed: &WireEvent| {
+            pushtags::group_mark(&pushtags::group_push_key(key.as_bytes()), sealed.json["pubkey"].as_str().unwrap()).unwrap()
+        };
+
+        let sealed = seal_message(GID, &key, None, &signed, &alice).unwrap();
+        assert_eq!(marks(&sealed), vec![mark(&key, &sealed)]);
+        assert_ne!(marks(&sealed), vec![mark(&stranger, &sealed)], "naming the group is not enough");
+        assert!(!sealed.json.to_string().contains(&pushtags::group_push_key(key.as_bytes())), "the key of the marks stays inside");
+
+        // Not long after a change of the key: the key before marks too.
+        let sealed = seal_message(GID, &key, Some(&before), &signed, &alice).unwrap();
+        assert_eq!(marks(&sealed), vec![mark(&key, &sealed), mark(&before, &sealed)]);
+        let sealed = seal_message(GID, &key, Some(&key), &signed, &alice).unwrap();
+        assert_eq!(marks(&sealed).len(), 1, "one key, one mark");
+
+        // What serves the group is marked as well: every event of a group looks the same from outside.
+        let op = Op::new(GID, &me(&alice), vec![crate::op::OpId("p".into())], 5, OpBody::RotateKey).with_key(key.id());
+        let sealed = seal_op(GID, &key, &sign_op(&alice, &op).unwrap(), vec![], &alice).unwrap();
+        assert_eq!(marks(&sealed), vec![mark(&key, &sealed)]);
     }
 
     #[test]

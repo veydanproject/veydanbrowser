@@ -9,7 +9,16 @@
     { "url": "wss://relay.example.org", "dm": true, "groups": false }
   ],
   "groups": [
-    "1111111111111111111111111111111111111111111111111111111111111111",
-    "2222222222222222222222222222222222222222222222222222222222222222"
+    {
+      "id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "keys": ["c960ddf616adb9a57ac7d0eb04da5e25cf3d139c95d5828addb8f1f0ed50da28"]
+    },
+    {
+      "id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "keys": [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    }
   ]
 }

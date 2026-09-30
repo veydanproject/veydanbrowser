@@ -15,7 +15,7 @@ use messenger_core::outbound::WireEvent;
 use messenger_core::{
     Clock, Context, DmInbound, EventId, EventSource, GroupInbound, Outbound, PubKey, RelayUrl, Result, SecretStore, Timestamp,
 };
-use messenger_dm::{DmService, MessageView};
+use messenger_dm::{pushtags, DmService, MessageView};
 use messenger_store::Store;
 use nostr::key::Keys;
 use nostr::nips::nip59::UnwrappedGift;
@@ -382,6 +382,66 @@ async fn removal_changes_the_key_and_leaves_the_removed_outside() {
     assert_eq!(w.devices[bob].texts(&g).await, vec!["still here"]);
     // What bob said while a member stays.
     assert_eq!(w.devices[alice].texts(&g).await, vec!["still here", "without bob"]);
+}
+
+/// The group's marks on the newest event the relay holds.
+fn marks_of_the_last(w: &World) -> (String, Vec<String>) {
+    let event = &w.relay.last().unwrap().json;
+    let marks = event["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t[0] == pushtags::GROUP)
+        .map(|t| t[1].as_str().unwrap().to_string())
+        .collect();
+    (event["pubkey"].as_str().unwrap().to_string(), marks)
+}
+
+#[tokio::test]
+async fn for_a_week_after_a_change_of_the_key_the_key_before_marks_messages_too() {
+    let mut w = World::new();
+    let alice = w.person().await;
+    let bob = w.person().await;
+    let carol = w.person().await;
+    let g = w.create(alice, GroupKind::Private, "Team", true).await;
+    w.bring(alice, &g, bob).await;
+    w.bring(alice, &g, carol).await;
+    let push_key = |w: &World, who: usize, id: KeyId| {
+        let svc = w.devices[who].svc.clone();
+        let g = g.clone();
+        async move { pushtags::group_push_key(svc.key(&g, &id).await.unwrap().unwrap().as_bytes()) }
+    };
+    let current = |w: &World| {
+        let svc = w.devices[alice].svc.clone();
+        let g = g.clone();
+        async move { svc.need_log(&g).await.unwrap().state().current_key.clone().unwrap() }
+    };
+
+    // One key so far: one mark, and one key for the push server.
+    let old = push_key(&w, alice, current(&w).await).await;
+    w.say(bob, &g, "hello").await;
+    let (signer, marks) = marks_of_the_last(&w);
+    assert_eq!(marks, vec![pushtags::group_mark(&old, &signer).unwrap()]);
+    assert_eq!(w.devices[carol].svc.push_keys(&g).await.unwrap(), vec![old.clone()]);
+
+    // Bob is removed and the key changes. Carol's phone may have slept
+    // through it, with only the old key told to its server: what is said
+    // now carries both marks, and those who know the change take both.
+    w.act(alice, &g, OpBody::Remove { who: w.pk(bob) }).await.unwrap();
+    let new = push_key(&w, alice, current(&w).await).await;
+    assert_ne!(new, old);
+    w.say(alice, &g, "without bob").await;
+    let (signer, marks) = marks_of_the_last(&w);
+    assert_eq!(marks, vec![pushtags::group_mark(&new, &signer).unwrap(), pushtags::group_mark(&old, &signer).unwrap()]);
+    assert_eq!(w.devices[carol].svc.push_keys(&g).await.unwrap(), vec![new.clone(), old.clone()]);
+
+    // A week later the old key serves nobody but those who left with it.
+    w.clock.0.fetch_add(pushtags::GROUP_GRACE_SECS, Ordering::SeqCst);
+    w.say(carol, &g, "a week later").await;
+    let (signer, marks) = marks_of_the_last(&w);
+    assert_eq!(marks, vec![pushtags::group_mark(&new, &signer).unwrap()]);
+    assert_eq!(w.devices[alice].svc.push_keys(&g).await.unwrap(), vec![new.clone()]);
+    assert_eq!(w.devices[alice].texts(&g).await, vec!["hello", "without bob", "a week later"]);
 }
 
 #[tokio::test]

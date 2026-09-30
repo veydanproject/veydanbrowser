@@ -24,7 +24,7 @@ use messenger_core::traits::SystemClock;
 use messenger_core::{Clock, MessengerError, Result};
 use messenger_push::client::{server_address, PushError};
 use messenger_push::{
-    Channel, DeviceAnswer, DevicePut, Prefs, RelayAnswer, RelayWatch, TestAnswer,
+    Channel, DeviceAnswer, DevicePut, GroupWatch, Prefs, RelayAnswer, RelayWatch, TestAnswer,
     VpushClient,
 };
 use messenger_store::settings;
@@ -186,9 +186,18 @@ impl MessengerRuntime {
 
         let me = messenger_core::PubKey::parse(&keys.public_key().to_hex())
             .ok_or_else(|| MessengerError::Crypto("the key has no hex form".into()))?;
-        let mut groups: Vec<String> =
-            self.groups().list(&me).await?.into_iter().filter(|g| g.membership == "joined").map(|g| g.id).collect();
-        groups.sort();
+        // A group is named with the keys of its marks, by which the server
+        // tells its events from those of strangers. One this device holds
+        // no key of yet is left out: the server could tell nothing about
+        // its events, and this device could open none of them.
+        let mut groups = Vec::new();
+        for group in self.groups().list(&me).await?.into_iter().filter(|g| g.membership == "joined") {
+            let keys = self.groups().push_keys(&group.id).await?;
+            if !keys.is_empty() {
+                groups.push(GroupWatch { id: group.id, keys });
+            }
+        }
+        groups.sort_by(|a, b| a.id.cmp(&b.id));
 
         let channel_dto = match channel.provider.as_str() {
             "fcm" => Channel::Fcm { token: channel.token.clone() },
@@ -623,6 +632,39 @@ mod tests {
         assert_eq!(puts.len(), 4);
         let body: Value = serde_json::from_slice(&puts[3].body).unwrap();
         assert_eq!(body["relays"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn a_group_is_named_with_the_keys_of_its_marks() {
+        use messenger_groups::{GroupKind, OpBody};
+
+        let s = registered().await;
+        let group = s.rt.group_create(GroupKind::Private, "Team", "", true).await.unwrap();
+        s.rt.push_reconcile(false).await.unwrap();
+        let puts = asked(&s.server, "PUT").await;
+        assert_eq!(puts.len(), 2, "a group joined is a reason to tell the server");
+        let body: Value = serde_json::from_slice(&puts[1].body).unwrap();
+        let first = s.rt.groups().push_keys(&group.id).await.unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(body["groups"], json!([{ "id": group.id, "keys": first }]));
+        // The key of the marks is made from the group's key, and is not it.
+        let text = String::from_utf8_lossy(&puts[1].body).to_string();
+        for (_, key) in s.rt.groups().export_keys().await.unwrap() {
+            assert!(!text.contains(&hex::encode(key.as_bytes())));
+        }
+
+        // The group's key changes: the server is told the new one, and
+        // for a while the one before, for what is sent by those who have
+        // not heard of the change.
+        s.rt.group_act(&group.id, OpBody::RotateKey).await.unwrap();
+        s.rt.push_reconcile(false).await.unwrap();
+        let puts = asked(&s.server, "PUT").await;
+        assert_eq!(puts.len(), 3);
+        let body: Value = serde_json::from_slice(&puts[2].body).unwrap();
+        let keys = body["groups"][0]["keys"].as_array().unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_ne!(keys[0], json!(first[0]), "the new key first");
+        assert_eq!(keys[1], json!(first[0]));
     }
 
     #[tokio::test]

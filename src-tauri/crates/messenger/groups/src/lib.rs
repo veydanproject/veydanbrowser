@@ -38,4 +38,4 @@ pub use op::{GroupKind, JoinProof, KeyId, Op, OpBody, OpId};
 pub use roles::{permits, Action, Role};
 pub use handler::{GroupDmHandler, GroupHandler, Signal, Signals};
 pub use service::{GroupService, GroupView, InviteView, KeyView, MemberView, Outcome};
-pub use state::{GroupState, Member, Rejection};
+pub use state::{GroupState, Member, Rejection, ReplacedKey};

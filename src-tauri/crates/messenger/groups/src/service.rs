@@ -15,6 +15,7 @@ use crate::state::{GroupState, Rejection};
 use crate::wire::{self, SecretEnvelope};
 use messenger_core::traits::{Notice, UiEvent};
 use messenger_core::{Clock, Envelope, MessengerError, Outbound, PubKey, RelayUrl, Result, Scope, SecretStore};
+use messenger_dm::pushtags;
 use messenger_dm::wrap::{wrap_as, Wake};
 use messenger_dm::{DmService, MessageView};
 use messenger_store::groups::{self as repo, GroupRow};
@@ -275,6 +276,38 @@ impl GroupService {
         }
         ids.sort();
         Ok(ids.join(","))
+    }
+
+    /// The key replaced not long ago, if this device holds it. For a while
+    /// both keys make the group's mark, in what is sent and in what the
+    /// push server is told to take (`messenger_dm::pushtags`).
+    async fn grace_key(&self, group_id: &str, state: &GroupState) -> Result<Option<GroupKey>> {
+        match &state.replaced_key {
+            Some(replaced) if self.now().saturating_sub(replaced.at) < pushtags::GROUP_GRACE_SECS => {
+                self.key(group_id, &replaced.key).await
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// What this device's push server is given to tell the events of those
+    /// in the group from the events of strangers: the keys of the marks,
+    /// the current one first. None of them opens anything. Empty while
+    /// this device waits for the group's key: the phone could not open
+    /// what comes either.
+    pub async fn push_keys(&self, group_id: &str) -> Result<Vec<String>> {
+        let log = self.need_log(group_id).await?;
+        let state = log.state();
+        let mut out = Vec::new();
+        if let Some(id) = &state.current_key {
+            if let Some(key) = self.key(group_id, id).await? {
+                out.push(pushtags::group_push_key(key.as_bytes()));
+            }
+        }
+        if let Some(key) = self.grace_key(group_id, state).await? {
+            out.push(pushtags::group_push_key(key.as_bytes()));
+        }
+        Ok(out)
     }
 
     pub(crate) async fn link_secret(&self, group_id: &str, epoch: u32) -> Result<Option<LinkSecret>> {
@@ -1148,7 +1181,8 @@ impl GroupService {
         };
         let content = envelope.encode();
         let signed = wire::sign_message(keys, group_id, &content, created_at, reply_to)?;
-        let sealed = wire::seal_message(group_id, &key, &signed, keys)?;
+        let grace = self.grace_key(group_id, s).await?;
+        let sealed = wire::seal_message(group_id, &key, grace.as_ref(), &signed, keys)?;
         let id = signed.id.to_hex();
         let hidden = matches!(content_type, msgs::CT_EDIT | msgs::CT_DELETE);
         msgs::insert(

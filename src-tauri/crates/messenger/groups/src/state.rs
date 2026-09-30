@@ -27,6 +27,14 @@ pub struct Member {
     pub added_by: PubKey,
 }
 
+/// A key that is no longer the group's, and since when: the time of the
+/// operation that brought the next one, by the clock of its author.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplacedKey {
+    pub key: KeyId,
+    pub at: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupState {
     pub group_id: String,
@@ -46,6 +54,8 @@ pub struct GroupState {
     /// Operations applied so far.
     pub version: u64,
     pub current_key: Option<KeyId>,
+    /// The key that was current before this one.
+    pub replaced_key: Option<ReplacedKey>,
     /// Every key the group had, oldest first.
     pub keys: Vec<KeyId>,
     /// Someone who knows the current key is no longer a member.
@@ -134,6 +144,7 @@ impl GroupState {
             disbanded: false,
             version: 1,
             current_key: Some(key.clone()),
+            replaced_key: None,
             keys: vec![key],
             key_stale: false,
         })
@@ -212,7 +223,11 @@ impl GroupState {
             if !self.keys.contains(k) {
                 self.keys.push(k.clone());
             }
-            self.current_key = Some(k.clone());
+            if let Some(before) = self.current_key.replace(k.clone()) {
+                if &before != k {
+                    self.replaced_key = Some(ReplacedKey { key: before, at: op.created_at });
+                }
+            }
             self.key_stale = false;
         }
     }
@@ -446,6 +461,7 @@ pub(crate) mod tests {
         assert_eq!(s.name, "Team");
         assert_eq!(s.role_of(&o), Some(Role::Owner));
         assert_eq!(s.current_key, Some(key(1)));
+        assert_eq!(s.replaced_key, None, "the first key replaced none");
         assert!(!s.history_for_new);
         assert_eq!(s.version, 1);
         let public = GroupState::genesis(&create(GroupKind::Public, &o, false)).unwrap();
@@ -523,6 +539,7 @@ pub(crate) mod tests {
         s.apply(&op(&a, OpBody::Remove { who: x.clone() }).with_key(key(21))).unwrap();
         assert!(!s.is_member(&x));
         assert_eq!(s.current_key, Some(key(21)));
+        assert_eq!(s.replaced_key, Some(ReplacedKey { key: key(20), at: 200 }), "the key before, and since when");
         assert!(!s.shows_messages_of(&x), "private: only members are shown");
 
         // A member leaves: the key is stale until a manager brings a new one.

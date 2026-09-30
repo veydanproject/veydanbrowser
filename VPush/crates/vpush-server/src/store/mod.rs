@@ -44,6 +44,16 @@ pub struct WatchedRelay {
     pub groups: bool,
 }
 
+/// A group watched for a device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchedGroup {
+    pub id: String,
+    /// The push keys the device registered for the group; sorted when read
+    /// back. Empty for a group registered before there were push keys: the
+    /// device is told nothing of that group until it registers again.
+    pub keys: Vec<String>,
+}
+
 /// Everything about a device, as it is written on registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceInput {
@@ -57,8 +67,8 @@ pub struct DeviceInput {
     pub prefs: Prefs,
     pub author_key: Option<String>,
     pub relays: Vec<WatchedRelay>,
-    /// Ids of the groups watched for the device.
-    pub groups: Vec<String>,
+    /// The groups watched for the device.
+    pub groups: Vec<WatchedGroup>,
     /// Unix seconds.
     pub now: u64,
     pub expires_at: u64,
@@ -90,7 +100,7 @@ pub struct Device {
     /// a push for it. `None`: nothing is known of the token yet.
     pub token_checked_at: Option<u64>,
     pub relays: Vec<WatchedRelay>,
-    pub groups: Vec<String>,
+    pub groups: Vec<WatchedGroup>,
 }
 
 /// How many of what there is, for `vpush ctl`.
@@ -103,8 +113,8 @@ pub struct Counts {
 
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
-    /// Writes the device as given, replacing what was there: relays and
-    /// groups that are not named are no longer watched.
+    /// Writes the device as given, replacing what was there: relays, groups
+    /// and push keys of groups that are not named are no longer kept.
     ///
     /// A device of another owner with the same address at the push service
     /// is removed: the phone has changed hands, or identities.
@@ -184,6 +194,8 @@ pub enum Seen {
     Nobody = 3,
     /// Dated too far from now to be pushed.
     Misdated = 4,
+    /// Of a group, and without a mark of a key registered for it.
+    Unmarked = 5,
 }
 
 /// A device a push goes to.
@@ -227,8 +239,24 @@ pub trait WatchStore: Send + Sync + 'static {
     /// The devices to tell about a direct message to `pubkey`.
     async fn dm_recipients(&self, pubkey: &str, now: u64) -> Result<Vec<Recipient>>;
 
-    /// The devices to tell about an event of a group.
-    async fn group_recipients(&self, group_id: &str, now: u64) -> Result<Vec<Recipient>>;
+    /// The push keys registered for a group by the devices that could be
+    /// told of its events: each key once, `limit` of them at most.
+    ///
+    /// The keys more devices hold come first, and keys held by as many are
+    /// in the order of the keys themselves. Anybody may register a key of
+    /// their own making for a group; when there are more keys than are
+    /// asked for, it is the ones held by the fewest that are left out, and
+    /// not the key of the members.
+    async fn group_keys(&self, group_id: &str, now: u64, limit: usize) -> Result<Vec<String>>;
+
+    /// The devices to tell about an event of a group: those that registered
+    /// one of `keys` for it.
+    async fn group_recipients(
+        &self,
+        group_id: &str,
+        keys: &[String],
+        now: u64,
+    ) -> Result<Vec<Recipient>>;
 
     async fn relay_alive(&self, url: &str, now: u64) -> Result<()>;
 

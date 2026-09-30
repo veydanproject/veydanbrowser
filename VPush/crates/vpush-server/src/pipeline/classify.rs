@@ -15,6 +15,12 @@ pub const KIND_GROUP: u16 = 9;
 /// both says that they do.
 pub const TAG_SILENT: &str = "silent";
 pub const TAG_AUTHOR: &str = "vp";
+pub const TAG_GROUP: &str = "gp";
+
+/// How many marks of its group are read off one event. An app puts one, or
+/// two for a week after the key of the group changed; whatever comes after
+/// the fourth was put there to make the server work.
+const GROUP_MARKS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subject {
@@ -74,9 +80,35 @@ pub fn author_mark(event: &Event) -> Option<&str> {
     values(event, TAG_AUTHOR).next()
 }
 
-/// The mark the holder of `author_key` would have put on an event signed by
-/// `event_pubkey`. See `messenger-dm::pushtags` for what it is for.
-pub fn mark_of(author_key_hex: &str, event_pubkey_hex: &str) -> Option<String> {
+/// A mark as `mark_of` makes it: 16 hex characters.
+fn is_mark(s: &str) -> bool {
+    s.len() == 16 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The marks of the group on a group event: what is a mark among the first
+/// `GROUP_MARKS` tags `gp`.
+pub fn group_marks(event: &Event) -> Vec<&str> {
+    values(event, TAG_GROUP)
+        .take(GROUP_MARKS)
+        .filter(|mark| is_mark(mark))
+        .collect()
+}
+
+/// Of the push keys of a group, those whose mark is among `marks`, the ones
+/// the event carries: a holder of such a key marked the event.
+pub fn marking(event: &Event, marks: &[&str], push_keys: Vec<String>) -> Vec<String> {
+    let signer = event.pubkey.to_hex();
+    push_keys
+        .into_iter()
+        .filter(|key| mark_of(key, &signer).is_some_and(|mark| marks.contains(&mark.as_str())))
+        .collect()
+}
+
+/// The mark the holder of a key would have put on an event signed by
+/// `event_pubkey`. The key is an author's (`vp`) or a push key of a group
+/// (`gp`): both marks are made the same way. See `messenger-dm::pushtags`
+/// for what they are for.
+pub fn mark_of(key_hex: &str, event_pubkey_hex: &str) -> Option<String> {
     fn bytes(hex: &str) -> Option<Vec<u8>> {
         if !is_hex64(hex) {
             return None;
@@ -85,7 +117,7 @@ pub fn mark_of(author_key_hex: &str, event_pubkey_hex: &str) -> Option<String> {
             .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
             .collect()
     }
-    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &bytes(author_key_hex)?);
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &bytes(key_hex)?);
     let tag = ring::hmac::sign(&key, &bytes(event_pubkey_hex)?);
     Some(tag.as_ref()[..8].iter().map(|b| format!("{b:02x}")).collect())
 }
@@ -163,6 +195,67 @@ mod tests {
         assert_eq!(mark_of(key, &"02".repeat(32)).as_deref(), Some("20526ea0e3c8f745"));
         assert_eq!(mark_of("short", &"02".repeat(32)), None);
         assert_eq!(mark_of(key, "short"), None);
+    }
+
+    /// The mark of a group, from the key of the group to the mark on an
+    /// event. The server is given the push key and never the key of the
+    /// group; the first step is made here to see the whole value, which is
+    /// in the tests of the messenger too and was computed with openssl.
+    #[test]
+    fn the_mark_of_a_group_is_made_the_way_the_messenger_makes_it() {
+        let group_key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &[0x03; 32]);
+        let push_key: String = ring::hmac::sign(&group_key, b"veydan-push-group-v1")
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(push_key, "c960ddf616adb9a57ac7d0eb04da5e25cf3d139c95d5828addb8f1f0ed50da28");
+        assert_eq!(mark_of(&push_key, &"02".repeat(32)).as_deref(), Some("86a8b9acabf6941d"));
+    }
+
+    /// A group event signed by `signer`, with these tags after its `h`.
+    fn group_event(signer: &Keys, tags: &[&[&str]]) -> Event {
+        let mut all = vec![Tag::parse(["h", &"11".repeat(32)]).unwrap()];
+        all.extend(tags.iter().map(|t| Tag::parse(t.iter().copied()).unwrap()));
+        EventBuilder::new(Kind::from(9u16), "sealed").tags(all).finalize(signer).unwrap()
+    }
+
+    #[test]
+    fn the_marks_of_a_group_are_sixteen_hex_characters_in_the_first_four_tags() {
+        let signer = Keys::generate();
+        let (a, b) = ("0123456789abcdef", "fedcba9876543210");
+        assert!(group_marks(&group_event(&signer, &[])).is_empty());
+        assert_eq!(group_marks(&group_event(&signer, &[&["gp", a]])), [a]);
+        // After a change of the key: the mark of the key of now, and of the
+        // one before.
+        assert_eq!(group_marks(&group_event(&signer, &[&["gp", a], &["vp", b], &["gp", b]])), [a, b]);
+
+        for not_a_mark in ["", "0123456789abcde", "0123456789abcdef0", "0123456789ABCDEF", "0123456789abcdeg"] {
+            let e = group_event(&signer, &[&["gp", not_a_mark], &["gp", a]]);
+            assert_eq!(group_marks(&e), [a], "{not_a_mark:?} is passed over");
+        }
+        // A tag with nothing in it is no `gp` tag at all.
+        assert_eq!(group_marks(&group_event(&signer, &[&["gp"], &["gp", a]])), [a]);
+
+        let fifth = group_event(&signer, &[&["gp", "x"], &["gp", "x"], &["gp", "x"], &["gp", "x"], &["gp", a]]);
+        assert!(group_marks(&fifth).is_empty(), "the fifth is not read");
+        let fourth = group_event(&signer, &[&["gp", "x"], &["gp", "x"], &["gp", "x"], &["gp", a], &["gp", b]]);
+        assert_eq!(group_marks(&fourth), [a]);
+    }
+
+    #[test]
+    fn a_holder_of_the_push_key_is_told_from_a_stranger() {
+        let (key, other) = ("c1".repeat(32), "c2".repeat(32));
+        let signer = Keys::generate();
+        let mark = mark_of(&key, &signer.public_key().to_hex()).unwrap();
+        let e = group_event(&signer, &[&["gp", mark.as_str()]]);
+        let keys = vec![other, "not a key".to_string(), key.clone()];
+
+        assert_eq!(marking(&e, &group_marks(&e), keys.clone()), [key]);
+        // The mark is of the key that signed the event: copied onto an
+        // event of another signer, it is nobody's.
+        let copied = group_event(&Keys::generate(), &[&["gp", mark.as_str()]]);
+        assert!(marking(&copied, &group_marks(&copied), keys).is_empty());
     }
 
     #[test]

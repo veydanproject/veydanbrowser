@@ -133,6 +133,18 @@ pub struct RelayWatch {
     pub groups: bool,
 }
 
+/// A group to watch for this device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupWatch {
+    /// 64 hex characters.
+    pub id: String,
+    /// The push keys of the group the device holds, 64 hex characters each:
+    /// one, or two while the key before the last change is still held. A
+    /// push key is made from the key of the group and opens nothing; the
+    /// server tells by it which events came from a holder of that key.
+    pub keys: Vec<String>,
+}
+
 /// Body of `PUT /v1/devices/{device_id}`: everything about the device, every
 /// time. What is not named is no longer watched.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,9 +162,9 @@ pub struct DevicePut {
     pub author_key: Option<String>,
     #[serde(default)]
     pub relays: Vec<RelayWatch>,
-    /// The user's groups: 64 hex characters each.
+    /// The user's groups, each with its push keys.
     #[serde(default)]
-    pub groups: Vec<String>,
+    pub groups: Vec<GroupWatch>,
 }
 
 /// What the server does with a relay the device named.
@@ -203,6 +215,7 @@ pub struct DeviceView {
     pub updated_at: u64,
     pub expires_at: u64,
     pub relays: Vec<RelayView>,
+    /// Ids of the groups. Their push keys are not given back.
     pub groups: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_push_at: Option<u64>,

@@ -36,7 +36,7 @@ use std::time::Duration;
 fn usage() -> ! {
     eprintln!(
         "usage: messenger-cli [--data-dir DIR] <keygen [--password PW] | import <nsec|ncryptsec> <secret> [--password PW] \
-         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | notify-tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] | push-status | push-test | push-off | profile-set <name> [picture] | wrap <to> <text…> | notify-describe <event.json> [--type dm|group] [--group ID]>"
+         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | notify-tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] | push-status | push-test | push-off | profile-set <name> [picture] | wrap <to|group:ID|stranger:ID> <text…> [--send] | notify-describe <event.json> [--type dm|group] [--group ID]>"
     );
     std::process::exit(2)
 }
@@ -518,10 +518,15 @@ async fn main() {
         }
         "wrap" => {
             // The gift wrap of a text to `to`, printed, not sent: what a relay
-            // and a push server would see of it.
+            // and a push server would see of it. `group:<id>` seals for a group;
+            // `stranger:<id>` does what anybody who knows the id of a group can:
+            // an event that names the group, sealed with a key the group never
+            // had. `--send` also publishes a group event where the group lives.
             if args.len() < 2 {
                 usage();
             }
+            let send = args.iter().any(|a| a == "--send");
+            args.retain(|a| a != "--send");
             let to = args.remove(0);
             let bundle = rt.notify_bundle().await.unwrap_or_else(die).unwrap_or_else(|| {
                 eprintln!("error: no identity");
@@ -530,16 +535,27 @@ async fn main() {
             let keys = bundle.keys().unwrap_or_else(die);
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
             let content = messenger_core::Envelope::text(&args.join(" ")).encode();
-            // `group:<id>`: sealed with the group's newest key this identity holds.
-            if let Some(group_id) = to.strip_prefix("group:") {
-                let entry = bundle.groups.iter().rev().find(|g| g.group_id == group_id).unwrap_or_else(|| {
-                    eprintln!("error: no key of that group");
-                    std::process::exit(1)
-                });
-                let key = bundle.group_key(group_id, &entry.key_id).expect("a key of the bundle");
+            let group = to.strip_prefix("group:").map(|id| (id, false)).or(to.strip_prefix("stranger:").map(|id| (id, true)));
+            if let Some((group_id, stranger)) = group {
+                // A member seals with the group's newest key this identity holds.
+                let key = if stranger {
+                    messenger_groups::GroupKey::generate().unwrap_or_else(die)
+                } else {
+                    let entry = bundle.groups.iter().rev().find(|g| g.group_id == group_id).unwrap_or_else(|| {
+                        eprintln!("error: no key of that group");
+                        std::process::exit(1)
+                    });
+                    bundle.group_key(group_id, &entry.key_id).expect("a key of the bundle")
+                };
                 let signed = messenger_groups::wire::sign_message(&keys, group_id, &content, now, None).unwrap_or_else(die);
-                let sealed = messenger_groups::wire::seal_message(group_id, &key, &signed, &keys).unwrap_or_else(die);
+                let sealed = messenger_groups::wire::seal_message(group_id, &key, None, &signed, &keys).unwrap_or_else(die);
                 println!("{}", sealed.json);
+                if send {
+                    let scope = messenger_core::Scope::Group { id: group_id.to_string() };
+                    rt.outbox().enqueue(messenger_core::Outbound::PublishScoped { scope, event: sealed }).await.unwrap_or_else(die);
+                    rt.outbox().kick();
+                    flush(&rt).await;
+                }
             } else {
                 let to = messenger_core::PubKey::parse(&to).unwrap_or_else(|| usage());
                 let wrapped = messenger_dm::wrap::wrap(&keys, &to, &content, now, None).unwrap_or_else(die);

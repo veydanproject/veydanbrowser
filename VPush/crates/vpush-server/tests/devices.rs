@@ -16,7 +16,7 @@ use vpush_server::counters::Counters;
 use vpush_server::delivery::fcm::{FcmClient, ServiceAccount};
 use vpush_server::delivery::Providers;
 use vpush_server::relays::RelayPolicy;
-use vpush_server::store::{SqliteStore, Store};
+use vpush_server::store::{SqliteStore, Store, WatchedGroup};
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -268,10 +268,18 @@ fn registration() -> Value {
             { "url": "wss://relay.example.org" },
             { "url": "https://not-a-relay.example.org" },
         ],
-        // The same group twice is watched once.
-        "groups": ["11".repeat(32), "22".repeat(32), "11".repeat(32)],
+        "groups": [
+            // The key of this group changed a while ago: the push key of
+            // now, and the one before.
+            { "id": "11".repeat(32), "keys": [PUSH_KEY, "c0".repeat(32)] },
+            { "id": "22".repeat(32), "keys": [PUSH_KEY] },
+        ],
     })
 }
+
+/// The push key of a group: 64 hex characters, made by the app from the
+/// key of the group.
+const PUSH_KEY: &str = "c960ddf616adb9a57ac7d0eb04da5e25cf3d139c95d5828addb8f1f0ed50da28";
 
 fn code(answer: &Answer) -> &str {
     answer.body["error"]["code"].as_str().unwrap_or("")
@@ -315,14 +323,57 @@ async fn a_device_is_registered_read_and_removed() {
         ])
     );
     assert_eq!(get.body["groups"], json!(["11".repeat(32), "22".repeat(32)]));
-    // The token is the device's own business; it is not given back.
-    assert!(!get.body.to_string().contains("token-of-the-phone"));
+    // The token is the device's own business; it is not given back. Nor
+    // are the push keys of the groups, in either answer.
+    for answer in [&put.body, &get.body] {
+        let text = answer.to_string();
+        assert!(!text.contains("token-of-the-phone"), "{text}");
+        assert!(!text.contains(PUSH_KEY) && !text.contains("c0c0"), "{text}");
+    }
+    // They are kept, for the events of the groups to be held against.
+    let kept = server.store.device(&alice.public_key().to_hex(), "phone-0001").await.unwrap().unwrap();
+    assert_eq!(
+        kept.groups,
+        [
+            WatchedGroup { id: "11".repeat(32), keys: vec!["c0".repeat(32), PUSH_KEY.to_string()] },
+            WatchedGroup { id: "22".repeat(32), keys: vec![PUSH_KEY.to_string()] },
+        ]
+    );
 
     let delete = server.ask(&alice, "DELETE", DEVICE, None).await;
     assert_eq!(delete.status, 204);
     assert_eq!(server.ask(&alice, "GET", DEVICE, None).await.status, 404);
     // Removing what is gone is not an error.
     assert_eq!(server.ask(&alice, "DELETE", DEVICE, None).await.status, 204);
+}
+
+/// The examples the app's tests read are what the server takes: the whole
+/// registration as it is written in `spec/golden`, and the least of one.
+#[tokio::test]
+async fn the_examples_of_a_registration_are_taken_as_they_are() {
+    let server = start().await;
+    let alice = Keys::generate();
+    let golden = |name: &str| -> Value {
+        let path = format!("{}/../../spec/golden/{name}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+    };
+
+    let put = server.ask(&alice, "PUT", DEVICE, Some(golden("device_put.json"))).await;
+    assert_eq!(put.status, 200, "{}", put.body);
+    let kept = server.store.device(&alice.public_key().to_hex(), "phone-0001").await.unwrap().unwrap();
+    assert_eq!(
+        kept.groups,
+        [
+            WatchedGroup { id: "11".repeat(32), keys: vec![PUSH_KEY.to_string()] },
+            WatchedGroup { id: "22".repeat(32), keys: vec!["aa".repeat(32), "bb".repeat(32)] },
+        ]
+    );
+
+    // No groups: nothing of a group is watched, and nothing is wrong.
+    let put = server.ask(&alice, "PUT", DEVICE, Some(golden("device_put_minimal.json"))).await;
+    assert_eq!(put.status, 200, "{}", put.body);
+    let get = server.ask(&alice, "GET", DEVICE, None).await;
+    assert_eq!(get.body["groups"], json!([]));
 }
 
 #[tokio::test]
@@ -411,15 +462,38 @@ async fn what_the_server_does_not_serve() {
         ("no channel", json!({ "app_id": APP })),
         ("unknown provider", json!({ "app_id": APP, "channel": { "provider": "pigeon" } })),
         ("empty token", json!({ "app_id": APP, "channel": { "provider": "fcm", "token": " " } })),
-        ("group id", json!({ "app_id": APP, "channel": { "provider": "fcm", "token": "t" },
-                             "groups": ["xyz"] })),
-        ("group as an object", json!({ "app_id": APP, "channel": { "provider": "fcm", "token": "t" },
-                                       "groups": [{ "id": "11".repeat(32) }] })),
         ("author key", json!({ "app_id": APP, "channel": { "provider": "fcm", "token": "t" },
                                "author_key": "short" })),
     ] {
         let answer = server.ask(&alice, "PUT", DEVICE, Some(bad)).await;
         assert_eq!((answer.status, code(&answer)), (400, "bad_request"), "{what}: {}", answer.body);
+    }
+
+    let (id, other) = ("11".repeat(32), "c0".repeat(32));
+    for (what, groups) in [
+        // What an app older than 0.3.0 sends.
+        ("a group by its id alone", json!([id])),
+        ("no keys", json!([{ "id": id }])),
+        ("an empty list of keys", json!([{ "id": id, "keys": [] }])),
+        ("three keys", json!([{ "id": id, "keys": [PUSH_KEY, other, "c2".repeat(32)] }])),
+        ("a key that is not a list", json!([{ "id": id, "keys": PUSH_KEY }])),
+        ("a short key", json!([{ "id": id, "keys": [&PUSH_KEY[..62]] }])),
+        ("a key in capitals", json!([{ "id": id, "keys": [PUSH_KEY.to_uppercase()] }])),
+        ("a key that is not hex", json!([{ "id": id, "keys": ["zz".repeat(32)] }])),
+        ("one key twice", json!([{ "id": id, "keys": [PUSH_KEY, PUSH_KEY] }])),
+        ("a short id", json!([{ "id": "xyz", "keys": [PUSH_KEY] }])),
+        ("an id in capitals", json!([{ "id": "AB".repeat(32), "keys": [PUSH_KEY] }])),
+        ("no id", json!([{ "keys": [PUSH_KEY] }])),
+        ("one group twice", json!([{ "id": id, "keys": [PUSH_KEY] }, { "id": id, "keys": [other] }])),
+    ] {
+        let mut r = registration();
+        r["groups"] = groups;
+        // An owner of its own every time: one owner registers ten times a
+        // minute and no more.
+        let answer = server.ask(&Keys::generate(), "PUT", DEVICE, Some(r)).await;
+        assert_eq!((answer.status, code(&answer)), (400, "bad_request"), "{what}: {}", answer.body);
+        // Whatever was wrong with a key, the answer does not say it back.
+        assert!(!answer.body.to_string().to_lowercase().contains(&PUSH_KEY[..62]), "{what}: {}", answer.body);
     }
 
     for path in ["/v1/devices/short", "/v1/devices/with%20space-1234"] {
@@ -442,9 +516,14 @@ async fn limits() {
 
     let mut r = registration();
     r["relays"] = json!([]);
-    r["groups"] = json!(["11".repeat(32), "22".repeat(32), "33".repeat(32)]);
-    let answer = server.ask(&alice, "PUT", DEVICE, Some(r)).await;
+    let group = |id: &str| json!({ "id": id.repeat(32), "keys": [PUSH_KEY] });
+    r["groups"] = json!([group("11"), group("22"), group("33")]);
+    let answer = server.ask(&alice, "PUT", DEVICE, Some(r.clone())).await;
     assert_eq!((answer.status, code(&answer)), (422, "limit_groups"));
+    // As many as the limit says are taken.
+    r["groups"] = json!([group("11"), group("22")]);
+    assert_eq!(server.ask(&alice, "PUT", DEVICE, Some(r)).await.status, 200);
+    assert_eq!(server.ask(&alice, "DELETE", DEVICE, None).await.status, 204);
 
     let device = |n: u32| {
         json!({ "app_id": APP, "channel": { "provider": "fcm", "token": format!("token-{n}") } })

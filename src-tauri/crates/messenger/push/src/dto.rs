@@ -53,6 +53,17 @@ pub struct RelayWatch {
     pub groups: bool,
 }
 
+/// A group to watch, and what tells its events from those of strangers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupWatch {
+    /// 64 hex characters.
+    pub id: String,
+    /// Keys of the group's marks, one or two, 64 hex characters each: made
+    /// from the group's keys, they open nothing. The server pushes an
+    /// event of the group only when one of them made a mark on it.
+    pub keys: Vec<String>,
+}
+
 /// Everything about the device, sent whole every time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevicePut {
@@ -64,8 +75,8 @@ pub struct DevicePut {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author_key: Option<String>,
     pub relays: Vec<RelayWatch>,
-    /// Ids of the groups to watch, 64 hex characters each.
-    pub groups: Vec<String>,
+    /// The groups to watch.
+    pub groups: Vec<GroupWatch>,
 }
 
 /// What the server does with a relay the device named.

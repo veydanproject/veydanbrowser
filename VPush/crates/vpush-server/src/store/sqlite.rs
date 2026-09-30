@@ -12,7 +12,8 @@ use sqlx::{Pool, Row, Sqlite};
 use vpush_proto::Prefs;
 
 use super::{
-    Counts, Device, DeviceInput, DeviceLimits, Result, Store, StoreError, WatchedRelay,
+    Counts, Device, DeviceInput, DeviceLimits, Result, Store, StoreError, WatchedGroup,
+    WatchedRelay,
 };
 
 fn db(e: impl std::fmt::Display) -> StoreError {
@@ -114,13 +115,30 @@ impl SqliteStore {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-        let groups = sqlx::query_scalar::<_, String>(
-            "SELECT group_id FROM device_groups WHERE device = ? ORDER BY group_id",
+        // A group registered before there were push keys has none: one row,
+        // and no key in it.
+        let mut groups: Vec<WatchedGroup> = Vec::new();
+        for r in sqlx::query(
+            "SELECT g.group_id, k.push_key
+             FROM device_groups g
+             LEFT JOIN device_group_keys k ON k.device = g.device AND k.group_id = g.group_id
+             WHERE g.device = ?
+             ORDER BY g.group_id, k.push_key",
         )
         .bind(id)
         .fetch_all(&self.pool)
         .await
-        .map_err(db)?;
+        .map_err(db)?
+        {
+            let group_id: String = r.try_get("group_id").map_err(db)?;
+            let key: Option<String> = r.try_get("push_key").map_err(db)?;
+            if groups.last().is_none_or(|g| g.id != group_id) {
+                groups.push(WatchedGroup { id: group_id, keys: Vec::new() });
+            }
+            if let (Some(group), Some(key)) = (groups.last_mut(), key) {
+                group.keys.push(key);
+            }
+        }
 
         let secs = |name: &str| -> Result<u64> {
             Ok(row.try_get::<i64, _>(name).map_err(db)?.max(0) as u64)
@@ -289,18 +307,32 @@ impl Store for SqliteStore {
             .map_err(db)?;
         }
 
+        // The push keys of a group go with its row here: nothing of what
+        // the device held before is kept.
         sqlx::query("DELETE FROM device_groups WHERE device = ?")
             .bind(id)
             .execute(&mut *tx)
             .await
             .map_err(db)?;
-        for group_id in &d.groups {
+        for group in &d.groups {
             sqlx::query("INSERT OR REPLACE INTO device_groups (device, group_id) VALUES (?, ?)")
                 .bind(id)
-                .bind(group_id)
+                .bind(&group.id)
                 .execute(&mut *tx)
                 .await
                 .map_err(db)?;
+            for key in &group.keys {
+                sqlx::query(
+                    "INSERT OR REPLACE INTO device_group_keys (device, group_id, push_key)
+                     VALUES (?, ?, ?)",
+                )
+                .bind(id)
+                .bind(&group.id)
+                .bind(key)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+            }
         }
 
         tx.commit().await.map_err(db)
@@ -405,6 +437,22 @@ mod tests_support {
     pub use super::super::RelayPlan;
     pub use super::*;
 
+    /// The group every phone of these tests watches, and its push key.
+    pub fn group() -> String {
+        "11".repeat(32)
+    }
+
+    pub fn key() -> String {
+        "c1".repeat(32)
+    }
+
+    pub fn watched(id: &str, keys: &[&str]) -> WatchedGroup {
+        WatchedGroup {
+            id: id.to_string(),
+            keys: keys.iter().map(|key| key.to_string()).collect(),
+        }
+    }
+
     /// A phone that watches one relay and one group; registered at 1000,
     /// runs out at 2000.
     pub fn input(pubkey: &str, device_id: &str, token: &str) -> DeviceInput {
@@ -423,7 +471,7 @@ mod tests_support {
                 dm: true,
                 groups: true,
             }],
-            groups: vec!["11".repeat(32)],
+            groups: vec![watched(&group(), &[&key()])],
             now: 1000,
             expires_at: 2000,
             token_checked_at: None,
@@ -436,7 +484,7 @@ mod tests_support {
 
 #[cfg(test)]
 mod tests {
-    use super::tests_support::{input, ROOMY};
+    use super::tests_support::{group, input, key, watched, ROOMY};
     use super::*;
 
     const ALICE: &str = "aa";
@@ -461,7 +509,7 @@ mod tests {
         assert_eq!(d.state, "active");
         assert_eq!((d.created_at, d.updated_at, d.expires_at), (1000, 1000, 2000));
         assert_eq!(d.relays.len(), 1);
-        assert_eq!(d.groups, ["11".repeat(32)]);
+        assert_eq!(d.groups, [watched(&group(), &[&key()])]);
         assert!(s.device(ALICE, "phone-2").await.unwrap().is_none());
         assert!(s.device(BOB, "phone-1").await.unwrap().is_none());
     }
@@ -489,6 +537,38 @@ mod tests {
         assert_eq!(d.relays.iter().map(|r| r.url.as_str()).collect::<Vec<_>>(), ["wss://nos.lol"]);
         assert!(d.groups.is_empty());
         assert!(!d.prefs.groups);
+    }
+
+    #[tokio::test]
+    async fn the_push_keys_of_a_group_are_replaced_whole_and_go_with_the_group() {
+        let s = store().await;
+        let (other, before, after) = ("22".repeat(32), "c0".repeat(32), "c2".repeat(32));
+        let kept = || async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM device_group_keys")
+                .fetch_one(&s.pool)
+                .await
+                .unwrap()
+        };
+
+        // The key of the group was changed a day ago: the key before it is
+        // still held.
+        let mut first = input(ALICE, "phone-1", "t1");
+        first.groups = vec![watched(&group(), &[&key(), &before]), watched(&other, &[&key()])];
+        s.put_device(first, ROOMY).await.unwrap();
+        let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
+        assert_eq!(d.groups, [watched(&group(), &[&before, &key()]), watched(&other, &[&key()])]);
+        assert_eq!(kept().await, 3);
+
+        // It was changed once more, and the other group was left.
+        let mut next = input(ALICE, "phone-1", "t1");
+        next.groups = vec![watched(&group(), &[&after, &key()])];
+        s.put_device(next, ROOMY).await.unwrap();
+        let d = s.device(ALICE, "phone-1").await.unwrap().unwrap();
+        assert_eq!(d.groups, [watched(&group(), &[&key(), &after])]);
+        assert_eq!(kept().await, 2, "nothing of what was held before is kept");
+
+        assert!(s.delete_device(ALICE, "phone-1").await.unwrap());
+        assert_eq!(kept().await, 0, "the keys go with the device");
     }
 
     #[tokio::test]
@@ -659,7 +739,7 @@ mod tests {
 
         let s = SqliteStore::open(&path).await.unwrap();
         s.put_device(input(ALICE, "phone-1", "t1"), ROOMY).await.unwrap();
-        assert_eq!(s.schema_version().await.unwrap(), 4);
+        assert_eq!(s.schema_version().await.unwrap(), 5);
         s.close().await;
 
         let s = SqliteStore::open(&path).await.unwrap();
@@ -821,22 +901,55 @@ impl super::WatchStore for SqliteStore {
         .collect()
     }
 
-    async fn group_recipients(&self, group_id: &str, now: u64) -> Result<Vec<super::Recipient>> {
-        sqlx::query(
+    async fn group_keys(&self, group_id: &str, now: u64, limit: usize) -> Result<Vec<String>> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT k.push_key
+             FROM device_group_keys k JOIN devices d ON d.id = k.device
+             WHERE k.group_id = ? AND d.pref_groups = 1 AND d.state = 'active' AND d.expires_at > ?
+               AND EXISTS (SELECT 1 FROM device_relays r WHERE r.device = d.id AND r.groups = 1)
+             GROUP BY k.push_key
+             ORDER BY COUNT(*) DESC, k.push_key
+             LIMIT ?",
+        )
+        .bind(group_id)
+        .bind(now as i64)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)
+    }
+
+    async fn group_recipients(
+        &self,
+        group_id: &str,
+        keys: &[String],
+        now: u64,
+    ) -> Result<Vec<super::Recipient>> {
+        // Nothing but question marks is put into the statement: one for
+        // every key.
+        let held = vec!["?"; keys.len()].join(", ");
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
             "SELECT d.pubkey, d.device_id, d.app_id, d.provider, d.token, d.author_key
              FROM device_groups g JOIN devices d ON d.id = g.device
              WHERE g.group_id = ? AND d.pref_groups = 1 AND d.state = 'active' AND d.expires_at > ?
                AND EXISTS (SELECT 1 FROM device_relays r WHERE r.device = d.id AND r.groups = 1)
+               AND EXISTS (SELECT 1 FROM device_group_keys k
+                           WHERE k.device = d.id AND k.group_id = g.group_id
+                             AND k.push_key IN ({held}))
              ORDER BY d.id"
-        )
+        )))
         .bind(group_id)
-        .bind(now as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(db)?
-        .iter()
-        .map(recipient)
-        .collect()
+        .bind(now as i64);
+        for key in keys {
+            query = query.bind(key);
+        }
+        query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?
+            .iter()
+            .map(recipient)
+            .collect()
     }
 
     async fn relay_alive(&self, url: &str, now: u64) -> Result<()> {
@@ -879,7 +992,7 @@ mod watch_tests {
         let mut bob = input("bb", "phone", "t3");
         bob.relays[0].groups = false;
         bob.relays.push(WatchedRelay { url: "wss://nos.lol".into(), dm: false, groups: true });
-        bob.groups = vec!["22".repeat(32)];
+        bob.groups = vec![watched(&"22".repeat(32), &[&key()])];
         s.put_device(bob, ROOMY).await.unwrap();
 
         let plan = s.watch_plan(1500).await.unwrap();
@@ -928,10 +1041,87 @@ mod watch_tests {
         let dm = s.dm_recipients("aa", 1500).await.unwrap();
         assert_eq!(dm.iter().map(|r| r.device_id.as_str()).collect::<Vec<_>>(), ["phone", "tablet"]);
 
-        let group = s.group_recipients(&"11".repeat(32), 1500).await.unwrap();
-        let tokens: Vec<_> = group.iter().map(|r| r.token.as_str()).collect();
+        let told = s.group_recipients(&group(), &[key()], 1500).await.unwrap();
+        let tokens: Vec<_> = told.iter().map(|r| r.token.as_str()).collect();
         assert_eq!(tokens, ["t1", "t2", "t3"]);
-        assert!(s.group_recipients(&"99".repeat(32), 1500).await.unwrap().is_empty());
+        assert!(s.group_recipients(&"99".repeat(32), &[key()], 1500).await.unwrap().is_empty());
+    }
+
+    /// Who is told of an event of the group marked with these keys.
+    async fn told(s: &SqliteStore, keys: &[&str]) -> Vec<String> {
+        let keys: Vec<String> = keys.iter().map(|key| key.to_string()).collect();
+        let told = s.group_recipients(&group(), &keys, 1500).await.unwrap();
+        told.into_iter().map(|r| r.token).collect()
+    }
+
+    /// A phone of an owner of its own, with these push keys for the group.
+    fn member(n: usize, keys: &[&str]) -> DeviceInput {
+        let mut d = input(&format!("owner-{n}"), "phone", &format!("t{n}"));
+        d.groups = vec![watched(&group(), keys)];
+        d
+    }
+
+    #[tokio::test]
+    async fn a_group_event_is_for_the_devices_that_hold_a_key_it_is_marked_with() {
+        let s = SqliteStore::in_memory().await.unwrap();
+        let (now, before, wrong) = (key(), "c0".repeat(32), "ee".repeat(32));
+        for d in [
+            member(1, &[&now]),
+            member(2, &[&now, &before]),
+            // Slept through the change of the key.
+            member(3, &[&before]),
+            // Knows the id of the group, and not its key.
+            member(4, &[&wrong]),
+            // Registered before there were push keys.
+            member(5, &[]),
+        ] {
+            s.put_device(d, ROOMY).await.unwrap();
+        }
+        // The key of the group, registered for another group.
+        let mut elsewhere = member(6, &[]);
+        elsewhere.groups = vec![watched(&"22".repeat(32), &[&now])];
+        s.put_device(elsewhere, ROOMY).await.unwrap();
+
+        assert_eq!(told(&s, &[&now]).await, ["t1", "t2"]);
+        assert_eq!(told(&s, &[&before]).await, ["t2", "t3"]);
+        assert_eq!(told(&s, &[&now, &before]).await, ["t1", "t2", "t3"], "each of them once");
+        assert_eq!(told(&s, &[&wrong]).await, ["t4"]);
+        assert!(told(&s, &[&"dd".repeat(32)]).await.is_empty());
+        assert!(told(&s, &[]).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_keys_of_a_group_are_given_once_each_and_the_most_held_first() {
+        let s = SqliteStore::in_memory().await.unwrap();
+        let (now, before, made_up) = (key(), "c0".repeat(32), "00".repeat(32));
+        for d in [
+            member(1, &[&made_up]),
+            member(2, &[&now, &before]),
+            member(3, &[&now, &before]),
+            member(4, &[&now]),
+        ] {
+            s.put_device(d, ROOMY).await.unwrap();
+        }
+        // Nothing is pushed to these, so their keys are held against no event.
+        let mut off = member(5, &[&"a5".repeat(32)]);
+        off.prefs.groups = false;
+        let mut unwatched = member(6, &[&"a6".repeat(32)]);
+        unwatched.relays[0].groups = false;
+        for d in [off, unwatched, member(7, &[&"a7".repeat(32)])] {
+            s.put_device(d, ROOMY).await.unwrap();
+        }
+        s.record_outcome("owner-7", "phone", "t7", "dead_token", 1100).await.unwrap();
+        let mut elsewhere = member(8, &[]);
+        elsewhere.groups = vec![watched(&"22".repeat(32), &[&"a8".repeat(32)])];
+        s.put_device(elsewhere, ROOMY).await.unwrap();
+
+        let keys = s.group_keys(&group(), 1500, 65).await.unwrap();
+        assert_eq!(keys, [now.clone(), before.clone(), made_up]);
+        // When not all are asked for, the key one device made up is the one
+        // left out, though it is the first by its letters.
+        assert_eq!(s.group_keys(&group(), 1500, 2).await.unwrap(), [now, before]);
+        assert!(s.group_keys(&group(), 2500, 65).await.unwrap().is_empty(), "all ran out at 2000");
+        assert!(s.group_keys(&"99".repeat(32), 1500, 65).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1010,8 +1200,74 @@ async fn migrate(pool: &Pool<Sqlite>) -> Result<()> {
 
 #[cfg(test)]
 mod migrate_tests {
-    use super::tests_support::{input, ROOMY};
+    use super::super::WatchStore;
+    use super::tests_support::{group, input, key, watched, ROOMY};
     use super::*;
+
+    /// A database as 0.2.2 left it: its four migrations, and a device that
+    /// watches a relay and two groups, written the way 0.2.2 wrote one.
+    async fn left_by_0_2_2(path: &Path) {
+        let options = SqliteConnectOptions::new().filename(path).create_if_missing(true);
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(options).await.unwrap();
+        let of_0_2_2 = sqlx::migrate!("./migrations").iter().filter(|m| m.version <= 4).cloned();
+        sqlx::migrate::Migrator::with_migrations(of_0_2_2.collect()).run(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO devices
+                (pubkey, device_id, app_id, provider, token, author_key,
+                 created_at, updated_at, expires_at, token_checked_at)
+             VALUES ('aa', 'phone', 'net.veydan.mobile', 'fcm', 't1', NULL, 1000, 1000, 2000, 1000)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO device_relays (device, url, dm, groups)
+             VALUES (1, 'wss://node-1.veydan.net', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for id in [group(), "22".repeat(32)] {
+            sqlx::query("INSERT INTO device_groups (device, group_id) VALUES (1, ?)")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_database_of_0_2_2_is_opened_and_its_devices_wait_for_the_keys_of_their_groups() {
+        let dir = std::env::temp_dir().join(format!("vpush-group-keys-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vpush.db");
+        left_by_0_2_2(&path).await;
+
+        let s = SqliteStore::open(&path).await.expect("the migration applies");
+        assert_eq!(s.schema_version().await.unwrap(), 5);
+
+        // The device is what it was, and direct messages are pushed to it
+        // as before.
+        let d = s.device("aa", "phone").await.unwrap().unwrap();
+        assert_eq!((d.state.as_str(), d.token.as_str(), d.token_checked_at), ("active", "t1", Some(1000)));
+        assert_eq!(d.groups, [watched(&group(), &[]), watched(&"22".repeat(32), &[])]);
+        assert_eq!(s.dm_recipients("aa", 1500).await.unwrap().len(), 1);
+        // Its groups are watched on the relay still, and have no key: an
+        // event of theirs can be held against nothing.
+        assert_eq!(s.watch_plan(1500).await.unwrap()[0].groups, [group(), "22".repeat(32)]);
+        assert!(s.group_keys(&group(), 1500, 65).await.unwrap().is_empty());
+        assert!(s.group_recipients(&group(), &[key()], 1500).await.unwrap().is_empty());
+
+        // The app registers anew, and group events are pushed again.
+        s.put_device(input("aa", "phone", "t1"), ROOMY).await.unwrap();
+        assert_eq!(s.group_keys(&group(), 1500, 65).await.unwrap(), [key()]);
+        assert_eq!(s.group_recipients(&group(), &[key()], 1500).await.unwrap().len(), 1);
+        s.close().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[tokio::test]
     async fn a_database_a_newer_release_has_been_at_is_opened_by_an_older_one() {

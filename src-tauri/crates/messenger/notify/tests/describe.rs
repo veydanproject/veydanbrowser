@@ -278,7 +278,7 @@ async fn group_with_bob(phone: &Phone) -> (String, Keys, messenger_groups::Group
 
 fn group_message(group_id: &str, key: &messenger_groups::GroupKey, author: &Keys, envelope: &Envelope, at: i64) -> serde_json::Value {
     let signed = sign_message(author, group_id, &envelope.encode(), at, None).unwrap();
-    seal_message(group_id, key, &signed, author).unwrap().json
+    seal_message(group_id, key, None, &signed, author).unwrap().json
 }
 
 #[tokio::test]

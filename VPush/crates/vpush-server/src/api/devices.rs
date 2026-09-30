@@ -17,8 +17,8 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use vpush_proto::{
-    Channel, DeviceAnswer, DevicePut, DeviceView, ErrorCode, RelayAnswer, RelayStatus, RelayView,
-    TestAnswer,
+    Channel, DeviceAnswer, DevicePut, DeviceView, ErrorCode, GroupWatch, RelayAnswer, RelayStatus,
+    RelayView, TestAnswer,
 };
 
 use super::{error, now, Api, RequestId, NEW_DEVICES_PER_HOUR, PUTS_PER_MINUTE};
@@ -26,7 +26,7 @@ use crate::auth::AuthError;
 use crate::delivery::{
     check_token, mask, test_push, Outcome, ProviderKind, PushProvider, Target, TokenCheck,
 };
-use crate::store::{Device, DeviceInput, DeviceLimits, StoreError, WatchedRelay};
+use crate::store::{Device, DeviceInput, DeviceLimits, StoreError, WatchedGroup, WatchedRelay};
 
 const MAX_TOKEN: usize = 4096;
 /// The header in which the reverse proxy says whom a request came from.
@@ -194,6 +194,57 @@ fn judge(api: &Api, url: &str) -> (String, RelayStatus, Option<String>) {
     (url, status, detail)
 }
 
+/// What the parser says of a body it cannot read may quote the body: a push
+/// key that stood where a list was expected would be said back whole. What
+/// is long enough to be a key, or half of one, is given as its mark, like a
+/// token in the log.
+fn without_keys(said: &str) -> String {
+    let mut out = String::with_capacity(said.len());
+    let mut rest = said;
+    while let Some(start) = rest.find(|c: char| c.is_ascii_hexdigit()) {
+        let hex = &rest[start..];
+        let hex = &hex[..hex.find(|c: char| !c.is_ascii_hexdigit()).unwrap_or(hex.len())];
+        out.push_str(&rest[..start]);
+        if hex.len() >= 32 {
+            out.push_str(&mask(hex));
+        } else {
+            out.push_str(hex);
+        }
+        rest = &rest[start + hex.len()..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The groups of a registration, as the store takes them. A group is named
+/// once, with the push key of its key, or with two after a change of the
+/// key: the one of now and the one before.
+///
+/// What is wrong is said without the key it is wrong about: a push key is
+/// written nowhere but into the database.
+fn watched_groups(named: Vec<GroupWatch>) -> Result<Vec<WatchedGroup>, Refusal> {
+    let mut groups: Vec<WatchedGroup> = Vec::with_capacity(named.len());
+    for GroupWatch { id, keys } in named {
+        if !is_hex64(&id) {
+            return Err(Refusal::bad("a group id is 64 hex characters"));
+        }
+        if groups.iter().any(|known| known.id == id) {
+            return Err(Refusal::bad("a group is named once"));
+        }
+        if !(1..=2).contains(&keys.len()) {
+            return Err(Refusal::bad("a group has one push key or two"));
+        }
+        if !keys.iter().all(|key| is_hex64(key)) {
+            return Err(Refusal::bad("a push key of a group is 64 hex characters"));
+        }
+        if keys.len() == 2 && keys[0] == keys[1] {
+            return Err(Refusal::bad("the two push keys of a group differ"));
+        }
+        groups.push(WatchedGroup { id, keys });
+    }
+    Ok(groups)
+}
+
 /// Whom a request came from, as the reverse proxy in front says. `None`
 /// when there is no proxy to say it: what a client writes into a header is
 /// no address.
@@ -280,15 +331,7 @@ fn accepted(api: &Api, asked: &Asked, put: DevicePut) -> Result<Accepted, Refusa
         Some(_) => return Err(Refusal::bad("author_key is 64 hex characters")),
     };
 
-    let mut groups: Vec<String> = Vec::with_capacity(put.groups.len());
-    for group in &put.groups {
-        if !is_hex64(group) {
-            return Err(Refusal::bad("a group id is 64 hex characters"));
-        }
-        if !groups.contains(group) {
-            groups.push(group.clone());
-        }
-    }
+    let groups = watched_groups(put.groups)?;
 
     // A relay the server refuses is told about and left out; the rest of
     // the registration stands.
@@ -358,7 +401,9 @@ fn view(api: &Api, device: Device) -> DeviceView {
         created_at: device.created_at,
         updated_at: device.updated_at,
         expires_at: device.expires_at,
-        groups: device.groups,
+        // The ids, and nothing of the push keys: they are the device's to
+        // know, and nobody's to read here.
+        groups: device.groups.into_iter().map(|group| group.id).collect(),
         last_push_at: device.last_push_at,
         last_outcome: device.last_outcome,
     }
@@ -390,8 +435,10 @@ pub async fn put(
                 wait,
             )
         })?;
-        let put: DevicePut = serde_json::from_slice(&asked.body)
-            .map_err(|e| Refusal::bad(format!("the body is not a registration: {e}")))?;
+        let put: DevicePut = serde_json::from_slice(&asked.body).map_err(|e| {
+            let why = without_keys(&e.to_string());
+            Refusal::bad(format!("the body is not a registration: {why}"))
+        })?;
         let Accepted {
             mut input,
             relays,
@@ -676,6 +723,69 @@ mod tests {
         assert_eq!(refusal.code, ErrorCode::RateLimited);
         assert_eq!(refusal.retry_after, Some(Duration::from_secs(40)));
         assert_eq!(Refusal::from(AuthError::Replay).status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn the_groups_of_a_registration() {
+        let (id, key, before) = ("11".repeat(32), "c1".repeat(32), "c0".repeat(32));
+        let group = |id: &str, keys: &[&str]| GroupWatch {
+            id: id.to_string(),
+            keys: keys.iter().map(|key| key.to_string()).collect(),
+        };
+        let refused = |named: Vec<GroupWatch>| {
+            let refusal = watched_groups(named).expect_err("refused");
+            assert_eq!((refusal.status, refusal.code), (StatusCode::BAD_REQUEST, ErrorCode::BadRequest));
+            // Whatever was wrong, no key is said back.
+            assert!(!refusal.message.contains(&key) && !refusal.message.contains("c0c0"));
+            refusal.message
+        };
+
+        let taken = watched_groups(vec![
+            group(&id, &[&key, &before]),
+            group(&"22".repeat(32), &[&key]),
+        ])
+        .ok()
+        .expect("taken");
+        assert_eq!(taken.len(), 2);
+        assert_eq!(taken[0].keys, [key.clone(), before.clone()]);
+        assert!(watched_groups(vec![]).ok().expect("no groups").is_empty());
+
+        assert_eq!(refused(vec![group("xyz", &[&key])]), "a group id is 64 hex characters");
+        assert_eq!(refused(vec![group(&"AB".repeat(32), &[&key])]), "a group id is 64 hex characters");
+        assert_eq!(refused(vec![group(&id, &[&key]), group(&id, &[&before])]), "a group is named once");
+        assert_eq!(refused(vec![group(&id, &[])]), "a group has one push key or two");
+        assert_eq!(
+            refused(vec![group(&id, &[&key, &before, &"c2".repeat(32)])]),
+            "a group has one push key or two"
+        );
+        for not_a_key in ["", "short", &"C1".repeat(32), &"c1".repeat(33)] {
+            assert_eq!(
+                refused(vec![group(&id, &[&key, not_a_key])]),
+                "a push key of a group is 64 hex characters"
+            );
+        }
+        assert_eq!(refused(vec![group(&id, &[&key, &key])]), "the two push keys of a group differ");
+    }
+
+    #[test]
+    fn what_is_said_of_a_body_that_cannot_be_read_says_no_key_back() {
+        let key = "c1".repeat(32);
+        let body = format!(
+            r#"{{"app_id":"a","channel":{{"provider":"fcm","token":"t"}},
+                "groups":[{{"id":"{}","keys":"{key}"}}]}}"#,
+            "11".repeat(32)
+        );
+        let said = serde_json::from_str::<DevicePut>(&body).expect_err("a key, not a list").to_string();
+        assert!(said.contains(&key), "the parser quotes what it met: {said}");
+
+        let kept = without_keys(&said);
+        assert!(!kept.contains(&key[..32]), "{kept}");
+        assert_eq!(kept, said.replace(&key, &mask(&key)));
+        // What is said of anything else stays as the parser said it.
+        for plain in ["missing field `channel` at line 1 column 14", "", "abc", "line 12 column 3400"] {
+            assert_eq!(without_keys(plain), plain);
+        }
+        assert_eq!(without_keys(&format!("{key} and {key}")), format!("{0} and {0}", mask(&key)));
     }
 
     #[test]
