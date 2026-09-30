@@ -4,7 +4,7 @@
 //! The client against the server's own examples, and against a server
 //! played by a mock.
 //!
-//! `tests/golden` is a copy of `VPush/spec/golden`. `scripts/vpush-contract.sh`
+//! `tests/golden` is a copy of `VPush/golden`. `scripts/vpush-contract.sh`
 //! fails when the two differ.
 
 use messenger_push::client::PushError;

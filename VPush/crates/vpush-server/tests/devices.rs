@@ -348,13 +348,13 @@ async fn a_device_is_registered_read_and_removed() {
 }
 
 /// The examples the app's tests read are what the server takes: the whole
-/// registration as it is written in `spec/golden`, and the least of one.
+/// registration as it is written in `golden`, and the least of one.
 #[tokio::test]
 async fn the_examples_of_a_registration_are_taken_as_they_are() {
     let server = start().await;
     let alice = Keys::generate();
     let golden = |name: &str| -> Value {
-        let path = format!("{}/../../spec/golden/{name}", env!("CARGO_MANIFEST_DIR"));
+        let path = format!("{}/../../golden/{name}", env!("CARGO_MANIFEST_DIR"));
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
     };
 

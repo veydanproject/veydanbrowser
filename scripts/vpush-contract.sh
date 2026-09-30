@@ -4,7 +4,7 @@
 #
 # The push server and the messenger share no code: either can be taken out
 # of this repository by itself. What they share is the protocol, written
-# down as examples in VPush/spec/golden. The messenger's tests read a copy
+# down as examples in VPush/golden. The messenger's tests read a copy
 # of that folder; this check fails when the copy differs.
 #
 #   scripts/vpush-contract.sh          compare
@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SERVER=VPush/spec/golden
+SERVER=VPush/golden
 CLIENT=src-tauri/crates/messenger/push/tests/golden
 
 if [ ! -d "$SERVER" ]; then

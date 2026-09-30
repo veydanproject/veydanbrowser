@@ -1,4 +1,4 @@
-//! The examples of `spec/golden` are read by the types, and written back
+//! The examples of `golden` are read by the types, and written back
 //! the same. A change of a type that breaks the protocol fails here.
 
 use serde::de::DeserializeOwned;
@@ -9,7 +9,7 @@ use vpush_proto::{
 };
 
 fn golden(name: &str) -> String {
-    let path = format!("{}/../../spec/golden/{name}", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../../golden/{name}", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
 }
 

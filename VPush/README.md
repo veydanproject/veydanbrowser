@@ -8,8 +8,7 @@ addressed to a user appeared on a relay, and tells the user's device.
 
 **State: 0.3.0.** Devices register, relays are watched, and a message on a
 relay becomes a push through FCM that the phone opens itself. What is
-ahead: commands of the admin by direct message, UnifiedPush; see
-[CHANGELOG.md](CHANGELOG.md).
+ahead: commands of the admin by direct message, UnifiedPush.
 
 ## Layout
 
@@ -19,7 +18,7 @@ crates/vpush-server   the server, as a library
 crates/vpush          the binary: server and admin command line in one file
 deploy/               systemd unit, example config, example deploy settings
 scripts/              build, deploy, rollback
-spec/                 protocol for clients, operations for the one who runs it
+golden/               examples of the protocol, the contract with the clients
 ```
 
 This folder depends on nothing outside itself. It lives in the Veydan Space
@@ -65,5 +64,3 @@ make logs            follow the log
 make rollback        back to the release before this one
 make server-ctl ARGS="log set relay=debug --for 15m"
 ```
-
-Details: [spec/operations.md](spec/operations.md).
