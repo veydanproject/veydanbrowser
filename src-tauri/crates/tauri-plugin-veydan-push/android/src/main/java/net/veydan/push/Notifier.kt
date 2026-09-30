@@ -206,6 +206,11 @@ internal object Notifier {
       .setSmallIcon(R.drawable.ic_stat_veydan)
       .setGroup(GROUP)
       .setGroupSummary(true)
+      // The summary never makes a sound: each chat decides for itself. A
+      // muted chat's notification hands its alert to the summary, and a
+      // summary that took it would ring for a chat the user silenced.
+      .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+      .setOnlyAlertOnce(true)
       .setCategory(NotificationCompat.CATEGORY_MESSAGE)
       .setAutoCancel(true)
       .setContentIntent(open(context, Push.TYPE_DM, null))
