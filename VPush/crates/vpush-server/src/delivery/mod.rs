@@ -77,6 +77,14 @@ pub fn mask(secret: &str) -> String {
     format!("#{hex}")
 }
 
+/// How long a test push waits for the phone.
+///
+/// A phone whose connection to the push service went stale behind a NAT
+/// learns about it only at its next heartbeat, many minutes later. A test
+/// push that lived one minute was dropped in that time, and nothing told
+/// anyone: the service had accepted it.
+pub const TEST_TTL: Duration = Duration::from_secs(600);
+
 /// One push, ready to be sent.
 #[derive(Debug, Clone)]
 pub struct Message {

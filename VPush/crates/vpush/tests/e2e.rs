@@ -511,6 +511,25 @@ fn a_broken_service_account_stops_the_start_with_a_reason() {
     assert!(text.contains("not a service account file"), "{text}");
 }
 
+/// A relay of the test's own, listening.
+///
+/// Left to itself, the relay picks a random port by trying it, and a server
+/// of a test running next to this one may take that port a moment later.
+/// A port the system hands out collides far less, and a relay that lost its
+/// port anyway is replaced: it keeps the first port it was given.
+async fn local_relay() -> nostr_sdk::local_relay::LocalRelay {
+    use nostr_sdk::local_relay::LocalRelay;
+    let mut last = None;
+    for _ in 0..5 {
+        let relay = LocalRelay::builder().port(free_port()).build();
+        match relay.run().await {
+            Ok(()) => return relay,
+            Err(e) => last = Some(e),
+        }
+    }
+    panic!("no port for the local relay: {last:?}");
+}
+
 /// A request signed the way a client signs it (NIP-98).
 fn signed(keys: &nostr::key::Keys, method: &str, url: &str, body: &[u8]) -> String {
     use base64::Engine;
@@ -535,12 +554,10 @@ fn signed(keys: &nostr::key::Keys, method: &str, url: &str, body: &[u8]) -> Stri
 #[tokio::test(flavor = "multi_thread")]
 async fn a_message_on_a_gated_relay_becomes_a_push_and_the_key_of_the_relay_stays_out_of_the_log() {
     use nostr::prelude::*;
-    use nostr_sdk::local_relay::LocalRelay;
 
     const GATE_KEY: &str = "gate-key-0123456789abcdef0123456789abcdef";
 
-    let relay = LocalRelay::new();
-    relay.run().await.unwrap();
+    let relay = local_relay().await;
     let relay_url = relay.url().await.to_string().trim_end_matches('/').to_string();
 
     let sent = wiremock::ResponseTemplate::new(200)

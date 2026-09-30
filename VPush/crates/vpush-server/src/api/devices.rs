@@ -22,7 +22,7 @@ use vpush_proto::{
 use super::{error, now, Api, RequestId};
 use crate::auth::AuthError;
 use crate::delivery::retry::{self, RetryPolicy};
-use crate::delivery::{mask, Message, Outcome, ProviderKind, Target};
+use crate::delivery::{mask, Message, Outcome, ProviderKind, Target, TEST_TTL};
 use crate::store::{Device, DeviceInput, StoreError, WatchedRelay};
 use crate::texts::Texts;
 
@@ -523,7 +523,7 @@ pub async fn test(
         let message = Message {
             payload,
             collapse_key: None,
-            ttl: Duration::from_secs(60),
+            ttl: TEST_TTL,
             urgent: true,
         };
         let target = Target {

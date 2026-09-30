@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use tokio::net::TcpListener;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{signal, Signal, SignalKind};
 use tokio::sync::watch;
 
 use crate::admin::{AdminSocket, AdminState};
@@ -55,6 +55,12 @@ pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
         tracing::info!(app, providers = kinds, "app");
     }
 
+    // A second server started by mistake stops here, before it touches the
+    // database of the one that runs.
+    let admin = AdminSocket::bind(&config.admin.socket)
+        .await
+        .with_context(|| format!("admin socket {}", config.admin.socket.display()))?;
+
     let sqlite = SqliteStore::open(&config.store.path).await?;
     tracing::info!(
         path = %config.store.path.display(),
@@ -73,12 +79,12 @@ pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
     );
     let watcher = Watch::new();
 
-    let admin = AdminSocket::bind(&config.admin.socket)
-        .await
-        .with_context(|| format!("admin socket {}", config.admin.socket.display()))?;
     let listener = TcpListener::bind(config.listen_addr())
         .await
         .with_context(|| format!("listen on {}", config.server.listen))?;
+    // Before "ready": a SIGHUP that came right after it would otherwise meet
+    // the default action and end the process without a word.
+    let signals = listen_signals();
     tracing::info!(
         listen = %listener.local_addr()?,
         admin_socket = %config.admin.socket.display(),
@@ -86,7 +92,7 @@ pub async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
     );
 
     let (stop_tx, stop_rx) = watch::channel(false);
-    tokio::spawn(watch_signals(stop_tx, config_path, Arc::clone(&log)));
+    tokio::spawn(watch_signals(signals, stop_tx, config_path, Arc::clone(&log)));
 
     let watch_task = tokio::spawn(crate::relay::run(
         Arc::clone(&watcher),
@@ -140,14 +146,37 @@ async fn stopped(mut rx: watch::Receiver<bool>) {
     }
 }
 
-/// SIGINT and SIGTERM stop the server; SIGHUP re-reads the config.
-async fn watch_signals(stop: watch::Sender<bool>, config_path: PathBuf, log: Arc<LogControl>) {
-    let (Ok(mut int), Ok(mut term), Ok(mut hup)) = (
+/// SIGINT, SIGTERM and SIGHUP, taken from their default actions.
+struct Signals {
+    int: Signal,
+    term: Signal,
+    hup: Signal,
+}
+
+/// The default actions are replaced as this returns, not when somebody
+/// first waits for a signal.
+fn listen_signals() -> Option<Signals> {
+    match (
         signal(SignalKind::interrupt()),
         signal(SignalKind::terminate()),
         signal(SignalKind::hangup()),
-    ) else {
-        tracing::error!("cannot listen for signals; stop the server with SIGKILL");
+    ) {
+        (Ok(int), Ok(term), Ok(hup)) => Some(Signals { int, term, hup }),
+        _ => {
+            tracing::error!("cannot listen for signals; stop the server with SIGKILL");
+            None
+        }
+    }
+}
+
+/// SIGINT and SIGTERM stop the server; SIGHUP re-reads the config.
+async fn watch_signals(
+    signals: Option<Signals>,
+    stop: watch::Sender<bool>,
+    config_path: PathBuf,
+    log: Arc<LogControl>,
+) {
+    let Some(Signals { mut int, mut term, mut hup }) = signals else {
         return;
     };
     loop {

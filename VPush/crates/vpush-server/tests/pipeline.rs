@@ -35,11 +35,27 @@ struct Relay {
     url: String,
 }
 
+/// Left to itself, a local relay picks a random port by trying it, and a
+/// test running next to this one may take that port a moment later. A port
+/// the system hands out collides far less, and a relay that lost its port
+/// anyway is replaced: it keeps the first port it was given.
 async fn relay() -> Relay {
-    let relay = LocalRelay::new();
-    relay.run().await.unwrap();
-    let url = normalize(relay.url().await.as_str()).unwrap();
-    Relay { relay, url }
+    let mut last = None;
+    for _ in 0..5 {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .unwrap()
+            .port();
+        let relay = LocalRelay::builder().port(port).build();
+        match relay.run().await {
+            Ok(()) => {
+                let url = normalize(relay.url().await.as_str()).unwrap();
+                return Relay { relay, url };
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    panic!("no port for the local relay: {last:?}");
 }
 
 impl Relay {

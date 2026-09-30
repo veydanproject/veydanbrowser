@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::delivery::retry::{self, RetryPolicy};
-use crate::delivery::{mask, Message, ProviderKind, Providers, Target};
+use crate::delivery::{mask, Message, ProviderKind, Providers, Target, TEST_TTL};
 use crate::store::{Device, Store};
 use crate::relay::Watch;
 use crate::logging::{LogControl, LogSpec};
@@ -325,7 +325,7 @@ async fn test_push(
     let message = Message {
         payload,
         collapse_key: None,
-        ttl: Duration::from_secs(60),
+        ttl: TEST_TTL,
         urgent: true,
     };
     let target = Target { token };
