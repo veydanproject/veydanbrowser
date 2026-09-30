@@ -18,6 +18,9 @@
 //! forwarding call, it belongs in a messenger crate.
 
 pub mod push;
+// Notifications of a computer: the app shows them itself while it runs.
+#[cfg(desktop)]
+pub mod desktop_notify;
 // The push handler's entry into the messenger: a JNI export, Android only.
 #[cfg(target_os = "android")]
 pub mod notify_jni;
@@ -64,6 +67,8 @@ const DATA_SUBDIR: &str = "messenger";
 pub struct MessengerState {
     runtime: Option<Arc<MessengerRuntime>>,
     start_error: Option<String>,
+    #[cfg(desktop)]
+    desktop: Option<Arc<desktop_notify::DesktopNotify>>,
 }
 
 impl MessengerState {
@@ -83,12 +88,27 @@ impl MessengerState {
                 spawn_relay_status_watcher(app.clone(), rt.clone());
                 #[cfg(target_os = "android")]
                 push::spawn_bridge(app.clone(), rt.clone());
+                #[cfg(desktop)]
+                let desktop = desktop_notify::DesktopNotify::start(app.clone(), rt.clone());
+                #[cfg(desktop)]
+                spawn_ui_event_forwarder(app, rt.clone(), desktop.clone());
+                #[cfg(not(desktop))]
                 spawn_ui_event_forwarder(app, rt.clone());
-                Self { runtime: Some(rt), start_error: None }
+                Self {
+                    runtime: Some(rt),
+                    start_error: None,
+                    #[cfg(desktop)]
+                    desktop: Some(desktop),
+                }
             }
             Err(e) => {
                 eprintln!("messenger: start failed: {e}");
-                Self { runtime: None, start_error: Some(e.to_string()) }
+                Self {
+                    runtime: None,
+                    start_error: Some(e.to_string()),
+                    #[cfg(desktop)]
+                    desktop: None,
+                }
             }
         }
     }
@@ -97,6 +117,21 @@ impl MessengerState {
         self.runtime
             .as_ref()
             .ok_or_else(|| AppError::Other(self.start_error.clone().unwrap_or_default()))
+    }
+
+    #[cfg(desktop)]
+    pub(crate) fn desktop(&self) -> Option<Arc<desktop_notify::DesktopNotify>> {
+        self.desktop.clone()
+    }
+
+    /// The chat was read, or the page was seen: its notifications go.
+    pub(crate) fn notices_seen(&self, key: Option<&str>) {
+        #[cfg(desktop)]
+        if let Some(d) = &self.desktop {
+            d.clear(key);
+        }
+        #[cfg(not(desktop))]
+        let _ = key;
     }
 }
 
@@ -117,13 +152,24 @@ fn spawn_relay_status_watcher(app: tauri::AppHandle, rt: Arc<MessengerRuntime>) 
     });
 }
 
-/// Forwards runtime UI events to the webview as `EVENT_RUNTIME`.
-fn spawn_ui_event_forwarder(app: tauri::AppHandle, rt: Arc<MessengerRuntime>) {
+/// Forwards runtime UI events to the webview as `EVENT_RUNTIME`. On a
+/// computer a `notify` goes by the notifications first: when the system
+/// shows it, the event says so (`os: true`) and the page shows no card.
+fn spawn_ui_event_forwarder(
+    app: tauri::AppHandle,
+    rt: Arc<MessengerRuntime>,
+    #[cfg(desktop)] desktop: Arc<desktop_notify::DesktopNotify>,
+) {
     tauri::async_runtime::spawn(async move {
         let mut rx = rt.ui_events();
         loop {
             match rx.recv().await {
-                Ok(ev) => {
+                #[allow(unused_mut)]
+                Ok(mut ev) => {
+                    #[cfg(desktop)]
+                    if ev.name == "notify" && desktop.take(&ev.payload).await {
+                        ev.payload["os"] = serde_json::Value::Bool(true);
+                    }
                     let _ = app.emit(EVENT_RUNTIME, &ev);
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -518,7 +564,9 @@ pub async fn messenger_chat_shared(
 
 #[tauri::command]
 pub async fn messenger_chat_mark_read(chat_id: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
-    state.messenger.runtime()?.dm().mark_read(&chat_id).await.map_err(map_err)
+    state.messenger.runtime()?.dm().mark_read(&chat_id).await.map_err(map_err)?;
+    state.messenger.notices_seen(Some(&chat_id));
+    Ok(())
 }
 
 #[tauri::command]

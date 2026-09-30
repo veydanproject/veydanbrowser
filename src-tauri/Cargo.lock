@@ -1474,6 +1474,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "desktop-notify"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "diffy"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7944,6 +7953,7 @@ dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
  "chrono",
+ "desktop-notify",
  "diffy",
  "dirs",
  "futures-util",

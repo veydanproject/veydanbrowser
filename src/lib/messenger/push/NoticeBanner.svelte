@@ -22,7 +22,8 @@
   import { nameStore } from '../groups/names.svelte';
   import { BASE, chatHref } from '../mobile/routes';
 
-  interface Notify { title: string; body: string | null; chat_id: string | null; sender: string | null; request?: boolean }
+  /** `os`: a computer's system shows it already (the window was not on the screen). */
+  interface Notify { title: string; body: string | null; chat_id: string | null; sender: string | null; request?: boolean; os?: boolean }
 
   interface Card {
     key: string;
@@ -40,6 +41,12 @@
     dy: number;
     gone: boolean;
   }
+
+  /**
+   * `onopen`: how the shell opens a chat (a desk has it in place); a phone
+   * goes to the chat's page. `corner`: under the title bar on the right.
+   */
+  let { onopen, corner = false }: { onopen?: (chatId: string | null) => void; corner?: boolean } = $props();
 
   const SHOWN_FOR_MS = 5000;
   const MAX_CARDS = 3;
@@ -65,6 +72,7 @@
   });
 
   function arrive(n: Notify) {
+    if (n.os) return;
     // The chat it is about is on the screen: the message is already there.
     if (n.chat_id && page.url.pathname.startsWith(BASE) && chatStore.activeId === n.chat_id) return;
     const chat = n.chat_id ? chatStore.chats.find((c) => c.id === n.chat_id) : undefined;
@@ -117,7 +125,8 @@
 
   function open(card: Card) {
     dismiss(card.key);
-    goto(card.chatId ? chatHref(card.chatId) : BASE);
+    if (onopen) onopen(card.chatId);
+    else goto(card.chatId ? chatHref(card.chatId) : BASE);
   }
 
   // ─── Touch ────────────────────────────────────────────────────────────
@@ -161,7 +170,7 @@
 </script>
 
 {#if cards.length}
-  <div class="stack" aria-live="polite">
+  <div class="stack" class:corner aria-live="polite">
     {#each cards as card (card.key)}
       {@const f = face(card)}
       <div
@@ -212,6 +221,8 @@
     display: flex; flex-direction: column; gap: 8px; align-items: center;
     pointer-events: none;
   }
+  /* A desk: the corner under the title bar, out of the way of the chat. */
+  .stack.corner { top: 52px; left: auto; right: 16px; width: 360px; align-items: stretch; }
   .card {
     position: relative; overflow: hidden; pointer-events: auto; touch-action: none; user-select: none;
     width: 100%; max-width: 420px;

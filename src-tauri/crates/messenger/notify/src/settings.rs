@@ -60,3 +60,33 @@ impl Settings {
         settings::set_bool(store, KEY_LOCKSCREEN_HIDDEN, self.lockscreen_hidden).await
     }
 }
+
+pub const KEY_DESKTOP_ENABLED: &str = "notify.desktop.enabled";
+pub const KEY_DESKTOP_SOUND: &str = "notify.desktop.sound";
+
+/// Notifications of a computer: the app itself shows them while it runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DesktopSettings {
+    pub enabled: bool,
+    pub sound: bool,
+}
+
+impl Default for DesktopSettings {
+    fn default() -> Self {
+        Self { enabled: true, sound: true }
+    }
+}
+
+impl DesktopSettings {
+    pub async fn load(store: &Store) -> Result<Self> {
+        Ok(Self {
+            enabled: settings::get_bool(store, KEY_DESKTOP_ENABLED, true).await?,
+            sound: settings::get_bool(store, KEY_DESKTOP_SOUND, true).await?,
+        })
+    }
+
+    pub async fn save(&self, store: &Store) -> Result<()> {
+        settings::set_bool(store, KEY_DESKTOP_ENABLED, self.enabled).await?;
+        settings::set_bool(store, KEY_DESKTOP_SOUND, self.sound).await
+    }
+}

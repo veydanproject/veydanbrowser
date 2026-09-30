@@ -1131,6 +1131,14 @@ fn run_desktop() {
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_clear,
             #[cfg(feature = "messenger")]
+            commands::messenger::desktop_notify::messenger_desktop_notify_get,
+            #[cfg(feature = "messenger")]
+            commands::messenger::desktop_notify::messenger_desktop_notify_set,
+            #[cfg(feature = "messenger")]
+            commands::messenger::desktop_notify::messenger_desktop_notify_test,
+            #[cfg(feature = "messenger")]
+            commands::messenger::desktop_notify::messenger_notice_words,
+            #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_notify_get,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_notify_set,

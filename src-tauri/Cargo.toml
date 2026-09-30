@@ -56,8 +56,9 @@ rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"],
 
 [features]
 default = []
-# The push bridge exists on Android only; elsewhere the name stands for nothing.
-messenger = ["dep:messenger-core", "dep:messenger-runtime", "dep:messenger-notify", "dep:rustls", "dep:tauri-plugin-veydan-push"]
+# The push bridge exists on Android only, desktop-notify on computers only;
+# elsewhere the names stand for nothing.
+messenger = ["dep:messenger-core", "dep:messenger-runtime", "dep:messenger-notify", "dep:rustls", "dep:tauri-plugin-veydan-push", "dep:desktop-notify"]
 
 # ── Desktop only: browser, proxies, SSH/SFTP, backup, tray, updater ──────────
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
@@ -68,6 +69,9 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-global-shortcut = "2"
+# Notifications of the messenger on a computer (D-Bus, WinRT, UserNotifications).
+# Compiled in with the `messenger` feature only.
+desktop-notify = { path = "crates/desktop-notify", optional = true }
 # Open http(s) links in the system browser without going through a shell
 tauri-plugin-opener = "2"
 url = "2"

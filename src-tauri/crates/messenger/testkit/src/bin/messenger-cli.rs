@@ -12,6 +12,7 @@
 //! messenger-cli [--data-dir DIR] relay-add <wss-url> [--key API_KEY]
 //! messenger-cli [--data-dir DIR] send <npub|hex> <text…>
 //! messenger-cli [--data-dir DIR] tail
+//! messenger-cli [--data-dir DIR] notify-tail
 //! messenger-cli [--data-dir DIR] sync [SECONDS]
 //! messenger-cli [--data-dir DIR] chats
 //! messenger-cli [--data-dir DIR] history <npub|hex>
@@ -35,7 +36,7 @@ use std::time::Duration;
 fn usage() -> ! {
     eprintln!(
         "usage: messenger-cli [--data-dir DIR] <keygen [--password PW] | import <nsec|ncryptsec> <secret> [--password PW] \
-         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] | push-status | push-test | push-off | profile-set <name> [picture] | wrap <to> <text…> | notify-describe <event.json> [--type dm|group] [--group ID]>"
+         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | notify-tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] | push-status | push-test | push-off | profile-set <name> [picture] | wrap <to> <text…> | notify-describe <event.json> [--type dm|group] [--group ID]>"
     );
     std::process::exit(2)
 }
@@ -140,6 +141,28 @@ async fn main() {
                 tokio::select! {
                     ev = rx.recv() => match ev {
                         Ok(e) => println!("{} {}", e.name, e.payload),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => eprintln!("(lagged {n})"),
+                        Err(_) => break,
+                    },
+                    _ = tokio::signal::ctrl_c() => break,
+                }
+            }
+        }
+        "notify-tail" => {
+            // What a computer would show for each live message: the runtime's
+            // `notify`, told the way a push is (`live_notice`).
+            wait_connect(&rt).await;
+            eprintln!("listening for notices — Ctrl-C to stop");
+            let mut rx = rt.ui_events();
+            loop {
+                tokio::select! {
+                    ev = rx.recv() => match ev {
+                        Ok(e) if e.name == "notify" => {
+                            let notice: messenger_core::Notice = serde_json::from_value(e.payload).unwrap_or_else(|e| die(messenger_core::MessengerError::Invalid(e.to_string())));
+                            let outcome = rt.live_notice(&notice, false).await.unwrap_or_else(die);
+                            println!("{}", serde_json::to_string(&outcome).unwrap());
+                        }
+                        Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => eprintln!("(lagged {n})"),
                         Err(_) => break,
                     },

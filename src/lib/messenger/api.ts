@@ -471,6 +471,28 @@ export interface MessengerNotifySettings {
   locked: boolean;
 }
 
+/** Notifications of this computer: the app shows them itself while it runs. */
+export interface MessengerDesktopNotify {
+  enabled: boolean;
+  sound: boolean;
+  /** The system can show notifications (a notification server, an app bundle). */
+  available: boolean;
+  /** Closing the window keeps the app running; otherwise nothing comes after it. */
+  close_to_tray: boolean;
+}
+
+/** The words a notification of the system is made of, `{n}` left for the number. */
+export interface MessengerNoticeWords {
+  app: string;
+  new_message: string;
+  new_messages: string;
+  more: string;
+  request: string;
+  group_invite: string;
+  group_request: string;
+  group_welcome: string;
+}
+
 export interface MessengerPushTap {
   type: string;
   /** `dm:<pubkey>` or `group:<id>`; null when the phone could not say whose the message was. */
@@ -526,6 +548,7 @@ let mockRelays: MessengerRelay[] = [
   { url: 'wss://nos.lol', relay_id: 'pub-nos', source: 'manifest', regions: ['default'], read: true, write: true, enabled: false, auth_type: null, state: 'disconnected' },
 ];
 let mockNotify: MessengerNotifySettings = { content: 'sender_text', lockscreen_hidden: false, locked: false };
+let mockDesktopNotify: MessengerDesktopNotify = { enabled: true, sound: true, available: true, close_to_tray: false };
 let mockPush: MessengerPushView = {
   device: { supported: true, available: true, reason: null, detail: null, permission: 'prompt' },
   status: {
@@ -890,6 +913,10 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_push_take_tap: () => null,
   messenger_push_clear: () => undefined,
   messenger_notify_get: () => mockNotify,
+  messenger_desktop_notify_get: () => mockDesktopNotify,
+  messenger_desktop_notify_set: (a) => { mockDesktopNotify = { ...mockDesktopNotify, enabled: Boolean(a?.enabled), sound: Boolean(a?.sound) }; return mockDesktopNotify; },
+  messenger_desktop_notify_test: () => undefined,
+  messenger_notice_words: () => undefined,
   messenger_notify_set: (a) => { mockNotify = { ...mockNotify, content: a?.content as MessengerNotifySettings['content'], lockscreen_hidden: Boolean(a?.lockscreenHidden) }; return mockNotify; },
 };
 
@@ -966,6 +993,14 @@ export const messengerApi = {
       invoke<MessengerNotifySettings>('messenger_notify_set', { content, lockscreenHidden }),
     /** `dm`, `group:<id>`, or nothing for every notification about messages. */
     clear: (key?: string) => invoke<void>('messenger_push_clear', { key: key ?? null }),
+  },
+
+  /** A computer's own notifications (no push: the app runs and shows them). */
+  desktopNotify: {
+    get: () => invoke<MessengerDesktopNotify>('messenger_desktop_notify_get'),
+    set: (enabled: boolean, sound: boolean) => invoke<MessengerDesktopNotify>('messenger_desktop_notify_set', { enabled, sound }),
+    test: (title: string, body: string) => invoke<void>('messenger_desktop_notify_test', { title, body }),
+    words: (words: MessengerNoticeWords) => invoke<void>('messenger_notice_words', { words }),
   },
 
   relays: {

@@ -124,7 +124,7 @@ pub enum Effect {
 }
 
 /// Something to tell the user about.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notice {
     /// The chat as the list names it (a person, a group).
     pub title: String,

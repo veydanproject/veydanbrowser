@@ -23,7 +23,8 @@ export function onChatOpened(fn: (chatId: string) => void | Promise<void>): () =
   return () => { if (show === fn) show = before; };
 }
 
-async function openChat(chatId: string) {
+/** Opens a chat and shows it, wherever the user was in the messenger. */
+export async function openChat(chatId: string) {
   await chatStore.loadChats();
   await chatStore.open(chatId);
   await show(chatId);

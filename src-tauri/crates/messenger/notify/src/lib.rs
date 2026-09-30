@@ -16,12 +16,14 @@
 pub mod bundle;
 pub mod describe;
 pub mod fetch;
+pub mod live;
 pub mod notice;
 pub mod push;
 pub mod settings;
 
 pub use bundle::{GroupKeyEntry, KeyBundle};
 pub use describe::describe;
+pub use live::{live, Face};
 pub use notice::{Body, ChatKind, Notice, Outcome, Plain, Reason};
 pub use push::{PushData, PushKind};
-pub use settings::{Content, Settings};
+pub use settings::{Content, DesktopSettings, Settings};

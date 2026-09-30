@@ -19,6 +19,7 @@
   import SettingsView from './SettingsView.svelte';
   import ConfirmHost from '../shared/ConfirmHost.svelte';
   import type { MessengerChat } from '../api';
+  import { onChatOpened } from '../content/actions';
 
   type View = 'chat' | 'contacts' | 'settings';
   let view = $state<View>('chat');
@@ -30,6 +31,8 @@
     messengerStore.refresh().catch(() => {});
     messengerStore.startListeners().catch(() => {});
   });
+  // A chat opened from elsewhere (a link, a notification) is shown here.
+  onMount(() => onChatOpened(() => { view = 'chat'; }));
 
   const s = $derived(messengerStore.status);
   const connected = $derived(s?.runtime?.relays_connected ?? 0);

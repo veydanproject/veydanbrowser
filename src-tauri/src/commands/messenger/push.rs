@@ -356,7 +356,10 @@ pub async fn messenger_push_clear(key: Option<String>, app: tauri::AppHandle) ->
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (key, app);
+        use tauri::Manager;
+        if let Some(state) = app.try_state::<AppState>() {
+            state.messenger.notices_seen(key.as_deref());
+        }
         Ok(())
     }
 }

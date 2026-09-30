@@ -36,6 +36,8 @@
   import { profilesStore } from '$lib/store/profiles.svelte';
   import { syncStore } from '$lib/store/sync.svelte';
   import { messengerStore } from '$lib/messenger/store.svelte';
+  import NoticeBanner from '$lib/messenger/push/NoticeBanner.svelte';
+  import { openFromNotice, startDesktopNotices } from '$lib/messenger/push/desktop';
   import UIInspector from '$lib/inspector/UIInspector.svelte';
   import { inspectorApp } from '$lib/inspector/inspector.svelte';
   import { matches, stockHistoryChord } from '$lib/keybindings';
@@ -250,6 +252,9 @@
           listen('tray://open-pwgen', () => { pwgenOpen = true; }),
         ];
 
+    // The messenger's notifications: words for the system, clicks back to a chat.
+    const stopNotices = standaloneNotes || !isTauri ? Promise.resolve(() => {}) : startDesktopNotices().catch(() => () => {});
+
     let updateTimer: ReturnType<typeof setTimeout> | undefined;
     if (!standaloneNotes) {
       updaterStore.init();
@@ -266,6 +271,7 @@
       unlistenSyncData.then((fn) => fn());
       unsubLocale();
       trayUnlisteners.forEach((p) => p.then((fn) => fn()));
+      stopNotices.then((fn) => fn());
       unlistenMax?.();
     };
   });
@@ -440,6 +446,9 @@
 {/if}
 {#if !standaloneNotes && !notesLock.locked}
   <PasswordGenerator bind:open={pwgenOpen} />
+  {#if messengerStore.visible}
+    <NoticeBanner corner onopen={(chat) => openFromNotice(chat).catch(() => {})} />
+  {/if}
   <TotpGenerator bind:open={totpOpen} context="global" />
   <PasswordDrawer bind:open={passwordsOpen} context="global" />
 {/if}

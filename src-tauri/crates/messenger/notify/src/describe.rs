@@ -287,6 +287,6 @@ async fn plain(store: &Store, push: &PushData) -> Result<Plain> {
 
 /// Pictures come from profiles anyone can write: only https addresses are
 /// passed on, as the app itself shows no others.
-fn https(picture: Option<String>) -> Option<String> {
+pub(crate) fn https(picture: Option<String>) -> Option<String> {
     picture.filter(|p| p.starts_with("https://") && p.len() <= 2048)
 }
