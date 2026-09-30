@@ -212,9 +212,13 @@ impl Describe {
         if group.membership != MEMBERSHIP_JOINED {
             return Ok(Outcome::Quiet { reason: Reason::NotForMe });
         }
-        let message = match wire::open(group_id, key, ciphertext)? {
-            Opened::Message(m) => m,
-            Opened::Op { .. } | Opened::Chain(_) => return Ok(Outcome::Quiet { reason: Reason::NotAMessage }),
+        // The key is one this phone has, and what came does not open with
+        // it or is not signed by its author: not a message of the group,
+        // whoever sent it. Nothing is shown for it.
+        let message = match wire::open(group_id, key, ciphertext) {
+            Ok(Opened::Message(m)) => m,
+            Ok(Opened::Op { .. } | Opened::Chain(_)) => return Ok(Outcome::Quiet { reason: Reason::NotAMessage }),
+            Err(_) => return Ok(Outcome::Quiet { reason: Reason::Invalid }),
         };
         if message.author == self.me {
             return Ok(Outcome::Quiet { reason: Reason::Own });

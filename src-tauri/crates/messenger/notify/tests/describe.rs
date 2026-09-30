@@ -371,3 +371,27 @@ async fn without_keys_the_group_is_still_named() {
     let dm = describe(&phone.dir.path().join("messenger"), None, &push_with(&[("type", "dm"), ("event", "{}")])).await.unwrap();
     assert!(plain(dm).chat.is_none());
 }
+
+#[tokio::test]
+async fn what_does_not_open_with_a_key_the_phone_has_says_nothing() {
+    let phone = Phone::new().await;
+    let (gid, bob, key) = group_with_bob(&phone).await;
+
+    // Anybody can publish an event with the group's id and the id of its
+    // key on it; without the key, what is inside is noise.
+    let mut forged = group_message(&gid, &key, &bob, &Envelope::text("x"), 1_000_000);
+    forged["content"] = serde_json::Value::String("bm90IGEgbWVzc2FnZSBvZiB0aGUgZ3JvdXA=".into());
+    let resigned = {
+        use nostr::prelude::*;
+        let once = Keys::generate();
+        let tags: Vec<Tag> = forged["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| Tag::parse(t.as_array().unwrap().iter().map(|s| s.as_str().unwrap())).unwrap())
+            .collect();
+        let event = EventBuilder::new(Kind::from(9u16), forged["content"].as_str().unwrap()).tags(tags).finalize(&once).unwrap();
+        serde_json::to_value(&event).unwrap()
+    };
+    assert_eq!(quiet(phone.describe(group_push(&gid, &resigned)).await), Reason::Invalid);
+}
