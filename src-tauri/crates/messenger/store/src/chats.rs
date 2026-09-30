@@ -18,11 +18,13 @@ pub struct ChatRow {
     pub last_preview: Option<String>,
     pub pinned: bool,
     pub archived: bool,
+    /// No sound from this chat; what comes is still counted and shown.
+    pub muted: bool,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
-const COLS: &str = "id, kind, peer_pubkey, unread, last_message_at, last_preview, pinned, archived, created_at, updated_at";
+const COLS: &str = "id, kind, peer_pubkey, unread, last_message_at, last_preview, pinned, archived, muted, created_at, updated_at";
 
 pub fn dm_chat_id(peer_pubkey: &str) -> String {
     format!("dm:{peer_pubkey}")
@@ -33,8 +35,8 @@ pub async fn ensure_dm(store: &Store, peer_pubkey: &str) -> Result<ChatRow> {
     let id = dm_chat_id(peer_pubkey);
     let now = crate::now();
     sqlx::query(
-        "INSERT OR IGNORE INTO msg_chats (id, kind, peer_pubkey, unread, last_message_at, last_preview, pinned, archived, created_at, updated_at)
-         VALUES (?, 'dm', ?, 0, NULL, NULL, 0, 0, ?, ?)",
+        "INSERT OR IGNORE INTO msg_chats (id, kind, peer_pubkey, unread, last_message_at, last_preview, pinned, archived, muted, created_at, updated_at)
+         VALUES (?, 'dm', ?, 0, NULL, NULL, 0, 0, 0, ?, ?)",
     )
     .bind(&id)
     .bind(peer_pubkey)
@@ -147,6 +149,22 @@ pub async fn set_archived(store: &Store, id: &str, archived: bool) -> Result<()>
     Ok(())
 }
 
+pub async fn set_muted(store: &Store, id: &str, muted: bool) -> Result<()> {
+    sqlx::query("UPDATE msg_chats SET muted = ?, updated_at = ? WHERE id = ?")
+        .bind(muted)
+        .bind(crate::now())
+        .bind(id)
+        .execute(store.pool())
+        .await
+        .map_err(storage)?;
+    Ok(())
+}
+
+/// A chat that does not exist yet is not muted.
+pub async fn is_muted(store: &Store, id: &str) -> Result<bool> {
+    Ok(get(store, id).await?.map(|c| c.muted).unwrap_or(false))
+}
+
 /// Remove the chat and every message in it (local only; relays keep the
 /// ciphertext, and history sync would bring visible rows back unless the
 /// caller also records the retraction).
@@ -192,6 +210,13 @@ mod tests {
 
         mark_read(&s, "dm:aa").await.unwrap();
         assert_eq!(get(&s, "dm:aa").await.unwrap().unwrap().unread, 0);
+        assert!(!is_muted(&s, "dm:aa").await.unwrap());
+        assert!(!is_muted(&s, "dm:nobody").await.unwrap(), "a chat that does not exist is not muted");
+        set_muted(&s, "dm:aa", true).await.unwrap();
+        assert!(is_muted(&s, "dm:aa").await.unwrap());
+        touch(&s, "dm:aa", t0 + 1, Some("still counted"), true).await.unwrap();
+        assert_eq!(get(&s, "dm:aa").await.unwrap().unwrap().unread, 1, "muted chats still count unread");
+        mark_read(&s, "dm:aa").await.unwrap();
         set_archived(&s, "dm:aa", true).await.unwrap();
         assert_eq!(list(&s, false).await.unwrap().len(), 1);
         assert_eq!(list(&s, true).await.unwrap().len(), 2);

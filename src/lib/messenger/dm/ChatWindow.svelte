@@ -147,6 +147,7 @@
     }
     list.push({ type: "separator" });
     list.push({ label: chat.pinned ? $t("msg_chat_unpin") : $t("msg_chat_pin"), icon: "pin", onselect: () => chatStore.setPinned(chat.id, !chat.pinned) });
+    list.push({ label: chat.is_muted ? $t("msg_chat_unmute") : $t("msg_chat_mute"), icon: chat.is_muted ? "bell" : "bell-off", onselect: () => chatStore.setMuted(chat.id, !chat.is_muted) });
     list.push({ label: chat.archived ? $t("msg_chat_unarchive") : $t("msg_chat_archive"), icon: "archive", onselect: () => chatStore.setArchived(chat.id, !chat.archived) });
     // A group is left, not deleted: its own entries say how.
     if (!isGroup) list.push({ label: $t("msg_chat_delete"), icon: "trash-2", danger: true, onselect: async () => { if (await confirmStore.ask($t("msg_chat_delete_confirm", { name: chat.title }), $t("msg_chat_delete"), true)) { await chatStore.deleteChat(chat.id); onback?.(); } } });

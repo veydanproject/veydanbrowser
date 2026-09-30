@@ -59,7 +59,7 @@ export function buildDemo(): DemoData {
     const p = profile(pk, name, about, nip05);
     const isContact = mode === 'full_chat' || mode === 'request_sent' || mode === 'removed_by_peer';
     if (isContact) {
-      contacts.push({ pubkey: pk, npub: p.npub, nickname: null, note: null, is_muted: name === 'Борис', notification_level: 'all', followed: name === 'Алиса Морозова', profile: p, created_at: now - 86400 * 9, updated_at: now - 3600 });
+      contacts.push({ pubkey: pk, npub: p.npub, nickname: null, note: null, followed: name === 'Алиса Морозова', profile: p, created_at: now - 86400 * 9, updated_at: now - 3600 });
     }
     const id = `dm:${pk}`;
     chats.push({ id, kind: 'dm', peer_pubkey: pk, peer_npub: p.npub, title: name, picture: null, is_contact: isContact, is_muted: name === 'Борис', unread: 0, last_message_at: null, last_preview: null, pinned: name === 'Алиса Морозова', archived: false, mode, can_send: canSend });

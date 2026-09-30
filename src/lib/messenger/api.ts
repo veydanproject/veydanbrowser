@@ -65,8 +65,6 @@ export interface MessengerContact {
   npub: string;
   nickname: string | null;
   note: string | null;
-  is_muted: boolean;
-  notification_level: 'all' | 'mentions' | 'none';
   followed: boolean;
   profile: MessengerProfile | null;
   created_at: number;
@@ -76,8 +74,6 @@ export interface MessengerContact {
 export interface MessengerContactPatch {
   nickname?: string | null;
   note?: string | null;
-  is_muted?: boolean;
-  notification_level?: 'all' | 'mentions' | 'none';
 }
 
 /** Display label: nickname → profile name → short npub. */
@@ -638,6 +634,7 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_chat_mark_read: (a) => { mockChats = mockChats.map((c) => c.id === a?.chatId ? { ...c, unread: 0 } : c); },
   messenger_chat_set_pinned: (a) => { mockChats = mockChats.map((c) => c.id === a?.chatId ? { ...c, pinned: Boolean(a?.pinned) } : c); },
   messenger_chat_set_archived: (a) => { mockChats = mockChats.map((c) => c.id === a?.chatId ? { ...c, archived: Boolean(a?.archived) } : c); },
+  messenger_chat_set_muted: (a) => { mockChats = mockChats.map((c) => c.id === a?.chatId ? { ...c, is_muted: Boolean(a?.muted) } : c); },
   messenger_chat_delete: (a) => { mockChats = mockChats.filter((c) => c.id !== a?.chatId); },
   messenger_dm_send_text: (a) => {
     const c = mockChat(String(a?.to));
@@ -816,7 +813,7 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_nip05_verify: () => false,
   messenger_contacts_list: () => mockContacts,
   messenger_contacts_add: (a) => {
-    const c: MessengerContact = { pubkey: 'ef'.repeat(32), npub: 'npub1mockcontactmockcontactmockcontactmockcontactmockcontact0000', nickname: (a?.nickname as string) ?? null, note: null, is_muted: false, notification_level: 'all', followed: false, profile: null, created_at: Date.now() / 1000, updated_at: Date.now() / 1000 };
+    const c: MessengerContact = { pubkey: 'ef'.repeat(32), npub: 'npub1mockcontactmockcontactmockcontactmockcontactmockcontact0000', nickname: (a?.nickname as string) ?? null, note: null, followed: false, profile: null, created_at: Date.now() / 1000, updated_at: Date.now() / 1000 };
     mockContacts = [c, ...mockContacts];
     return c;
   },
@@ -983,6 +980,8 @@ export const messengerApi = {
     markRead: (chatId: string) => invoke<void>('messenger_chat_mark_read', { chatId }),
     setPinned: (chatId: string, pinned: boolean) => invoke<void>('messenger_chat_set_pinned', { chatId, pinned }),
     setArchived: (chatId: string, archived: boolean) => invoke<void>('messenger_chat_set_archived', { chatId, archived }),
+    /** Direct chats and groups alike: a muted chat is still counted and shown, only quietly. */
+    setMuted: (chatId: string, muted: boolean) => invoke<void>('messenger_chat_set_muted', { chatId, muted }),
     delete: (chatId: string) => invoke<void>('messenger_chat_delete', { chatId }),
   },
 

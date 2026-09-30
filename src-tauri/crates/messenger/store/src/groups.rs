@@ -60,8 +60,8 @@ pub async fn upsert(store: &Store, g: &GroupRow) -> Result<()> {
     .map_err(storage)?;
     // The chat row of the group.
     sqlx::query(
-        "INSERT OR IGNORE INTO msg_chats (id, kind, peer_pubkey, unread, last_message_at, last_preview, pinned, archived, created_at, updated_at)
-         VALUES (?, 'group', NULL, 0, NULL, NULL, 0, 0, ?, ?)",
+        "INSERT OR IGNORE INTO msg_chats (id, kind, peer_pubkey, unread, last_message_at, last_preview, pinned, archived, muted, created_at, updated_at)
+         VALUES (?, 'group', NULL, 0, NULL, NULL, 0, 0, 0, ?, ?)",
     )
     .bind(group_chat_id(&g.id))
     .bind(now)

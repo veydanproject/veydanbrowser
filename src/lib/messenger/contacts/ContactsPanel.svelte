@@ -47,7 +47,6 @@
     editNote = c.note ?? '';
   }
 
-  const levels = ['all', 'mentions', 'none'] as const;
 </script>
 
 <div class="card contacts">
@@ -75,7 +74,6 @@
             <span class="info">
               <span class="name">
                 {contactLabel(c)}
-                {#if c.is_muted}<span class="dim"><Icon name="bell-off" size={11} /></span>{/if}
                 {#if c.followed}<span class="tag">{$t('msg_contacts_following')}</span>{/if}
               </span>
               <span class="meta">
@@ -93,12 +91,6 @@
               <div class="grid">
                 <label><span>{$t('msg_contacts_nickname')}</span><input type="text" bind:value={editNick} disabled={busy} /></label>
                 <label><span>{$t('msg_contacts_note')}</span><input type="text" bind:value={editNote} disabled={busy} /></label>
-                <label><span>{$t('msg_contacts_notifications')}</span>
-                  <select value={c.notification_level} disabled={busy}
-                    onchange={(e) => run(() => messengerStore.updateContact(c.pubkey, { notification_level: (e.currentTarget as HTMLSelectElement).value as typeof levels[number] }))}>
-                    {#each levels as l}<option value={l}>{$t(`msg_contacts_level_${l}` as 'msg_contacts_level_all')}</option>{/each}
-                  </select>
-                </label>
               </div>
               <div class="actions">
                 {#if onchat}
@@ -112,10 +104,6 @@
                 </button>
                 <button class="btn btn-ghost btn-sm" disabled={busy} onclick={() => { sharing = c.pubkey; shareOpen = true; }}>
                   <Icon name="send" size={12} />{$t('msg_share_contact')}
-                </button>
-                <button class="btn btn-ghost btn-sm" disabled={busy}
-                  onclick={() => run(() => messengerStore.updateContact(c.pubkey, { is_muted: !c.is_muted }))}>
-                  {c.is_muted ? $t('msg_contacts_unmute') : $t('msg_contacts_mute')}
                 </button>
                 <button class="btn btn-ghost btn-sm" disabled={busy}
                   onclick={() => run(() => messengerStore.setFollowed(c.pubkey, !c.followed))}>
@@ -170,7 +158,6 @@
   }
   .info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .name { display: flex; align-items: center; gap: 6px; font-weight: var(--fw-semibold); font-size: var(--fs-sm); }
-  .dim { color: var(--text-3); display: inline-flex; }
   .tag { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.5px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--accent-tint); color: var(--accent-text-2); }
   .meta { color: var(--text-3); font-size: var(--fs-xs); }
   .meta code { font-family: var(--font-mono); }
@@ -179,7 +166,7 @@
   .about { margin: 0; font-size: var(--fs-sm); color: var(--text-body); white-space: pre-wrap; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--sp-2); }
   .grid label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--text-3); }
-  .grid input, .grid select {
+  .grid input {
     font: inherit; font-size: var(--fs-sm); color: var(--text);
     background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 8px;
   }

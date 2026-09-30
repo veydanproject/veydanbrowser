@@ -148,6 +148,11 @@ impl DmService {
         chats::set_archived(&self.store, chat_id, archived).await
     }
 
+    /// For direct chats and groups alike: nothing from a muted chat makes a sound.
+    pub async fn set_muted(&self, chat_id: &str, muted: bool) -> Result<()> {
+        chats::set_muted(&self.store, chat_id, muted).await
+    }
+
     pub async fn delete_chat(&self, chat_id: &str) -> Result<()> {
         chats::delete(&self.store, chat_id).await
     }
@@ -158,7 +163,7 @@ impl DmService {
 
     async fn chat_view(&self, r: ChatRow) -> Result<ChatView> {
         let peer = r.peer_pubkey.as_deref().and_then(PubKey::parse);
-        let (mut title, mut picture, mut is_contact, mut is_muted) = (String::new(), None, false, false);
+        let (mut title, mut picture, mut is_contact) = (String::new(), None, false);
         let mut npub = None;
         if let Some(pk) = &peer {
             npub = PublicKey::from_hex(pk.as_hex()).ok().and_then(|p| p.to_bech32().ok());
@@ -166,7 +171,6 @@ impl DmService {
                 title = c.label();
                 picture = c.profile.as_ref().and_then(|p| p.picture.clone());
                 is_contact = true;
-                is_muted = c.is_muted;
             } else if let Some(p) = self.profiles.get(pk).await? {
                 title = p.label();
                 picture = p.picture.clone();
@@ -188,7 +192,7 @@ impl DmService {
             title,
             picture,
             is_contact,
-            is_muted,
+            is_muted: r.muted,
             unread: r.unread,
             last_message_at: r.last_message_at,
             last_preview: r.last_preview,
@@ -628,9 +632,10 @@ impl DmService {
             name: UI_EVENT_DM_MESSAGE.into(),
             payload: serde_json::json!({ "chat_id": chat.id, "message": view, "historical": historical }),
         }));
-        if live_incoming && !view.deleted && !self.contacts.is_muted(&peer).await? {
-            let title = self.chat(&chat.id).await?.map(|c| c.title).unwrap_or_default();
-            effects.push(Effect::Notify { title, body: Some(line), chat_id: Some(chat.id.clone()) });
+        if live_incoming && !view.deleted {
+            if let Some(c) = self.chat(&chat.id).await?.filter(|c| !c.is_muted) {
+                effects.push(Effect::Notify { title: c.title, body: Some(line), chat_id: Some(chat.id.clone()) });
+            }
         }
         Ok(effects)
     }
@@ -967,12 +972,10 @@ mod tests {
         assert_eq!(msgs[0].text.as_deref(), Some("just text, no envelope"));
         assert_eq!(msgs[1].content_type, "sticker");
 
-        bob.contacts
-            .update(&alice.pk(), &messenger_contacts::ContactPatch { is_muted: Some(true), ..Default::default() })
-            .await
-            .unwrap();
+        bob.dm.set_muted(&chat.id, true).await.unwrap();
+        assert!(bob.dm.chat(&chat.id).await.unwrap().unwrap().is_muted);
         let quiet = wrap(&alice.keys, &bob.pk(), &Envelope::text("psst").encode(), 1_000_004, None).unwrap();
-        assert_eq!(names(&bob.receive(&quiet.to_peer).await), vec!["dm.message"], "muted peers do not notify");
+        assert_eq!(names(&bob.receive(&quiet.to_peer).await), vec!["dm.message"], "muted chats do not notify");
         assert_eq!(bob.dm.open_chat(&alice.pk()).await.unwrap().unread, 3);
     }
 

@@ -886,7 +886,7 @@ impl GroupService {
             name: messenger_dm::UI_EVENT_DM_MESSAGE.into(),
             payload: serde_json::json!({ "chat_id": chat_id, "message": view, "historical": item.historical }),
         });
-        if live && !deleted {
+        if live && !deleted && !chats::is_muted(&self.store, &chat_id).await? {
             out.notify.push((s.name.clone(), Some(line), Some(chat_id)));
         }
         Ok(Verdict::Done)

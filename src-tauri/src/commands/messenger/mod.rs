@@ -381,10 +381,6 @@ pub struct ContactPatchInput {
     pub nickname: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub note: Option<Option<String>>,
-    #[serde(default)]
-    pub is_muted: Option<bool>,
-    #[serde(default)]
-    pub notification_level: Option<String>,
 }
 
 fn deserialize_double_option<'de, D>(d: D) -> Result<Option<Option<String>>, D::Error>
@@ -452,8 +448,6 @@ pub async fn messenger_contacts_update(
     let p = ContactPatch {
         nickname: patch.nickname,
         note: patch.note,
-        is_muted: patch.is_muted,
-        notification_level: patch.notification_level,
     };
     state.messenger.runtime()?.contact_update(&parse_pubkey(&pubkey)?, &p).await.map_err(map_err)
 }
@@ -538,6 +532,12 @@ pub async fn messenger_chat_set_archived(
     state: tauri::State<'_, AppState>,
 ) -> CmdResult<()> {
     state.messenger.runtime()?.dm().set_archived(&chat_id, archived).await.map_err(map_err)
+}
+
+/// Direct chats and groups alike: a muted chat is still counted and shown, only quietly.
+#[tauri::command]
+pub async fn messenger_chat_set_muted(chat_id: String, muted: bool, state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.dm().set_muted(&chat_id, muted).await.map_err(map_err)
 }
 
 /// Removes the chat and its messages from this device only.

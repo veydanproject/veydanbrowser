@@ -215,6 +215,11 @@ class ChatStore {
     await this.loadChats();
   }
 
+  async setMuted(chatId: string, muted: boolean) {
+    await messengerApi.chats.setMuted(chatId, muted);
+    await this.loadChats();
+  }
+
   async deleteChat(chatId: string) {
     await messengerApi.chats.delete(chatId);
     if (this.activeId === chatId) this.close();

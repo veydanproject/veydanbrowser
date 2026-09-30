@@ -42,6 +42,7 @@
       : [{ type: "separator" }, { label: $t("msg_chat_delete"), icon: "trash-2", danger: true, onselect: async () => { if (await confirmStore.ask($t("msg_chat_delete_confirm", { name: c.title }), $t("msg_chat_delete"), true)) chatStore.deleteChat(c.id); } }];
     return [
       { label: c.pinned ? $t('msg_chat_unpin') : $t('msg_chat_pin'), icon: 'pin', onselect: () => chatStore.setPinned(c.id, !c.pinned) },
+      { label: c.is_muted ? $t('msg_chat_unmute') : $t('msg_chat_mute'), icon: c.is_muted ? 'bell' : 'bell-off', onselect: () => chatStore.setMuted(c.id, !c.is_muted) },
       { label: $t('msg_chat_mark_read'), icon: 'check-check', disabled: c.unread === 0, onselect: () => chatStore.markRead(c.id) },
       { label: c.archived ? $t('msg_chat_unarchive') : $t('msg_chat_archive'), icon: c.archived ? 'archive-restore' : 'archive', onselect: () => chatStore.setArchived(c.id, !c.archived) },
       ...removal,

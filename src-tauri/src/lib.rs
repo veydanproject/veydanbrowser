@@ -518,6 +518,7 @@ fn run_mobile() {
             commands::messenger::messenger_chat_set_pinned,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_set_archived,
+            commands::messenger::messenger_chat_set_muted,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_delete,
             #[cfg(feature = "messenger")]
@@ -1146,6 +1147,7 @@ fn run_desktop() {
             commands::messenger::messenger_chat_set_pinned,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_set_archived,
+            commands::messenger::messenger_chat_set_muted,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_chat_delete,
             #[cfg(feature = "messenger")]

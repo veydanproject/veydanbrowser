@@ -13,8 +13,6 @@ pub struct ContactRow {
     pub pubkey: String,
     pub nickname: Option<String>,
     pub note: Option<String>,
-    pub is_muted: bool,
-    pub notification_level: String,
     pub created_at: i64,
     pub updated_at: i64,
     pub deleted_at: Option<i64>,
@@ -24,15 +22,13 @@ pub struct ContactRow {
 pub struct ContactPatch {
     pub nickname: Option<Option<String>>,
     pub note: Option<Option<String>>,
-    pub is_muted: Option<bool>,
-    pub notification_level: Option<String>,
 }
 
-const COLS: &str = "pubkey, nickname, note, is_muted, notification_level, created_at, updated_at, deleted_at";
+const COLS: &str = "pubkey, nickname, note, created_at, updated_at, deleted_at";
 
 pub async fn list_active(store: &Store) -> Result<Vec<ContactRow>> {
     sqlx::query_as::<_, ContactRow>(
-        "SELECT pubkey, nickname, note, is_muted, notification_level, created_at, updated_at, deleted_at
+        "SELECT pubkey, nickname, note, created_at, updated_at, deleted_at
          FROM msg_private_contacts WHERE deleted_at IS NULL ORDER BY updated_at DESC",
     )
     .fetch_all(store.pool())
@@ -42,7 +38,7 @@ pub async fn list_active(store: &Store) -> Result<Vec<ContactRow>> {
 
 pub async fn get(store: &Store, pubkey: &str) -> Result<Option<ContactRow>> {
     sqlx::query_as::<_, ContactRow>(
-        "SELECT pubkey, nickname, note, is_muted, notification_level, created_at, updated_at, deleted_at
+        "SELECT pubkey, nickname, note, created_at, updated_at, deleted_at
          FROM msg_private_contacts WHERE pubkey = ?",
     )
     .bind(pubkey)
@@ -55,7 +51,7 @@ pub async fn get(store: &Store, pubkey: &str) -> Result<Option<ContactRow>> {
 pub async fn add(store: &Store, pubkey: &str, nickname: Option<&str>) -> Result<ContactRow> {
     let now = crate::now();
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO msg_private_contacts ({COLS}) VALUES (?, ?, NULL, 0, 'all', ?, ?, NULL)
+        "INSERT INTO msg_private_contacts ({COLS}) VALUES (?, ?, NULL, ?, ?, NULL)
          ON CONFLICT(pubkey) DO UPDATE SET
            nickname = COALESCE(excluded.nickname, msg_private_contacts.nickname),
            deleted_at = NULL, updated_at = excluded.updated_at"
@@ -80,27 +76,14 @@ pub async fn update(store: &Store, pubkey: &str, patch: &ContactPatch) -> Result
     if let Some(v) = &patch.note {
         row.note = v.clone();
     }
-    if let Some(v) = patch.is_muted {
-        row.is_muted = v;
-    }
-    if let Some(v) = &patch.notification_level {
-        if !matches!(v.as_str(), "all" | "mentions" | "none") {
-            return Err(messenger_core::MessengerError::Invalid("notification level must be all|mentions|none".into()));
-        }
-        row.notification_level = v.clone();
-    }
-    sqlx::query(
-        "UPDATE msg_private_contacts SET nickname = ?, note = ?, is_muted = ?, notification_level = ?, updated_at = ? WHERE pubkey = ?",
-    )
-    .bind(&row.nickname)
-    .bind(&row.note)
-    .bind(row.is_muted)
-    .bind(&row.notification_level)
-    .bind(crate::now())
-    .bind(pubkey)
-    .execute(store.pool())
-    .await
-    .map_err(storage)?;
+    sqlx::query("UPDATE msg_private_contacts SET nickname = ?, note = ?, updated_at = ? WHERE pubkey = ?")
+        .bind(&row.nickname)
+        .bind(&row.note)
+        .bind(crate::now())
+        .bind(pubkey)
+        .execute(store.pool())
+        .await
+        .map_err(storage)?;
     Ok(())
 }
 
@@ -114,10 +97,6 @@ pub async fn remove(store: &Store, pubkey: &str) -> Result<()> {
         .await
         .map_err(storage)?;
     Ok(())
-}
-
-pub async fn is_muted(store: &Store, pubkey: &str) -> Result<bool> {
-    Ok(get(store, pubkey).await?.map(|r| r.is_muted && r.deleted_at.is_none()).unwrap_or(false))
 }
 
 // ─── Follow list (kind 3) ────────────────────────────────────────────────────
@@ -173,16 +152,13 @@ mod tests {
         let s = Store::open_in_memory().await.unwrap();
         let c = add(&s, "a", Some("Al")).await.unwrap();
         assert_eq!(c.nickname.as_deref(), Some("Al"));
-        assert_eq!(c.notification_level, "all");
-        update(&s, "a", &ContactPatch { is_muted: Some(true), note: Some(Some("n".into())), ..Default::default() }).await.unwrap();
-        assert!(is_muted(&s, "a").await.unwrap());
-        assert!(update(&s, "a", &ContactPatch { notification_level: Some("loud".into()), ..Default::default() }).await.is_err());
+        update(&s, "a", &ContactPatch { note: Some(Some("n".into())), ..Default::default() }).await.unwrap();
+        assert_eq!(get(&s, "a").await.unwrap().unwrap().note.as_deref(), Some("n"));
         remove(&s, "a").await.unwrap();
         assert!(list_active(&s).await.unwrap().is_empty());
-        assert!(!is_muted(&s, "a").await.unwrap(), "deleted contacts are not muted");
         let again = add(&s, "a", None).await.unwrap();
         assert_eq!(again.nickname.as_deref(), Some("Al"), "settings survive re-add");
-        assert!(again.is_muted);
+        assert_eq!(again.note.as_deref(), Some("n"));
         assert!(again.deleted_at.is_none());
         assert!(update(&s, "nope", &ContactPatch::default()).await.is_err());
     }

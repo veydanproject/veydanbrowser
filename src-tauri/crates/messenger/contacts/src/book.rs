@@ -21,8 +21,6 @@ pub struct ContactView {
     pub npub: String,
     pub nickname: Option<String>,
     pub note: Option<String>,
-    pub is_muted: bool,
-    pub notification_level: String,
     pub followed: bool,
     pub profile: Option<ProfileView>,
     pub created_at: i64,
@@ -65,8 +63,6 @@ impl ContactService {
                     pubkey: r.pubkey,
                     nickname: r.nickname,
                     note: r.note,
-                    is_muted: r.is_muted,
-                    notification_level: r.notification_level,
                     profile,
                     created_at: r.created_at,
                     updated_at: r.updated_at,
@@ -81,10 +77,6 @@ impl ContactService {
 
     pub async fn is_contact(&self, pubkey: &PubKey) -> Result<bool> {
         Ok(repo::get(&self.store, pubkey.as_hex()).await?.map(|r| r.deleted_at.is_none()).unwrap_or(false))
-    }
-
-    pub async fn is_muted(&self, pubkey: &PubKey) -> Result<bool> {
-        repo::is_muted(&self.store, pubkey.as_hex()).await
     }
 
     /// Add by hex or npub. Adding yourself is refused.
