@@ -127,8 +127,8 @@ impl MessengerState {
     }
 
     /// The app quits: the notifications of the messenger go with it.
+    #[cfg(desktop)]
     pub(crate) fn shutdown_notices(&self) {
-        #[cfg(desktop)]
         if let Some(d) = &self.desktop {
             d.shutdown();
         }
