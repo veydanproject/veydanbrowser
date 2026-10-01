@@ -692,7 +692,9 @@ mod tests {
         let rt = MessengerRuntime::start(cfg, secrets).await.unwrap();
         let ids: Vec<String> = rt.media_servers().await.unwrap().into_iter().map(|s| s.id).collect();
         assert!(!ids.contains(&"veydan-node-1-s3".to_string()), "gone from the manifest, gone from the app");
-        assert!(ids.contains(&"veydan-node-1-media".to_string()));
+        let manifest = messenger_transport::Manifest::parse_content(messenger_transport::EMBEDDED_MANIFEST_JSON).unwrap();
+        let of_manifest = &manifest.media_for_region("default")[0].id;
+        assert!(ids.contains(of_manifest), "{of_manifest} from the manifest: {ids:?}");
         assert!(ids.contains(&"blossom-mine-example".to_string()), "the user's own server stays: {ids:?}");
         rt.shutdown().await;
     }

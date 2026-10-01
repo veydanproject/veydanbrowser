@@ -361,19 +361,25 @@ mod tests {
 
     #[test]
     fn embedded_manifest_parses() {
+        // What the built-in manifest must be, whatever servers it names: a
+        // change of servers is a change of embedded.json alone, not of this
+        // test.
         let m = Manifest::parse_content(EMBEDDED_MANIFEST_JSON).unwrap();
-        assert_eq!(m.serial, 4);
-        let media = m.media_for_region("default");
-        assert_eq!(media.len(), 1);
-        assert_eq!((media[0].kind.as_str(), media[0].url.as_str()), ("blossom", "https://node-1.veydan.net/media"));
+        assert!(m.serial > 0);
         assert!(
             m.relays.iter().map(|r| r.url.as_str()).chain(m.media.iter().map(|x| x.url.as_str())).chain(m.push.iter().map(|p| p.url.as_str()))
                 .all(|u| u.split("://").nth(1).and_then(|h| h.split(['/', ':']).next()).is_some_and(|h| h.ends_with(".veydan.net"))),
             "the embedded manifest names only the project's own servers"
         );
         assert!(m.relays.iter().any(|r| matches!(r.auth, Some(ManifestAuth::ApiKey { .. }))), "project relay is gated");
-        assert!(!m.relays_for_region("default").is_empty());
-        assert_eq!(m.relays_for_region("ru").len(), m.relays_for_region("default").len(), "ru falls back to default");
+        // Every region it names, the default one and an unknown one get a
+        // relay, a media server and a push server.
+        let regions = m.regions.iter().map(String::as_str).chain([REGION_DEFAULT, "nowhere"]);
+        for region in regions {
+            assert!(!m.relays_for_region(region).is_empty(), "no relay for {region}");
+            assert!(!m.media_for_region(region).is_empty(), "no media server for {region}");
+            assert!(!m.push_for_region(region).is_empty(), "no push server for {region}");
+        }
     }
 
     #[test]

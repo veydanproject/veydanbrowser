@@ -54,3 +54,6 @@ VPush/dist/
 
 # Server kits: kept locally, not in the repo
 deploy/
+
+# Old server kits, kept for reference until the servers are gone
+archive/

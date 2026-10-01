@@ -557,8 +557,10 @@ mod tests {
     #[tokio::test]
     async fn the_server_of_the_manifest_is_used_unless_the_user_names_one() {
         let s = setup().await;
+        let manifest = messenger_transport::Manifest::parse_content(messenger_transport::EMBEDDED_MANIFEST_JSON).unwrap();
+        let of_manifest = manifest.push_for_region("default")[0].url.clone();
         let status = s.rt.push_status().await.unwrap();
-        assert_eq!(status.server.as_deref(), Some("https://vpush.veydan.net"));
+        assert_eq!(status.server.as_deref(), Some(of_manifest.as_str()));
         assert!(!status.server_custom);
 
         let status = s.rt.push_set_server(Some(format!("{}/", s.server.uri()))).await.unwrap();
@@ -566,7 +568,7 @@ mod tests {
         assert!(status.server_custom);
 
         let status = s.rt.push_set_server(None).await.unwrap();
-        assert_eq!(status.server.as_deref(), Some("https://vpush.veydan.net"));
+        assert_eq!(status.server.as_deref(), Some(of_manifest.as_str()));
 
         let e = s.rt.push_set_server(Some("http://elsewhere.example.org".into())).await;
         assert!(matches!(e, Err(MessengerError::Invalid(_))), "{e:?}");
