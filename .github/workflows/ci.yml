@@ -1,12 +1,13 @@
 name: CI
 
-# Runs on every push and pull request, and is called by the release workflow as
-# a gate (release.yml → `checks`) so a tag can never publish untested code.
+# Not on every push to main: we push many times a day. It runs on pull
+# requests, by hand (Actions → CI → Run workflow), and as the gate of the
+# release workflow (release.yml → `checks`) so a tag can never publish
+# untested code.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_call:
+  workflow_dispatch:
 
 jobs:
   frontend:

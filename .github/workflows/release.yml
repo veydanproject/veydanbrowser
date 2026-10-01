@@ -112,7 +112,7 @@ jobs:
           echo "build_desktop=$BUILD_DESKTOP" >> "$GITHUB_OUTPUT"
           echo "build_android=$BUILD_ANDROID" >> "$GITHUB_OUTPUT"
 
-  # Gate: the same checks CI runs on every push. Nothing builds or publishes
+  # Gate: the same checks CI runs on pull requests. Nothing builds or publishes
   # until svelte-check, vitest and the Rust test suites pass on the tagged code.
   checks:
     uses: ./.github/workflows/ci.yml
