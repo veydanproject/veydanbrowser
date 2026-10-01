@@ -1,6 +1,6 @@
 # VPush. From the repository root the same targets are `make vpush-<target>`.
 
-.PHONY: build test check run release deploy ftp rollback bootstrap trust status logs ctl server-ctl test-deploy clean
+.PHONY: build test check run release build-deploy deploy ftp rollback bootstrap trust status logs ctl server-ctl test-deploy clean
 
 SHELL := /bin/bash
 ENV := source scripts/env.sh &&
@@ -28,6 +28,14 @@ ctl:
 # Static binary in dist/.
 release:
 	@bash scripts/build-release.sh
+
+# Static binary for the server kit (deploy/ of the repository): install.sh
+# takes it from there, an update is copied to the server by hand.
+DEPLOY_BIN ?= ../deploy/bin
+build-deploy: release
+	@mkdir -p $(DEPLOY_BIN)
+	@cp dist/vpush dist/vpush.sha256 dist/RELEASE $(DEPLOY_BIN)/
+	@echo ">> $(DEPLOY_BIN)/vpush  $$(cat dist/RELEASE)"
 
 # Build, send to the server, switch, check; rolls back by itself on failure.
 deploy:

@@ -72,3 +72,8 @@ push:
 # make vpush-test, make vpush-deploy, make vpush-logs ...
 vpush-%:
 	@$(MAKE) --no-print-directory -C VPush $* ARGS="$(ARGS)"
+
+# VPush binary for the server kit: deploy/bin/vpush (see deploy/README.md).
+.PHONY: build-deploy
+build-deploy:
+	@$(MAKE) --no-print-directory -C VPush build-deploy
