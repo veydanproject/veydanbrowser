@@ -8,7 +8,7 @@
   import Icon from '$lib/Icon.svelte';
   import { messengerStore } from '../store.svelte';
   import { chatStore } from '../chats/chatStore.svelte';
-  import IdentityOnboarding from '../identity/IdentityOnboarding.svelte';
+  import Onboarding from '../onboarding/Onboarding.svelte';
   import ChatList from '../chats/ChatList.svelte';
   import NewChatDialog from '../chats/NewChatDialog.svelte';
   import DmChat from '../dm/DmChat.svelte';
@@ -58,13 +58,13 @@
   <div class="page"><div class="error-msg">{$t('msg_status_not_compiled')}</div></div>
 {:else if s.error}
   <div class="page"><div class="error-msg">{$t('msg_status_error', { error: s.error })}</div></div>
-{:else if s.runtime && (!messengerStore.identity || messengerStore.pendingBackup)}
+{:else if messengerStore.needsOnboarding}
   <div class="page">
     <div class="page-header">
       <h1>{$t('msg_title')} <span class="alpha-badge">{$t('msg_alpha_badge')}</span></h1>
     </div>
     <p class="page-sub">{$t('msg_intro')}</p>
-    <IdentityOnboarding />
+    <Onboarding />
   </div>
 {:else if s.runtime}
   <div class="page page--fill messenger">

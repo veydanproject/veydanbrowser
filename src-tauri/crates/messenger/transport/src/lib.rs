@@ -13,9 +13,11 @@
 
 pub mod manifest;
 pub mod pool;
+pub mod remote;
 
 pub use manifest::{Manifest, ManifestMedia, ManifestPush, ManifestRelay, RelayChanges, EMBEDDED_MANIFEST_JSON};
 pub use pool::{RelayConfig, RelayPool};
+pub use remote::{HttpManifestFetcher, ManifestFetcher, MANIFEST_URLS, PROJECT_MANIFEST_PUBKEY};
 
 /// Make sure the process has a TLS crypto provider. More than one rustls
 /// backend can be linked (a host may bring its own); rustls then refuses

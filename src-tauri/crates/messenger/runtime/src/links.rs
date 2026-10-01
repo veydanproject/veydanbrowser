@@ -220,6 +220,7 @@ mod tests {
         let cfg = MessengerConfig::new(dir.path().join("messenger"));
         let rt = MessengerRuntime::start(cfg, Arc::new(MemorySecretStore::unlocked())).await.unwrap();
         rt.relays().set_silent(true).await.unwrap();
+        crate::servers::use_veydan_offline(&rt).await;
         rt.identity().create("pw").await.unwrap();
         rt.refresh_signer().await.unwrap();
         rt

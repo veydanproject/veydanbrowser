@@ -28,7 +28,6 @@ use messenger_push::{
     VpushClient,
 };
 use messenger_store::settings;
-use messenger_transport::{Manifest, EMBEDDED_MANIFEST_JSON};
 use nostr::key::Keys;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -146,12 +145,16 @@ impl MessengerRuntime {
         })
     }
 
-    /// The server to use: the user's, or else the manifest's for the region.
+    /// The server to use: the user's, or else, with the Veydan servers
+    /// chosen, the manifest's for the region.
     async fn push_server(&self) -> Result<(Option<String>, bool)> {
         if let Some(custom) = self.push_setting(KEY_SERVER).await? {
             return Ok((Some(custom), true));
         }
-        let manifest = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
+        if self.relays.servers_mode().await? != Some(crate::relays::ServersMode::Veydan) {
+            return Ok((None, false));
+        }
+        let (manifest, _) = self.relays.current_manifest().await?;
         let region = self.relays.region().await.unwrap_or_else(|_| REGION_FALLBACK.into());
         let server = manifest
             .push_for_region(&region)
@@ -333,6 +336,15 @@ impl MessengerRuntime {
         settings::delete(&self.store, KEY_LAST_TRY).await
     }
 
+    /// The user leaves the project's servers: a push server the manifest
+    /// gave is told to forget this device. One the user named stays.
+    pub(crate) async fn push_leave_manifest_server(&self) -> Result<()> {
+        if self.push_setting(KEY_SERVER).await?.is_some() {
+            return Ok(());
+        }
+        self.push_unregister().await
+    }
+
     pub async fn push_status(&self) -> Result<PushStatus> {
         let enabled = settings::get_bool(&self.store, KEY_ENABLED, false).await?;
         let (server, server_custom) = self.push_server().await?;
@@ -483,6 +495,7 @@ mod tests {
         // Off the network: the relays of the manifest are turned off, and
         // the one left is not there.
         rt.relays().set_silent(true).await.unwrap();
+        crate::servers::use_veydan_offline(&rt).await;
         for relay in rt.relays().list().await.unwrap() {
             rt.relays().set_enabled(&relay.url, false).await.unwrap();
         }

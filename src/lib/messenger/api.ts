@@ -29,6 +29,8 @@ export interface MessengerRuntimeStatus {
   silent_mode: boolean;
   manifest_serial: number | null;
   region: string;
+  /** Whose servers are used; `null` until the user chooses (onboarding). */
+  servers_mode: MessengerServersMode | null;
   ingress: MessengerIngressCounters;
   outbox_pending: number;
 }
@@ -389,6 +391,22 @@ export interface MessengerManifestInfo {
   region: string;
   regions: string[];
   silent_mode: boolean;
+  mode: MessengerServersMode | null;
+  /** Where the manifest in use came from: its URL, or `embedded`. */
+  origin: string;
+  /** When the project was last asked for a newer one (unix seconds). */
+  checked_at: number | null;
+}
+
+export type MessengerServersMode = 'veydan' | 'own';
+
+/** What asking the project for its manifest found. */
+export interface MessengerManifestCheck {
+  origin: string;
+  serial: number;
+  updated: boolean;
+  /** Why the project's manifest could not be fetched (the built-in one is used). */
+  error: string | null;
 }
 
 /** Event name: payload is `MessengerRelay[]`. */
@@ -559,9 +577,10 @@ import { inSection } from './content/shared/sections';
 
 const demo = !isTauri && demoEnabled() ? buildDemo() : null;
 let mockIdentity: MessengerIdentity | null = demo?.identity ?? null;
-let mockRelays: MessengerRelay[] = [
-  { url: 'wss://node-1.veydan.net', relay_id: 'veydan-node-1', source: 'manifest', regions: ['default', 'ru'], read: true, write: true, enabled: true, auth_type: 'api_key', state: 'connected' },
-];
+function manifestRelay(): MessengerRelay {
+  return { url: 'wss://node-1.veydan.net', relay_id: 'veydan-node-1', source: 'manifest', regions: ['default', 'ru'], read: true, write: true, enabled: true, auth_type: 'api_key', state: 'connected' };
+}
+let mockRelays: MessengerRelay[] = [manifestRelay()];
 let mockNotify: MessengerNotifySettings = { content: 'sender_text', lockscreen_hidden: false, locked: false };
 let mockDesktopNotify: MessengerDesktopNotify = { enabled: true, sound: true, available: true, close_to_tray: false };
 // `messenger.demo.desk=1`: the demo is a computer (no push, notifications of its own).
@@ -575,6 +594,17 @@ let mockPush: MessengerPushView = {
 };
 let mockSilent = false;
 let mockRegion = 'default';
+// A fresh install chooses its servers in the onboarding; the demo already has.
+let mockServersMode: MessengerServersMode | null = demo ? 'veydan' : null;
+let mockManifestOrigin = 'embedded';
+let mockCheckedAt: number | null = null;
+// `messenger.demo.manifest=ok`: the project's signed manifest "answers".
+const mockManifestOk = typeof localStorage !== 'undefined' && localStorage.getItem('messenger.demo.manifest') === 'ok';
+function mockManifestCheck(): MessengerManifestCheck {
+  mockCheckedAt = Math.floor(Date.now() / 1000);
+  if (mockManifestOk) mockManifestOrigin = 'https://veydan.net/messenger/manifest.json';
+  return { origin: mockManifestOrigin, serial: mockManifestOk ? 5 : 4, updated: mockManifestOk, error: mockManifestOk ? null : 'https://veydan.net/messenger/manifest.json: http 404' };
+}
 let mockContacts: MessengerContact[] = demo?.contacts ?? [];
 let mockOwnProfile: MessengerProfile | null = demo?.ownProfile ?? null;
 const emptyProfile = (pubkey: string): MessengerProfile => ({
@@ -655,8 +685,9 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
       relays_total: mockRelays.filter((r) => r.enabled).length,
       relays_connected: mockRelays.filter((r) => r.state === 'connected').length,
       silent_mode: mockSilent,
-      manifest_serial: 2,
+      manifest_serial: mockServersMode === 'veydan' ? (mockManifestOk ? 5 : 4) : null,
       region: mockRegion,
+      servers_mode: mockServersMode,
       ingress: { received: 0, duplicates: 0, dispatched: 0, dm: 0, ignored: 0 },
       outbox_pending: 0,
     },
@@ -869,7 +900,7 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_contacts_update: (a) => { mockContacts = mockContacts.map((c) => c.pubkey === a?.pubkey ? { ...c, ...(a?.patch as object) } : c); return mockContacts.find((c) => c.pubkey === a?.pubkey); },
   messenger_contacts_remove: (a) => { mockContacts = mockContacts.filter((c) => c.pubkey !== a?.pubkey); },
   messenger_contacts_set_followed: (a) => { mockContacts = mockContacts.map((c) => c.pubkey === a?.pubkey ? { ...c, followed: Boolean(a?.followed) } : c); },
-  messenger_relays_list: () => mockRelays,
+  messenger_relays_list: () => (mockServersMode ? mockRelays : mockRelays.filter((r) => r.source === 'user')),
   messenger_relays_add: (a) => {
     const r: MessengerRelay = { url: String(a?.url), relay_id: null, source: 'user', regions: [], read: true, write: true, enabled: true, auth_type: null, state: 'connecting' };
     mockRelays = [...mockRelays, r];
@@ -878,7 +909,23 @@ const devMocks: Record<string, (args?: Record<string, unknown>) => unknown> = {
   messenger_relays_remove: (a) => { mockRelays = mockRelays.filter((r) => r.url !== a?.url); },
   messenger_relays_set_enabled: (a) => { mockRelays = mockRelays.map((r) => r.url === a?.url ? { ...r, enabled: Boolean(a?.enabled) } : r); },
   messenger_relays_set_silent: (a) => { mockSilent = Boolean(a?.enabled); },
-  messenger_manifest_info: () => ({ serial: 1, issued_at: 1759017600, region: mockRegion, regions: ['default', 'ru'], silent_mode: mockSilent }),
+  messenger_manifest_info: () => ({
+    serial: mockServersMode === 'veydan' ? (mockManifestOk ? 5 : 4) : null, issued_at: 1790726400, region: mockRegion, regions: ['default', 'ru'],
+    silent_mode: mockSilent, mode: mockServersMode, origin: mockManifestOrigin, checked_at: mockCheckedAt,
+  }),
+  messenger_servers_use_veydan: async () => {
+    await new Promise((r) => setTimeout(r, 700));
+    mockServersMode = 'veydan';
+    if (!mockRelays.some((r) => r.source === 'manifest')) mockRelays = [manifestRelay(), ...mockRelays];
+    return mockManifestCheck();
+  },
+  messenger_servers_use_own: () => {
+    if (!mockRelays.some((r) => r.source === 'user' && r.enabled)) throw new Error('servers_own_needs_relay');
+    mockServersMode = 'own';
+    mockRelays = mockRelays.filter((r) => r.source === 'user');
+    mockMediaServers = mockMediaServers.filter((s) => s.source === 'user');
+  },
+  messenger_manifest_refresh: () => (mockServersMode === 'veydan' ? mockManifestCheck() : null),
   messenger_manifest_set_region: (a) => { mockRegion = String(a?.region); },
   messenger_set_enabled: () => undefined,
   messenger_identity_get: () => mockIdentity,
@@ -1031,6 +1078,9 @@ export const messengerApi = {
     setSilent: (enabled: boolean) => invoke<void>('messenger_relays_set_silent', { enabled }),
     manifestInfo: () => invoke<MessengerManifestInfo>('messenger_manifest_info'),
     setRegion: (region: string) => invoke<void>('messenger_manifest_set_region', { region }),
+    useVeydan: () => invoke<MessengerManifestCheck>('messenger_servers_use_veydan'),
+    useOwn: () => invoke<void>('messenger_servers_use_own'),
+    refreshManifest: () => invoke<MessengerManifestCheck | null>('messenger_manifest_refresh'),
   },
 
   chats: {

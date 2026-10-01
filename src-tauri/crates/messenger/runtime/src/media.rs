@@ -15,7 +15,7 @@ use messenger_ingress::Outbox;
 use messenger_media::service::SMALL_BYTES;
 use messenger_media::{MediaDescriptor, MediaKind, MediaServerInput, MediaServerView, MediaService, Progress, ProgressSink, TransferView};
 use messenger_store::media::{DIR_DOWN, DIR_UP};
-use messenger_transport::{Manifest, EMBEDDED_MANIFEST_JSON};
+use crate::relays::ServersMode;
 use nostr::key::Keys;
 use std::path::{Path, PathBuf};
 use tokio::sync::broadcast;
@@ -209,14 +209,15 @@ impl MessengerRuntime {
         &self.media
     }
 
-    /// Media servers of the embedded manifest for the current region.
-    /// Credentials are never in a manifest; the user adds them. A server an
-    /// earlier manifest brought and this one no longer lists is removed;
-    /// the user's own servers stay.
+    /// Media servers of the manifest in use for the current region, when the
+    /// Veydan servers are chosen; none otherwise. Credentials are never in a
+    /// manifest; the user adds them. A server an earlier manifest brought and
+    /// this one no longer lists is removed; the user's own servers stay.
     pub(crate) async fn seed_media_servers(&self) -> Result<()> {
-        let manifest = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
+        let veydan = self.relays.servers_mode().await? == Some(ServersMode::Veydan);
+        let (manifest, _) = self.relays.current_manifest().await?;
         let region = self.relays.region().await.unwrap_or_else(|_| REGION_FALLBACK.into());
-        let listed = manifest.media_for_region(&region);
+        let listed = if veydan { manifest.media_for_region(&region) } else { Vec::new() };
         for old in self.media.servers().await? {
             if old.source == "manifest" && !listed.iter().any(|m| m.id == old.id) {
                 self.media.remove_server(&old.id).await?;

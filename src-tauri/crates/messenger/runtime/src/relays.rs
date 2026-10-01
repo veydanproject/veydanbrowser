@@ -21,6 +21,53 @@ const KEY_SERIAL: &str = "manifest.serial";
 const KEY_ISSUED_AT: &str = "manifest.issued_at";
 const KEY_REGION: &str = "manifest.region";
 const KEY_SILENT: &str = "relays.silent_mode";
+pub(crate) const KEY_MODE: &str = "servers.mode";
+const KEY_JSON: &str = "manifest.json";
+const KEY_ORIGIN: &str = "manifest.origin";
+const KEY_CHECKED_AT: &str = "manifest.checked_at";
+
+/// Origin of a manifest that came with the app.
+pub const ORIGIN_EMBEDDED: &str = "embedded";
+
+/// Whose servers the messenger uses. Until the user picks one, the
+/// messenger talks to nobody.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServersMode {
+    /// The project's servers, from its signed manifest.
+    Veydan,
+    /// Only servers the user added; nothing goes to the project.
+    Own,
+}
+
+impl ServersMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Veydan => "veydan",
+            Self::Own => "own",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "veydan" => Some(Self::Veydan),
+            "own" => Some(Self::Own),
+            _ => None,
+        }
+    }
+}
+
+/// What a manifest check found.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManifestCheck {
+    /// The manifest in use after the check: its URL, or `embedded`.
+    pub origin: String,
+    pub serial: u64,
+    /// A newer manifest was applied by this check.
+    pub updated: bool,
+    /// Why the project's manifest could not be fetched, if it could not.
+    pub error: Option<String>,
+}
 
 /// One relay as the UI sees it: stored configuration plus live state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -45,6 +92,11 @@ pub struct ManifestInfo {
     /// Regions the embedded manifest knows about (for the region picker).
     pub regions: Vec<String>,
     pub silent_mode: bool,
+    pub mode: Option<ServersMode>,
+    /// Where the manifest in use came from: a URL, or `embedded`.
+    pub origin: String,
+    /// When the project's manifest was last asked for (unix seconds).
+    pub checked_at: Option<i64>,
 }
 
 pub struct RelayService {
@@ -53,15 +105,16 @@ pub struct RelayService {
 }
 
 impl RelayService {
-    /// Build the service and the first pool. Applies the embedded manifest on
-    /// a fresh database, loads rows and connects (unless silent).
+    /// Build the service and the first pool. With the Veydan servers chosen,
+    /// a manifest newer than the applied one (an app update) is applied.
+    /// Loads rows and connects (unless silent, or no servers chosen yet).
     pub async fn init(store: Store, signer: Option<Keys>) -> Result<Self> {
         let svc = Self { store, pool: RwLock::new(Arc::new(RelayPool::new(signer))) };
-        // A newer embedded manifest (app update) is applied on top of whatever
-        // was applied before; anti-rollback keeps a remotely applied newer one.
-        let embedded = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
-        if embedded.passes_anti_rollback(svc.manifest_serial().await?) {
-            svc.apply_manifest(&embedded, false).await?;
+        if svc.servers_mode().await? == Some(ServersMode::Veydan) {
+            let (current, origin) = svc.current_manifest().await?;
+            if current.passes_anti_rollback(svc.manifest_serial().await?) {
+                svc.adopt_manifest(&current, &origin, false).await?;
+            }
         }
         if svc.is_silent().await? {
             svc.pool.read().await.set_silent(true).await;
@@ -101,14 +154,68 @@ impl RelayService {
     }
 
     pub async fn manifest_info(&self) -> Result<ManifestInfo> {
-        let embedded = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
+        let (current, origin) = self.current_manifest().await?;
         Ok(ManifestInfo {
             serial: self.manifest_serial().await?,
             issued_at: settings::get(&self.store, KEY_ISSUED_AT).await?.and_then(|s| s.parse().ok()),
             region: self.region().await?,
-            regions: embedded.regions,
+            regions: current.regions,
             silent_mode: self.is_silent().await?,
+            mode: self.servers_mode().await?,
+            origin,
+            checked_at: self.manifest_checked_at().await?,
         })
+    }
+
+    pub async fn servers_mode(&self) -> Result<Option<ServersMode>> {
+        Ok(settings::get(&self.store, KEY_MODE).await?.as_deref().and_then(ServersMode::parse))
+    }
+
+    /// Record the choice. Applying what it means (manifest rows in or out)
+    /// is the caller's: see `MessengerRuntime::servers_use_*`.
+    pub async fn set_servers_mode(&self, mode: ServersMode) -> Result<()> {
+        settings::set(&self.store, KEY_MODE, mode.as_str()).await
+    }
+
+    /// The best manifest this install knows and where it came from: the
+    /// stored one, unless the app brought a newer one.
+    pub async fn current_manifest(&self) -> Result<(Manifest, String)> {
+        let embedded = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
+        // Stored only after its signature was checked, so the bare form is fine.
+        let stored = settings::get(&self.store, KEY_JSON).await?.and_then(|json| Manifest::parse_content(&json).ok());
+        match stored {
+            Some(m) if m.serial >= embedded.serial => {
+                let origin = settings::get(&self.store, KEY_ORIGIN).await?.unwrap_or_else(|| ORIGIN_EMBEDDED.into());
+                Ok((m, origin))
+            }
+            _ => Ok((embedded, ORIGIN_EMBEDDED.into())),
+        }
+    }
+
+    /// Apply `m` and remember it as the manifest in use.
+    pub async fn adopt_manifest(&self, m: &Manifest, origin: &str, force: bool) -> Result<RelayChanges> {
+        let changes = self.apply_manifest(m, force).await?;
+        settings::set(&self.store, KEY_JSON, &serde_json::to_string(m)?).await?;
+        settings::set(&self.store, KEY_ORIGIN, origin).await?;
+        Ok(changes)
+    }
+
+    pub async fn manifest_checked_at(&self) -> Result<Option<i64>> {
+        Ok(settings::get(&self.store, KEY_CHECKED_AT).await?.and_then(|s| s.parse().ok()))
+    }
+
+    pub async fn set_manifest_checked_at(&self, at: i64) -> Result<()> {
+        settings::set(&self.store, KEY_CHECKED_AT, &at.to_string()).await
+    }
+
+    /// Own servers: the rows a manifest brought go away, the user's stay.
+    pub async fn drop_manifest_relays(&self) -> Result<()> {
+        for r in repo::list(&self.store).await? {
+            if r.source == repo::SOURCE_MANIFEST {
+                repo::delete(&self.store, &r.url).await?;
+            }
+        }
+        self.reload().await
     }
 
     /// Apply `m` for the current region. Refused when the serial does not
@@ -160,15 +267,17 @@ impl RelayService {
         Ok(changes)
     }
 
-    /// Change region and re-apply the embedded manifest for it.
+    /// Change region and re-apply the manifest in use for it.
     pub async fn set_region(&self, region: &str) -> Result<()> {
         let region = region.trim();
         if region.is_empty() || !region.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '*') {
             return Err(MessengerError::Invalid("region must be alphanumeric".into()));
         }
         settings::set(&self.store, KEY_REGION, region).await?;
-        let m = Manifest::parse_content(EMBEDDED_MANIFEST_JSON)?;
-        self.apply_manifest(&m, true).await?;
+        if self.servers_mode().await? == Some(ServersMode::Veydan) {
+            let (m, origin) = self.current_manifest().await?;
+            self.adopt_manifest(&m, &origin, true).await?;
+        }
         Ok(())
     }
 
@@ -260,8 +369,12 @@ impl RelayService {
         Ok(())
     }
 
-    /// Push the enabled rows into the live pool.
+    /// Push the enabled rows into the live pool. Until the user has chosen
+    /// whose servers to use, the pool gets none and connects nowhere.
     pub async fn reload(&self) -> Result<()> {
+        if self.servers_mode().await?.is_none() {
+            return self.pool.read().await.set_relays(Vec::new()).await;
+        }
         let relays: Vec<RelayConfig> = repo::list(&self.store)
             .await?
             .into_iter()
@@ -292,6 +405,13 @@ mod tests {
     use super::*;
     use messenger_transport::manifest::{ManifestRelay, FORMAT, VERSION};
 
+    /// A store where the user chose the Veydan servers.
+    async fn veydan_store() -> Store {
+        let store = Store::open_in_memory().await.unwrap();
+        settings::set(&store, KEY_MODE, "veydan").await.unwrap();
+        store
+    }
+
     fn manifest(serial: u64, relays: Vec<(&str, &str, &str)>) -> Manifest {
         Manifest {
             format: FORMAT.into(),
@@ -318,7 +438,7 @@ mod tests {
 
     #[tokio::test]
     async fn init_applies_embedded_manifest_once_and_upgrades_older_installs() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = veydan_store().await;
         let svc = RelayService::init(store.clone(), None).await.unwrap();
         let embedded = Manifest::parse_content(EMBEDDED_MANIFEST_JSON).unwrap().serial;
         assert_eq!(svc.manifest_serial().await.unwrap(), Some(embedded));
@@ -344,7 +464,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_manifest_migrates_renames_and_keeps_user_rows_and_enabled_flags() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = veydan_store().await;
         let svc = RelayService::init(store.clone(), None).await.unwrap();
         svc.apply_manifest(&manifest(10, vec![("a", "wss://a1.example", "default"), ("b", "wss://b.example", "default")]), false)
             .await
@@ -380,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn user_relays_add_remove_and_manifest_rows_are_protected() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = veydan_store().await;
         let svc = RelayService::init(store, None).await.unwrap();
         assert!(svc.add_user("https://nope", None).await.is_err());
         let v = svc.add_user("wss://mine.example/", Some("k1".into())).await.unwrap();
@@ -396,7 +516,7 @@ mod tests {
 
     #[tokio::test]
     async fn region_switch_and_silent_mode_persist() {
-        let store = Store::open_in_memory().await.unwrap();
+        let store = veydan_store().await;
         let svc = RelayService::init(store.clone(), None).await.unwrap();
         svc.set_region("ru").await.unwrap();
         assert_eq!(svc.region().await.unwrap(), "ru");

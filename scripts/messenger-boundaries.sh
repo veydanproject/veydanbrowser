@@ -27,7 +27,7 @@ allowed() {
     links)     echo "messenger-core" ;;
     preview)   echo "messenger-core messenger-http" ;;
     store)     echo "messenger-core" ;;
-    transport) echo "messenger-core" ;;
+    transport) echo "messenger-core messenger-http" ;;
     identity)  echo "messenger-core messenger-store" ;;
     ingress)   echo "messenger-core messenger-store messenger-identity" ;;
     contacts)  echo "messenger-core messenger-store messenger-http" ;;

@@ -33,7 +33,7 @@ use messenger_core::{MessengerConfig, MessengerError, SecretStore};
 use messenger_core::PubKey;
 use messenger_runtime::{
     ChatView, ContactPatch, ContactView, CreatedIdentity, DmAction, GroupKind, GroupOp, GroupView, Identity, InviteView,
-    LinkPreview, LinkView, ManifestInfo, MessageView,
+    LinkPreview, LinkView, ManifestCheck, ManifestInfo, MessageView,
     MediaKind, MediaServerInput, MediaServerView, MessengerRuntime, Recording, RelationView, TransferView,
     ProfileView, RelayView,
     RuntimeStatus, SharedCounts, SharedSection,
@@ -86,6 +86,7 @@ impl MessengerState {
             Ok(rt) => {
                 let rt = Arc::new(rt);
                 spawn_relay_status_watcher(app.clone(), rt.clone());
+                spawn_manifest_refresher(rt.clone());
                 #[cfg(target_os = "android")]
                 push::spawn_bridge(app.clone(), rt.clone());
                 #[cfg(desktop)]
@@ -165,6 +166,20 @@ fn spawn_relay_status_watcher(app: tauri::AppHandle, rt: Arc<MessengerRuntime>) 
                 last = snapshot;
                 let _ = app.emit(EVENT_RELAY_STATUS, &list);
             }
+        }
+    });
+}
+
+/// Keeps the project's manifest fresh: the runtime asks at most once a day,
+/// and only with the Veydan servers chosen; this only wakes it up.
+fn spawn_manifest_refresher(rt: Arc<MessengerRuntime>) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        loop {
+            if let Err(e) = rt.manifest_refresh(false).await {
+                eprintln!("messenger: manifest check: {e}");
+            }
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
         }
     });
 }
@@ -1135,4 +1150,22 @@ pub async fn messenger_manifest_info(state: tauri::State<'_, AppState>) -> CmdRe
 #[tauri::command]
 pub async fn messenger_manifest_set_region(region: String, state: tauri::State<'_, AppState>) -> CmdResult<()> {
     state.messenger.runtime()?.relays().set_region(&region).await.map_err(map_err)
+}
+
+/// Use the project's servers: its signed manifest, or the built-in one.
+#[tauri::command]
+pub async fn messenger_servers_use_veydan(state: tauri::State<'_, AppState>) -> CmdResult<ManifestCheck> {
+    state.messenger.runtime()?.servers_use_veydan().await.map_err(map_err)
+}
+
+/// Use only the user's own servers; nothing is asked of the project.
+#[tauri::command]
+pub async fn messenger_servers_use_own(state: tauri::State<'_, AppState>) -> CmdResult<()> {
+    state.messenger.runtime()?.servers_use_own().await.map_err(map_err)
+}
+
+/// Ask the project for a newer manifest now. `None` with the own servers.
+#[tauri::command]
+pub async fn messenger_manifest_refresh(state: tauri::State<'_, AppState>) -> CmdResult<Option<ManifestCheck>> {
+    state.messenger.runtime()?.manifest_refresh(true).await.map_err(map_err)
 }

@@ -12,7 +12,7 @@
   import NewChatDialog from '../chats/NewChatDialog.svelte';
   import NewGroupDialog from "../groups/NewGroupDialog.svelte";
   import InvitesBar from "../groups/InvitesBar.svelte";
-  import IdentityOnboarding from '../identity/IdentityOnboarding.svelte';
+  import Onboarding from '../onboarding/Onboarding.svelte';
   import MobileFrame from './MobileFrame.svelte';
   import { chatHref } from './routes';
   import PushOffer from '../push/PushOffer.svelte';
@@ -38,7 +38,7 @@
   const netState = $derived(
     !s?.runtime ? 'off' : s.runtime.silent_mode ? 'silent' : !s.runtime.session_active ? 'locked' : connected > 0 ? 'on' : 'connecting',
   );
-  const needsIdentity = $derived(!!s?.runtime && (!messengerStore.identity || !!messengerStore.pendingBackup));
+  const needsIdentity = $derived(messengerStore.needsOnboarding);
 
   const open = (c: MessengerChat) => goto(chatHref(c.id));
 </script>
@@ -67,7 +67,7 @@
     <div class="note">{$t('msg_mobile_disabled')}</div>
   {:else if needsIdentity}
     <p class="intro">{$t('msg_intro')}</p>
-    <IdentityOnboarding />
+    <Onboarding />
   {:else}
     {#if netState === 'locked' || netState === 'silent'}
       <div class="strip">{$t(`msg_net_${netState}` as 'msg_net_locked', { connected: '0', total: '0' })}</div>

@@ -7,11 +7,11 @@
   import Icon from '$lib/Icon.svelte';
   import { messengerStore } from '../store.svelte';
   import { messengerError, type RelayState } from '../api';
+  import RelayAddForm from './RelayAddForm.svelte';
 
-  let newUrl = $state('');
-  let newKey = $state('');
   let busy = $state(false);
   let error = $state('');
+  let notice = $state('');
 
   onMount(() => { messengerStore.startListeners().catch(() => {}); });
 
@@ -26,14 +26,34 @@
     error = '';
     busy = true;
     try { await fn(); }
-    catch (e) { error = messengerError(e); }
+    catch (e) {
+      const m = messengerError(e);
+      error = m === 'servers_own_needs_relay' ? $t('msg_srv_own_needs_relay') : m;
+    }
     finally { busy = false; }
   }
 
-  async function add() {
-    const url = newUrl.trim();
-    if (!url) return;
-    await run(async () => { await messengerStore.addRelay(url, newKey); newUrl = ''; newKey = ''; });
+  const mode = $derived(messengerStore.manifest?.mode ?? null);
+
+  function originLabel(origin: string): string {
+    if (origin === 'embedded') return $t('msg_srv_origin_embedded');
+    try { return new URL(origin).host; } catch { return origin; }
+  }
+
+  async function checkManifest() {
+    notice = '';
+    await run(async () => {
+      const c = await messengerStore.refreshManifest();
+      if (!c) return;
+      notice = c.error
+        ? $t('msg_srv_check_failed', { error: c.error })
+        : c.updated ? $t('msg_srv_check_updated', { serial: String(c.serial) }) : $t('msg_srv_check_none');
+    });
+  }
+
+  function switchMode() {
+    notice = '';
+    run(() => (mode === 'own' ? messengerStore.useVeydanServers() : messengerStore.useOwnServers()));
   }
 </script>
 
@@ -42,7 +62,33 @@
   <p class="muted">{$t('msg_relays_text')}</p>
 
   {#if messengerStore.manifest}
+    <div class="servers">
+      <div class="servers-info">
+        <span>{$t('msg_srv_mode')}: <b>{mode === 'own' ? $t('msg_srv_mode_own') : $t('msg_srv_mode_veydan')}</b></span>
+        {#if mode === 'veydan'}
+          <span class="meta">
+            {$t('msg_srv_list', {
+              serial: String(messengerStore.manifest.serial ?? '—'),
+              origin: originLabel(messengerStore.manifest.origin),
+              checked: messengerStore.manifest.checked_at ? new Date(messengerStore.manifest.checked_at * 1000).toLocaleString() : $t('msg_srv_never'),
+            })}
+          </span>
+        {/if}
+      </div>
+      <div class="servers-actions">
+        {#if mode === 'veydan'}
+          <button class="btn btn-ghost btn-sm" disabled={busy} onclick={checkManifest}>
+            <Icon name="refresh-cw" size={13} />{$t('msg_srv_check')}
+          </button>
+        {/if}
+        <button class="btn btn-ghost btn-sm" disabled={busy} onclick={switchMode}>
+          {mode === 'own' ? $t('msg_srv_use_veydan') : $t('msg_srv_use_own')}
+        </button>
+      </div>
+    </div>
+    {#if notice}<div class="meta">{notice}</div>{/if}
     <div class="controls">
+      {#if mode === 'veydan'}
       <label class="control">
         <span>{$t('msg_relays_region')}</span>
         <select
@@ -58,6 +104,7 @@
           {/if}
         </select>
       </label>
+      {/if}
       <div class="control silent">
         <div class="control-info">
           <span>{$t('msg_relays_silent')}</span>
@@ -72,12 +119,6 @@
           aria-label={$t('msg_relays_silent')}
         ></button>
       </div>
-      <span class="meta">
-        {$t('msg_relays_manifest', {
-          serial: String(messengerStore.manifest.serial ?? '—'),
-          date: messengerStore.manifest.issued_at ? new Date(messengerStore.manifest.issued_at * 1000).toLocaleDateString() : '—',
-        })}
-      </span>
     </div>
   {/if}
 
@@ -113,13 +154,7 @@
     {/each}
   </ul>
 
-  <form class="add" onsubmit={(e) => { e.preventDefault(); add(); }}>
-    <input type="text" bind:value={newUrl} placeholder="wss://relay.example.com" spellcheck="false" disabled={busy} />
-    <input type="password" class="key" bind:value={newKey} placeholder={$t('msg_relay_key_placeholder')} autocomplete="off" disabled={busy} />
-    <button class="btn btn-ghost" type="submit" disabled={busy || !newUrl.trim()}>
-      <Icon name="plus" size={14} />{$t('msg_relay_add')}
-    </button>
-  </form>
+  <RelayAddForm />
   {#if error}<div class="error-msg">{error}</div>{/if}
 </div>
 
@@ -150,15 +185,7 @@
   .dot.connecting { background: var(--color-warning); }
   .dot.paused { background: var(--danger-text); }
   .icon-spacer { width: 28px; }
-  .add { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
-  @media (max-width: 560px) {
-    .add input:first-child { flex: 1 1 100%; }
-    .add input.key { flex: 1 1 140px; }
-  }
-  .add input {
-    flex: 1; font: inherit; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text);
-    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px;
-  }
-  .add input:focus { outline: none; border-color: var(--accent-border); }
-  .add input.key { flex: 0 1 180px; font-family: inherit; }
+  .servers { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); }
+  .servers-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .servers-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 </style>

@@ -20,6 +20,7 @@ pub mod links;
 pub mod preview;
 pub mod push;
 pub mod relays;
+pub mod servers;
 pub mod session;
 pub mod shared;
 
@@ -49,7 +50,9 @@ pub use messenger_identity::{CreatedIdentity, Identity};
 pub use messenger_groups::{GroupKind, GroupView, InviteView, KeyView as GroupKeyView, MemberView, OpBody as GroupOp, Role as GroupRole};
 pub use links::LinkView;
 pub use messenger_preview::Preview as LinkPreview;
-pub use relays::{ManifestInfo, RelayService, RelayView};
+pub use relays::{ManifestCheck, ManifestInfo, RelayService, RelayView, ServersMode};
+pub use servers::ManifestRemote;
+pub use messenger_transport::{Manifest, ManifestFetcher};
 pub use shared::{SharedCounts, SharedSection};
 
 /// Facts for the host's status screen. Never contains secrets.
@@ -68,6 +71,8 @@ pub struct RuntimeStatus {
     pub silent_mode: bool,
     pub manifest_serial: Option<u64>,
     pub region: String,
+    /// Whose servers are used; `None` until the user chooses.
+    pub servers_mode: Option<ServersMode>,
     pub ingress: IngressCounters,
     pub outbox_pending: i64,
 }
@@ -99,6 +104,7 @@ pub struct MessengerRuntime {
     dispatcher: Arc<Dispatcher>,
     ui: broadcast::Sender<UiEvent>,
     session: Mutex<Option<Session>>,
+    manifest_remote: std::sync::RwLock<ManifestRemote>,
 }
 
 impl MessengerRuntime {
@@ -106,6 +112,10 @@ impl MessengerRuntime {
         messenger_transport::ensure_crypto_provider();
         let store = Store::open(&config).await?;
         let identity = IdentityService::new(store.clone(), secrets.clone());
+        // Installs from before the choice existed keep the project's servers.
+        if settings::get(&store, relays::KEY_MODE).await?.is_none() && identity.get().await?.is_some() {
+            settings::set(&store, relays::KEY_MODE, "veydan").await?;
+        }
         let signer = load_signer(&identity).await;
         let relays = Arc::new(RelayService::init(store.clone(), signer.clone()).await?);
         let media = MediaService::new(store.clone(), secrets.clone(), config.data_dir())?;
@@ -160,11 +170,14 @@ impl MessengerRuntime {
             dispatcher,
             ui,
             session: Mutex::new(None),
+            manifest_remote: std::sync::RwLock::new(ManifestRemote::project(Arc::new(
+                messenger_transport::HttpManifestFetcher::new()?,
+            ))),
         };
         if let Err(e) = rt.seed_media_servers().await {
             eprintln!("messenger: media servers from the manifest not applied: {e}");
         }
-        if let Some(keys) = signer {
+        if let (Some(keys), true) = (signer, rt.servers_chosen().await?) {
             rt.start_session(keys).await?;
         }
         Ok(rt)
@@ -571,7 +584,12 @@ impl MessengerRuntime {
     /// changed. Call after identity create/import/delete and after the host
     /// unlocks secrets. Idempotent and cheap when nothing changed.
     pub async fn refresh_signer(&self) -> Result<bool> {
-        let signer = load_signer(&self.identity).await;
+        // No session until the user has chosen whose servers to use: it
+        // would publish our inbox relays.
+        let signer = match self.servers_chosen().await? {
+            true => load_signer(&self.identity).await,
+            false => None,
+        };
         let wanted = signer.as_ref().map(|k| k.public_key().to_hex());
         let current = self.session.lock().await.as_ref().map(|s| s.keys.public_key().to_hex());
         if wanted == current {
@@ -584,6 +602,10 @@ impl MessengerRuntime {
             self.start_session(keys).await?;
         }
         Ok(true)
+    }
+
+    async fn servers_chosen(&self) -> Result<bool> {
+        Ok(self.relays.servers_mode().await?.is_some())
     }
 
     /// Relay set changed (add/remove/toggle): the pool object is the same,
@@ -614,6 +636,7 @@ impl MessengerRuntime {
             silent_mode: self.relays.is_silent().await?,
             manifest_serial: self.relays.manifest_serial().await?,
             region: self.relays.region().await?,
+            servers_mode: self.relays.servers_mode().await?,
             ingress,
             outbox_pending: self.outbox.pending().await?,
         })
@@ -653,6 +676,7 @@ mod tests {
         let cfg = MessengerConfig::new(dir.path().join("messenger"));
         let secrets = Arc::new(MemorySecretStore::unlocked());
         let rt = MessengerRuntime::start(cfg.clone(), secrets).await.unwrap();
+        servers::use_veydan_offline(&rt).await;
 
         let st = rt.status().await.unwrap();
         assert_eq!(st.version, messenger_core::VERSION);
@@ -674,6 +698,7 @@ mod tests {
         let cfg = MessengerConfig::new(dir.path().join("messenger"));
         let secrets = Arc::new(MemorySecretStore::unlocked());
         let rt = MessengerRuntime::start(cfg.clone(), secrets.clone()).await.unwrap();
+        servers::use_veydan_offline(&rt).await;
         // What an earlier manifest brought, and what the user added.
         let old = MediaServerInput {
             id: Some("veydan-node-1-s3".into()),
@@ -718,6 +743,7 @@ mod tests {
         let rt = MessengerRuntime::start(cfg, secrets.clone()).await.unwrap();
         // Keep the test offline: sends fail fast instead of waiting for relays.
         rt.relays().set_silent(true).await.unwrap();
+        servers::use_veydan_offline(&rt).await;
         assert!(!rt.refresh_signer().await.unwrap(), "nothing to do without identity");
         assert!(matches!(rt.dm_send_text(&"ab".repeat(32), "x", None).await, Err(MessengerError::NotLoggedIn)));
 

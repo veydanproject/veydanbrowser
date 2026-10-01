@@ -22,6 +22,9 @@
 //! messenger-cli [--data-dir DIR] request|accept|decline|block|unblock|remove <npub|hex>
 //! messenger-cli [--data-dir DIR] push-on <token> [--server URL]
 //! messenger-cli [--data-dir DIR] push-status | push-test | push-off
+//! messenger-cli [--data-dir DIR] servers [veydan|own|refresh]
+//! messenger-cli manifest-keygen <secret-file>
+//! messenger-cli manifest-sign --key-file <secret-file> <doc.json> <signed.json>
 //! ```
 //!
 //! Secrets live in `<data-dir>/secrets.json` in plaintext: development only.
@@ -36,7 +39,7 @@ use std::time::Duration;
 fn usage() -> ! {
     eprintln!(
         "usage: messenger-cli [--data-dir DIR] <keygen [--password PW] | import <nsec|ncryptsec> <secret> [--password PW] \
-         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | notify-tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] | push-status | push-test | push-off | profile-set <name> [picture] | wrap <to|group:ID|stranger:ID> <text…> [--send] | notify-describe <event.json> [--type dm|group] [--group ID]>"
+         | whoami | relays | relay-add <url> [--key K] | send <to> <text…> | tail | notify-tail | sync [secs] | chats | history <peer> | shared <peer|group:id> [visual|files|links|voice] | edit <id> <text…> | delete <id> | relation <peer> | request|accept|decline|block|unblock|remove <peer> | push-on <token> [--server URL] | push-status | push-test | push-off | profile-set <name> [picture] | wrap <to|group:ID|stranger:ID> <text…> [--send] | notify-describe <event.json> [--type dm|group] [--group ID] | servers [veydan|own|refresh] | manifest-keygen <file> | manifest-sign --key-file F <doc.json> <signed.json>>"
     );
     std::process::exit(2)
 }
@@ -63,12 +66,47 @@ async fn main() {
         usage();
     }
     let cmd = args.remove(0);
+    let key_file = take_flag(&mut args, "--key-file");
+
+    // Operator tools: no messenger data involved.
+    match cmd.as_str() {
+        "manifest-keygen" => return manifest_keygen(args.first().unwrap_or_else(|| usage())),
+        "manifest-sign" => {
+            let (Some(key), [input, output]) = (key_file, args.as_slice()) else { usage() };
+            return manifest_sign(&key, input, output);
+        }
+        _ => {}
+    }
 
     let config = MessengerConfig::new(data_dir.clone());
     let secrets = Arc::new(FileSecretStore::open(data_dir.join("secrets.json")).await.unwrap_or_else(die));
     let rt = MessengerRuntime::start(config, secrets).await.unwrap_or_else(die);
 
+    // Scenarios written before the choice existed expect the project's servers.
+    if cmd != "servers" && rt.servers_mode().await.unwrap_or_else(die).is_none() {
+        eprintln!("(no servers chosen: using the Veydan servers; `servers own` to change)");
+        print_check(&rt.servers_use_veydan().await.unwrap_or_else(die));
+    }
+
     match cmd.as_str() {
+        "servers" => match args.first().map(String::as_str) {
+            Some("veydan") => print_check(&rt.servers_use_veydan().await.unwrap_or_else(die)),
+            Some("own") => {
+                rt.servers_use_own().await.unwrap_or_else(die);
+                println!("own servers");
+            }
+            Some("refresh") => match rt.manifest_refresh(true).await.unwrap_or_else(die) {
+                Some(check) => print_check(&check),
+                None => println!("not using the Veydan servers: nothing asked"),
+            },
+            None => {
+                let info = rt.relays().manifest_info().await.unwrap_or_else(die);
+                println!("mode      {:?}", info.mode);
+                println!("manifest  #{:?} from {}", info.serial, info.origin);
+                println!("checked   {:?}", info.checked_at);
+            }
+            _ => usage(),
+        },
         "keygen" => {
             let pw = password.unwrap_or_else(|| "cli-dev-password".into());
             let created = rt.identity().create(&pw).await.unwrap_or_else(die);
@@ -821,6 +859,67 @@ async fn wait_connect(rt: &MessengerRuntime) {
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
     eprintln!("warning: no relay connected yet");
+}
+
+fn print_check(c: &messenger_runtime::ManifestCheck) {
+    println!("manifest  #{} from {}{}", c.serial, c.origin, if c.updated { " (updated)" } else { "" });
+    if let Some(e) = &c.error {
+        println!("not fetched: {e}");
+    }
+}
+
+/// New project key for signing manifests. The secret goes to `out` (0600),
+/// the public half to stdout: it is what the app pins.
+fn manifest_keygen(out: &str) {
+    use nostr::nips::nip19::ToBech32;
+    if std::path::Path::new(out).exists() {
+        eprintln!("error: {out} exists; not overwriting a key");
+        std::process::exit(1)
+    }
+    let keys = nostr::key::Keys::generate();
+    let nsec = keys.secret_key().to_bech32().expect("bech32");
+    write_private(out, &format!("{nsec}\n"));
+    println!("pubkey {}", keys.public_key().to_hex());
+    println!("secret written to {out}; keep it offline, it signs what every install trusts");
+}
+
+/// Sign the bare manifest document `input` into the event form at `output`.
+fn manifest_sign(key_file: &str, input: &str, output: &str) {
+    let secret = std::fs::read_to_string(key_file).unwrap_or_else(|e| {
+        eprintln!("error: {key_file}: {e}");
+        std::process::exit(1)
+    });
+    let keys = nostr::key::Keys::parse(secret.trim()).unwrap_or_else(|e| {
+        eprintln!("error: {key_file}: {e}");
+        std::process::exit(1)
+    });
+    let doc = std::fs::read_to_string(input).unwrap_or_else(|e| {
+        eprintln!("error: {input}: {e}");
+        std::process::exit(1)
+    });
+    let manifest = messenger_runtime::Manifest::parse_content(&doc).unwrap_or_else(die);
+    let signed = manifest.sign(&keys).unwrap_or_else(die);
+    std::fs::write(output, signed + "\n").unwrap_or_else(|e| {
+        eprintln!("error: {output}: {e}");
+        std::process::exit(1)
+    });
+    println!("signed manifest #{} by {} → {output}", manifest.serial, keys.public_key().to_hex());
+}
+
+fn write_private(path: &str, content: &str) {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut f = opts.open(path).unwrap_or_else(|e| {
+        eprintln!("error: {path}: {e}");
+        std::process::exit(1)
+    });
+    f.write_all(content.as_bytes()).unwrap_or_else(|e| {
+        eprintln!("error: {path}: {e}");
+        std::process::exit(1)
+    });
 }
 
 fn die<T>(e: messenger_core::MessengerError) -> T {

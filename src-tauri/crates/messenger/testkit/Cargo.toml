@@ -21,6 +21,7 @@ serde_json.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros", "signal", "io-std", "io-util"] }
 zeroize.workspace = true
+nostr.workspace = true
 
 [[bin]]
 name = "messenger-cli"

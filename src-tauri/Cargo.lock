@@ -3861,8 +3861,10 @@ dependencies = [
  "async-trait",
  "futures-util",
  "messenger-core",
+ "messenger-http",
  "nostr",
  "nostr-sdk",
+ "reqwest",
  "rustls",
  "serde",
  "serde_json",
@@ -7951,7 +7953,7 @@ dependencies = [
 
 [[package]]
 name = "veydanspace"
-version = "4.0.3"
+version = "4.0.4"
 dependencies = [
  "age",
  "anyhow",

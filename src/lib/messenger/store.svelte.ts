@@ -11,8 +11,10 @@ import {
   type MessengerIdentity,
   type MessengerProfile,
   type MessengerProfileInput,
+  type MessengerManifestCheck,
   type MessengerManifestInfo,
   type MessengerRelay,
+  type MessengerServersMode,
   type MessengerStatus,
   type MessengerUiEvent,
 } from './api';
@@ -65,6 +67,15 @@ class MessengerStore {
 
   get secretsUnlocked(): boolean {
     return this.status?.runtime?.secrets_unlocked ?? false;
+  }
+
+  get serversMode(): MessengerServersMode | null {
+    return this.status?.runtime?.servers_mode ?? null;
+  }
+
+  /** Keys first, then whose servers: until both, the module shows the onboarding. */
+  get needsOnboarding(): boolean {
+    return !!this.status?.runtime && (!this.identity || !!this.pendingBackup || !this.serversMode);
   }
 
   async ensureLoaded() {
@@ -234,6 +245,25 @@ class MessengerStore {
   async setRegion(region: string) {
     await messengerApi.relays.setRegion(region);
     await this.refresh();
+  }
+
+  /** The project's servers: its signed manifest, or the built-in one. */
+  async useVeydanServers(): Promise<MessengerManifestCheck> {
+    const check = await messengerApi.relays.useVeydan();
+    await this.refresh();
+    return check;
+  }
+
+  /** Only the user's servers; the project is never asked for anything. */
+  async useOwnServers() {
+    await messengerApi.relays.useOwn();
+    await this.refresh();
+  }
+
+  async refreshManifest(): Promise<MessengerManifestCheck | null> {
+    const check = await messengerApi.relays.refreshManifest();
+    await this.refresh();
+    return check;
   }
 
   async setEnabled(enabled: boolean) {

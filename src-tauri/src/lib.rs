@@ -481,6 +481,12 @@ fn run_mobile() {
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_manifest_set_region,
             #[cfg(feature = "messenger")]
+            commands::messenger::messenger_servers_use_veydan,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_servers_use_own,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_manifest_refresh,
+            #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_status,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_set_enabled,
@@ -1112,6 +1118,12 @@ fn run_desktop() {
             commands::messenger::messenger_manifest_info,
             #[cfg(feature = "messenger")]
             commands::messenger::messenger_manifest_set_region,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_servers_use_veydan,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_servers_use_own,
+            #[cfg(feature = "messenger")]
+            commands::messenger::messenger_manifest_refresh,
             #[cfg(feature = "messenger")]
             commands::messenger::push::messenger_push_status,
             #[cfg(feature = "messenger")]

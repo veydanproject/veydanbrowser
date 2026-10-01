@@ -12,6 +12,8 @@ publish.workspace = true
 
 [dependencies]
 messenger-core.workspace = true
+messenger-http.workspace = true
+reqwest.workspace = true
 nostr.workspace = true
 nostr-sdk.workspace = true
 serde.workspace = true
