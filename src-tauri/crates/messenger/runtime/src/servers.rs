@@ -141,6 +141,22 @@ impl MessengerRuntime {
     }
 }
 
+/// For tests elsewhere in the crate: the Veydan servers, chosen without a
+/// network (the project's manifest "cannot be fetched", the built-in one
+/// is used).
+#[cfg(test)]
+pub(crate) async fn use_veydan_offline(rt: &MessengerRuntime) {
+    struct Offline;
+    #[async_trait::async_trait]
+    impl ManifestFetcher for Offline {
+        async fn fetch(&self, _: &str) -> Result<String> {
+            Err(MessengerError::Transport("offline".into()))
+        }
+    }
+    rt.set_manifest_remote(ManifestRemote { fetcher: Arc::new(Offline), urls: vec![], pinned: String::new() });
+    rt.servers_use_veydan().await.unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,20 +343,4 @@ mod tests {
         assert_eq!(urls(&rt).await, embedded_urls(None));
         rt.shutdown().await;
     }
-}
-
-/// For tests elsewhere in the crate: the Veydan servers, chosen without a
-/// network (the project's manifest "cannot be fetched", the built-in one
-/// is used).
-#[cfg(test)]
-pub(crate) async fn use_veydan_offline(rt: &MessengerRuntime) {
-    struct Offline;
-    #[async_trait::async_trait]
-    impl ManifestFetcher for Offline {
-        async fn fetch(&self, _: &str) -> Result<String> {
-            Err(MessengerError::Transport("offline".into()))
-        }
-    }
-    rt.set_manifest_remote(ManifestRemote { fetcher: Arc::new(Offline), urls: vec![], pinned: String::new() });
-    rt.servers_use_veydan().await.unwrap();
 }
