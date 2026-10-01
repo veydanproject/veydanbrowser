@@ -81,7 +81,7 @@ pub fn candidate_urls(builtin: &[&str], current: Option<&Manifest>) -> Vec<Strin
                 _ => None,
             })
             .collect();
-        sources.sort_by(|a, b| b.0.cmp(&a.0));
+        sources.sort_by_key(|a| std::cmp::Reverse(a.0));
         urls.extend(sources.into_iter().map(|(_, u)| u));
     }
     let mut seen = std::collections::BTreeSet::new();
