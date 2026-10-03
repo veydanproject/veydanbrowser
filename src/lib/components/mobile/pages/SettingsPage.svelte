@@ -13,6 +13,7 @@
   import PickerSheet from '$lib/components/mobile/PickerSheet.svelte';
   import Dialog from '$lib/components/ui/Dialog.svelte';
   import BugReportDialog from '$lib/components/BugReportDialog.svelte';
+  import MoveNotice from '$lib/components/MoveNotice.svelte';
   import { formatError } from '$lib/utils';
   import { notesStore } from '$lib/store/notes.svelte';
   import { totpStore } from '$lib/store/totp.svelte';
@@ -144,6 +145,7 @@
   </div>
 
   <div class="m-body">
+  <MoveNotice mode="card" />
   <div class="m-section">{$t('settings_main')}</div>
   <div class="m-list">
     <button type="button" class="m-row" onclick={() => (picker = 'app')}>

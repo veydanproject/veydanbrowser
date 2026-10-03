@@ -10,6 +10,10 @@ run-name: >-
 # (vX.Y.Z-{channel}.N[-platform...], prerelease).
 # Channel releases stay prerelease so they never become GitHub /releases/latest.
 # ios is accepted on the tag but not built.
+#
+# Branch release/4.0: the last 4.0.x, run in veydanbrowser only. Its notes are
+# .github/release-notes.md (the move to Veydan Space 5), and a version other
+# than 4.0.x is refused: latest.json here must never point at 5.x.
 
 on:
   push:
@@ -58,6 +62,11 @@ jobs:
 
           if [ "$VERSION" != "$FILE_VERSION" ]; then
             echo "::error::Tag version $VERSION does not match VERSION file ($FILE_VERSION)"
+            exit 1
+          fi
+
+          if [[ "$VERSION" != 4.0.* ]]; then
+            echo "::error::This repository releases 4.0.x only; Veydan Space $VERSION is released in Veydan-Space"
             exit 1
           fi
 
@@ -162,6 +171,15 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Release notes
+        id: notes
+        run: |
+          {
+            echo 'body<<VEYDAN_NOTES_EOF'
+            cat .github/release-notes.md
+            echo 'VEYDAN_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and upload to release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -172,7 +190,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Veydan Space ${{ github.ref_name }}'
-          releaseBody: 'See the assets below to download and install this version.'
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: ${{ needs.verify-version.outputs.prerelease == 'true' }}
           # Each matrix job would download, merge, and re-upload the same
@@ -286,7 +304,7 @@ jobs:
             if [ "$PRERELEASE" = "true" ]; then PRE="--prerelease"; fi
             gh release create "$GITHUB_REF_NAME" --draft $PRE \
               --title "Veydan Space $GITHUB_REF_NAME" \
-              --notes "See the assets below to download and install this version."
+              --notes-file .github/release-notes.md
           fi
           gh release upload "$GITHUB_REF_NAME" "$SIGNED" --clobber
 
@@ -369,7 +387,7 @@ jobs:
           VERSION="${VERSION%%-*}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "See the assets below to download and install this version." \
+            --arg notes "The last release of 4.0. Veydan Space 5: https://github.com/veydanproject/Veydan-Space/releases/latest - move your data through sync first." \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
             '{version:$version, notes:$notes, pub_date:$pub_date, platforms:{}}' > latest.json
 

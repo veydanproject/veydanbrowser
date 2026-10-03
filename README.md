@@ -1,5 +1,35 @@
 # Veydan Space
 
+> [!IMPORTANT]
+> **Veydan Space 5 is released in a new repository:
+> [veydanproject/Veydan-Space](https://github.com/veydanproject/Veydan-Space/releases/latest).**
+> 4.0.8 is the last release of this repository; it gets no more updates, and
+> the downloads of 4.0 stay here. Version 5 does not open the local data of
+> 4.0: your data moves through sync.
+>
+> **How to move**
+> 1. Turn sync on in 4.0: Settings → Sync. On a computer a local folder is
+>    enough; on a phone you need WebDAV or S3.
+> 2. Wait until sync finishes.
+> 3. If you use the messenger, save its key: Messenger → Settings → Export backup.
+> 4. Install [Veydan Space 5](https://github.com/veydanproject/Veydan-Space/releases/latest).
+> 5. In version 5, first of all connect it to the same vault.
+>
+> The order matters: version 5 replaces 4.0 on the same device, and after that
+> nothing is left to send your data to the vault. Version 5 does not delete
+> the files of 4.0.
+>
+> **Переход на Veydan Space 5.** Версия 5 выходит в новом репозитории
+> [veydanproject/Veydan-Space](https://github.com/veydanproject/Veydan-Space/releases/latest)
+> и не открывает локальные данные 4.0; 4.0.8 — последний выпуск этого
+> репозитория. Данные переносит синхронизация: включите её в 4.0 (Настройки →
+> Синхронизация; на компьютере достаточно локальной папки, на телефоне нужен
+> WebDAV или S3), дождитесь завершения и сохраните ключ мессенджера
+> (Мессенджер → Настройки → Экспорт копии). Затем установите версию 5 по ссылке
+> и первым делом подключите её к тому же хранилищу. Порядок важен: версия 5
+> заменяет 4.0 на том же устройстве, и отправить данные в хранилище после её
+> установки уже нечем.
+
 > **Operations workspace for multi-account work** — isolated browser profiles, proxies, an SSH console, notes and 2FA tools, organized into workspaces in one local-first desktop app.
 
 Veydan Space is a desktop workspace for people who operate many accounts, proxies and servers in parallel. Everything the daily workflow needs lives in one place: **workspaces** with Kanban, table and topology views; **isolated browser profiles**; **proxy management** with one-click health checks; a full **SSH terminal** with saved connections, an **SSH key manager** and 2FA/TOTP auto-fill; a dual-pane **SFTP file manager**; **Markdown notes** with search and version history; and built-in **TOTP and password tools**.
@@ -131,6 +161,15 @@ make dev          # start the dev build
 make clean        # stop running instances and remove build artifacts
 make update       # run the update script
 ```
+
+### The last release (maintainer)
+4.0.x is released from the branch `release/4.0` only. `DRY=1 make push release`
+runs the checks of `scripts/push.sh` and prints what it would do; `make push
+release` tags `v$(cat VERSION)` and pushes the branch as `main` and the tag to the
+remote `veydanbrowser`, where `release.yml` builds the release with the notes
+from `.github/release-notes.md`. The script refuses a version other than 4.0.x, a
+tree with `VHub/`, `VLink/`, `deploy/` or `docs/`, and a run before Veydan Space 5 is
+released.
 
 ### Several profiles side by side
 `--workdir <dir>` runs the app as an independent profile: all data (databases, browser profiles, notes, messenger, UI settings) lives in that directory, and profiles with different directories run at the same time. Works on Windows, macOS and Linux, in any build.

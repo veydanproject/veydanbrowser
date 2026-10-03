@@ -31,6 +31,7 @@
   import AppLockGate from '$lib/components/AppLockGate.svelte';
   import { updaterStore } from '$lib/store/updater.svelte';
   import UpdateBanner from '$lib/components/UpdateBanner.svelte';
+  import MoveNotice from '$lib/components/MoveNotice.svelte';
   import { listen } from '@tauri-apps/api/event';
   import type { Window } from '@tauri-apps/api/window';
   import { profilesStore } from '$lib/store/profiles.svelte';
@@ -400,6 +401,7 @@
     </header>
 
     <UpdateBanner />
+    <MoveNotice />
   {/if}
 
   <main class="content" class:content--notes={notesFullWidth}>

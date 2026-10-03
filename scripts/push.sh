@@ -1,4 +1,21 @@
 #!/usr/bin/env bash
+# The last 4.0.x, from the branch release/4.0 only.
+#
+#   make push release          tag v$(VERSION), push the branch as main and the
+#                              tag to the remote `veydanbrowser`
+#   DRY=1 make push release    run every check, print the commands, change nothing
+#
+# Installed 4.0.x take their updates from veydanbrowser's releases, so the tag
+# goes there and its release.yml builds and publishes the release. Nothing
+# goes to origin from here: a v* tag there would start a build in a private
+# repository. Channels (alpha, beta, rc) are not released from this
+# branch: 4.0 gets one last release.
+#
+# Before anything is pushed: the branch is release/4.0, the tree is clean,
+# the version is 4.0.x, the pushed commit does not descend from 2b08618 (the
+# commit that started tracking VHub/, deploy/ and docs/) and its tree holds no
+# VHub/, VLink/, deploy/ or docs/, and Veydan Space 5 is released (the link the
+# app shows leads to a release).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -7,94 +24,79 @@ cd "$ROOT"
 CHANNEL="${1:-}"
 PLATFORMS="${2:-}"
 VERSION_OVERRIDE="${3:-}"
-MSG="${4:-}"
+DRY="${DRY:-}"
 
-usage() {
-  echo ">> usage: make push alpha|beta|rc|release [linux] [windows] [macos] [android] [ios]"
+REMOTE=veydanbrowser
+BRANCH=release/4.0
+# The first commit that tracks private folders; no ancestor of a push.
+PRIVATE_ROOT=2b086186bd4fe9cecde10dbb7c348f4c4f5f1492
+PRIVATE_PATHS="VHub VLink deploy docs"
+SPACE5_LATEST="${SPACE5_LATEST:-https://github.com/veydanproject/Veydan-Space/releases/latest}"
+
+fail() {
+  echo ">> $*" >&2
   exit 1
 }
 
-next_channel_n() {
-  local prefix="$1"
-  local max=0 t rest n
-  for t in $(git tag -l "${prefix}*"); do
-    rest="${t#"$prefix"}"
-    n="${rest%%-*}"
-    case "$n" in
-      ''|*[!0-9]*) ;;
-      *) if [ "$n" -gt "$max" ]; then max=$n; fi ;;
-    esac
-  done
-  local remote
-  remote="$(git ls-remote --tags origin "refs/tags/${prefix}*" 2>/dev/null | cut -f2 | sed -e 's#^refs/tags/##' -e 's#\^{}$##')"
-  for t in $remote; do
-    rest="${t#"$prefix"}"
-    n="${rest%%-*}"
-    case "$n" in
-      ''|*[!0-9]*) ;;
-      *) if [ "$n" -gt "$max" ]; then max=$n; fi ;;
-    esac
-  done
-  echo $((max + 1))
-}
-
-tag_exists() {
-  local t="$1"
-  git rev-parse "$t" >/dev/null 2>&1 && return 0
-  git ls-remote --tags origin "refs/tags/$t" 2>/dev/null | grep -q . && return 0
-  return 1
-}
-
-push_release() {
-  local current rel major minor patch next
-  current="$(cat VERSION)"
-  if [ -n "$VERSION_OVERRIDE" ]; then rel="$VERSION_OVERRIDE"; else rel="$current"; fi
-  if tag_exists "v$rel"; then
-    echo ">> tag v$rel already exists"
-    exit 1
+run() {
+  if [ -n "$DRY" ]; then
+    echo "   would run: $*"
+  else
+    "$@"
   fi
-  bash "$ROOT/scripts/set-version.sh" "$rel"
-  if [ -n "$(git status --porcelain)" ]; then
-    git add -A
-    git commit -m "${MSG:-release $rel}"
-  fi
-  git tag "v$rel"
-  IFS=. read -r major minor patch <<<"$rel"
-  next="$major.$minor.$((patch + 1))"
-  bash "$ROOT/scripts/set-version.sh" "$next"
-  git add VERSION package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/tauri.android.conf.json
-  git commit -m "chore: start $next"
-  git push && git push origin "v$rel"
-  echo ">> Released v$rel (next $next)"
-}
-
-push_channel() {
-  local version prefix n tag p buildable=""
-  for p in $PLATFORMS; do
-    case "$p" in linux|windows|macos|android) buildable=1 ;; esac
-  done
-  if [ -n "$PLATFORMS" ] && [ -z "$buildable" ]; then
-    echo ">> ios CI is not set up yet; add android or a desktop platform"
-    exit 1
-  fi
-  version="$(cat VERSION)"
-  prefix="v${version}-${CHANNEL}."
-  n="$(next_channel_n "$prefix")"
-  tag="${prefix}${n}"
-  for p in $PLATFORMS; do
-    tag="$tag-$p"
-  done
-  if [ -n "$(git status --porcelain)" ]; then
-    git add -A
-    git commit -m "${MSG:-$CHANNEL snapshot $version}"
-  fi
-  git tag "$tag"
-  git push && git push origin "$tag"
-  echo ">> Released $tag"
 }
 
 case "$CHANNEL" in
-  release) push_release ;;
-  alpha|beta|rc) push_channel ;;
-  *) usage ;;
+  release) ;;
+  alpha|beta|rc) fail "release/4.0 makes one last release: use \`make push release\`" ;;
+  *) fail "usage: [DRY=1] make push release" ;;
 esac
+[ -z "$PLATFORMS" ] || fail "the last 4.0.x is built for every platform; drop: $PLATFORMS"
+
+[ "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" ] || fail "push.sh runs on $BRANCH only (here: $(git rev-parse --abbrev-ref HEAD))"
+git remote get-url "$REMOTE" >/dev/null 2>&1 || fail "no remote '$REMOTE' (git remote add $REMOTE https://github.com/veydanproject/veydanbrowser.git)"
+[ -z "$(git status --porcelain)" ] || fail "the tree is not clean: commit the release first"
+
+rel="$(cat VERSION)"
+[ -z "$VERSION_OVERRIDE" ] || [ "$VERSION_OVERRIDE" = "$rel" ] || fail "VERSION is $rel; set another one with scripts/set-version.sh and commit it"
+case "$rel" in
+  4.0.[0-9]*) ;;
+  *) fail "VERSION is $rel: $REMOTE releases 4.0.x only, its latest.json never points at 5.x" ;;
+esac
+tag="v$rel"
+
+# The pushed commit carries nothing private.
+if git cat-file -e "$PRIVATE_ROOT^{commit}" 2>/dev/null && git merge-base --is-ancestor "$PRIVATE_ROOT" HEAD; then
+  fail "HEAD descends from ${PRIVATE_ROOT:0:7}: it holds private folders"
+fi
+for p in $PRIVATE_PATHS; do
+  if [ -n "$(git ls-tree --name-only HEAD -- "$p")" ]; then
+    fail "HEAD has $p/ in its tree: it must not reach $REMOTE"
+  fi
+done
+echo ">> private parts: none (${PRIVATE_ROOT:0:7} is no ancestor; no $PRIVATE_PATHS)"
+
+if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+  fail "tag $tag already exists here"
+fi
+if git ls-remote --tags "$REMOTE" "refs/tags/$tag" | grep -q .; then
+  fail "tag $tag already exists in $REMOTE"
+fi
+
+# The message in the app sends people to this link; it must lead to a release.
+landed="$(curl -sS -o /dev/null -L --max-time 30 -w '%{url_effective}' "$SPACE5_LATEST" || true)"
+case "$landed" in
+  */releases/tag/v5.*) echo ">> Veydan Space 5: ${landed##*/}" ;;
+  *) fail "Veydan Space 5 is not released yet ($SPACE5_LATEST leads to '${landed:-nothing}'): release space-v5.0.0 first" ;;
+esac
+
+head="$(git rev-parse --short HEAD)"
+echo ">> $tag at $head → $REMOTE (main and the tag)"
+run git tag "$tag"
+run git push "$REMOTE" "HEAD:refs/heads/main"
+run git push "$REMOTE" "refs/tags/$tag"
+if [ -n "$DRY" ]; then
+  echo ">> dry run: nothing tagged or pushed"
+else
+  echo ">> Released $tag in $REMOTE; release.yml there builds it and publishes latest.json"
+fi

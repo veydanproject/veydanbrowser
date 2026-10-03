@@ -60,7 +60,8 @@ android-screenshot:
 update:
 	@bash update.sh
 
-# usage: make push alpha|beta|rc|release [linux] [windows] [macos] [android] [ios]
+# usage: [DRY=1] make push release — on release/4.0 only: the last 4.0.x goes to
+# the remote veydanbrowser (scripts/push.sh; channels are refused there).
 push:
 	@if [ "$(words $(PUSH_CHANNELS))" -gt 1 ]; then \
 		echo ">> usage: make push alpha|beta|rc|release [linux] [windows] [macos] [android] [ios]"; \

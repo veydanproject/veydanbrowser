@@ -28,6 +28,7 @@
   import LockSetupForm from '$lib/components/lock/LockSetupForm.svelte';
   import SyncSettings from '$lib/components/SyncSettings.svelte';
   import BugReportDialog from '$lib/components/BugReportDialog.svelte';
+  import MoveNotice from '$lib/components/MoveNotice.svelte';
   import HotkeySettings from '$lib/components/desktop/HotkeySettings.svelte';
   import SettingsNav, { type SettingsNavGroup } from '$lib/components/desktop/SettingsNav.svelte';
   import { formatCommand, keybindingOverrides } from '$lib/keybindings';
@@ -37,6 +38,7 @@
 
   // Section index for the left nav; ids match card ids below
   const navGroups = $derived<SettingsNavGroup[]>([
+    { label: 'Veydan Space 5', items: [{ id: 'move5', label: $t('move5_nav') }] },
     { label: $t('settings_group_browser'), items: [{ id: 'camoufox', label: 'Camoufox' }] },
     {
       label: $t('settings_group_general'),
@@ -76,7 +78,7 @@
       ],
     },
   ]);
-  let activeSection = $state('camoufox');
+  let activeSection = $state('move5');
   let sectionsEl = $state<HTMLElement | null>(null);
   // Set on nav click; scroll-spy stays quiet until the smooth scroll settles
   let navScrolling = false;
@@ -330,6 +332,9 @@
 
   onMount(async () => {
     unlisteners.push(observeSections());
+    // /settings#sync from the banner of the move to version 5.
+    const hashed = location.hash.slice(1);
+    if (hashed && document.getElementById(hashed)) requestAnimationFrame(() => scrollToSection(hashed));
     camoufox = await api.camoufox.status().catch(() => null);
 
     if (isTauri) {
@@ -602,6 +607,11 @@
 
   <div class="settings-main" bind:this={sectionsEl}>
   <h1>{$t('settings_title')}</h1>
+
+  <!-- The move to Veydan Space 5 (the last 4.0.x) -->
+  <div id="move5">
+    <MoveNotice mode="card" onsync={() => scrollToSection('sync')} />
+  </div>
 
   <!-- Camoufox -->
   <div class="card" id="camoufox">

@@ -19,6 +19,7 @@
   import { messengerStore } from '$lib/messenger/store.svelte';
   import { startPushBridge } from '$lib/messenger/push/bridge';
   import NoticeBanner from '$lib/messenger/push/NoticeBanner.svelte';
+  import MoveNotice from '$lib/components/MoveNotice.svelte';
 
   let { children }: { children: Snippet } = $props();
 
@@ -57,6 +58,8 @@
 <div class="shell">
   <AppLockGate>
     <div class="screen">
+      <!-- The move to version 5: Settings shows it as a card. -->
+      {#if kind && !page.url.pathname.startsWith('/settings')}<MoveNotice />{/if}
       {@render children()}
     </div>
     {#if kind}
