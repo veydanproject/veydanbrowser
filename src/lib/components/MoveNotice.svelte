@@ -40,6 +40,10 @@
 
 {#snippet steps()}
   <p class="move-intro">{$t('move5_intro')}</p>
+  <p class="move-order">
+    <Icon name="alert-triangle" size={14} />
+    <span>{$t('move5_read')}</span>
+  </p>
   <ol class="move-steps">
     <li>{$t('move5_step_sync')}</li>
     <li>{$t('move5_step_wait')}</li>

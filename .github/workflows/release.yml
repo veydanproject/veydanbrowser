@@ -387,7 +387,7 @@ jobs:
           VERSION="${VERSION%%-*}"
           jq -n \
             --arg version "$VERSION" \
-            --arg notes "The last release of 4.0. Veydan Space 5: https://github.com/veydanproject/Veydan-Space/releases/latest - move your data through sync first." \
+            --arg notes "The last release of 4.0. Veydan Space 5: https://github.com/veydanproject/Veydan-Space/releases/latest - read how to move before you install it: your data moves only through sync." \
             --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
             '{version:$version, notes:$notes, pub_date:$pub_date, platforms:{}}' > latest.json
 
